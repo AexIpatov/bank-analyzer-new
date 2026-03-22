@@ -95,6 +95,23 @@ def parse_file(file_content, file_name):
     st.write(f"=== ОТЛАДКА: файл {file_name} ===")
     st.write(f"Столбцы в файле: {list(df.columns)}")
     st.write(f"Количество строк: {len(df)}")
+    
+    # Ищем строку с заголовками для Industra
+    header_row = None
+    for idx, row in df.iterrows():
+        row_text = ' '.join(str(v) for v in row.values if pd.notna(v))
+        if 'Дата транзакции' in row_text:
+            header_row = idx
+            st.write(f"Найдена строка с заголовками на индексе {idx}")
+            break
+    
+    if header_row is not None:
+        # Используем найденную строку как заголовки
+        df.columns = df.iloc[header_row]
+        df = df.iloc[header_row + 1:].reset_index(drop=True)
+        st.write(f"Столбцы после переопределения: {list(df.columns)}")
+        st.write(f"Количество строк после: {len(df)}")
+    
     st.write("Первые 5 строк:")
     for i in range(min(5, len(df))):
         st.write(f"Строка {i}: {df.iloc[i].to_dict()}")
@@ -111,6 +128,7 @@ def parse_file(file_content, file_name):
     st.write(f"Найден столбец даты: {date_col}")
     st.write(f"Найден столбец суммы: {amount_col}")
     
+    # Если не нашли столбцы, пробуем по индексам
     if date_col is None and len(df.columns) > 0:
         date_col = df.columns[0]
         st.write(f"Используем первый столбец как дату: {date_col}")
