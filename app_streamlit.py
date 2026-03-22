@@ -159,3 +159,12 @@ with tab2:
                     st.metric("📈 Доходы", f"{доход:,.2f}")
                 with col_c:
                     расход = abs(df[df['Сумма'] < 0]['Сумма'].sum()) if len(df[df['Сумма'] < 0]) > 0 else 0
+                    st.metric("📉 Расходы", f"{расход:,.2f}")
+                
+                st.dataframe(df, use_container_width=True)
+                
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False, sheet_name='Все транзакции')
+                output.seek(0)
+                st.download_button("📥 Скачать сводный Excel", data=output, file_name=f"сводка.xlsx")
