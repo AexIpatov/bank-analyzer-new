@@ -77,12 +77,10 @@ def parse_date(date_str):
     if pd.isna(date_str):
         return ''
     date_str = str(date_str)
-    # Формат DD.MM.YYYY
     if '.' in date_str:
         parts = date_str.split('.')
         if len(parts) == 3:
             return f"{parts[2]}-{parts[1]}-{parts[0]}"
-    # Формат YYYY-MM-DD
     if ' ' in date_str:
         date_str = date_str.split(' ')[0]
     if '-' in date_str and len(date_str) >= 10:
@@ -108,12 +106,15 @@ def parse_amount(amount_str):
                 return 0
         return 0
 
-def find_header_row(df):
+def find_header_row(df, file_name):
     """Ищет строку с заголовками данных"""
+    name_lower = file_name.lower()
+    
+    # Специальные ключевые слова для разных банков
     header_keywords = [
         'Дата транзакции', 'Date', 'Datum', 'Booking Date', 'Value Date',
         'From Account', 'Amount', 'Transaction Details', 'Əməliyyat tarixi',
-        'account number', 'posting date', 'payment amount'
+        'account number', 'posting date', 'payment amount', 'Type', 'Date and time'
     ]
     
     for idx, row in df.iterrows():
@@ -133,18 +134,36 @@ def parse_file(file_content, file_name):
     st.write(f"Столбцы в файле: {list(df.columns)}")
     st.write(f"Количество строк: {len(df)}")
     
-    # Находим строку с заголовками
-    header_row = find_header_row(df)
+    # Специальная обработка для UniCredit файлов (Garpiz, Koruna, TwoHills)
+    name_lower = file_name.lower()
+    if 'garpiz' in name_lower or 'koruna' in name_lower or 'twohills' in name_lower:
+        # Ищем строку с заголовками "From Account"
+        header_row = None
+        for idx, row in df.iterrows():
+            row_text = ' '.join(str(v) for v in row.values if pd.notna(v))
+            if 'From Account' in row_text:
+                header_row = idx
+                st.write(f"Найдена строка UniCredit с заголовками на индексе {idx}")
+                break
+        
+        if header_row is not None:
+            df.columns = df.iloc[header_row]
+            df = df.iloc[header_row + 1:].reset_index(drop=True)
+            st.write(f"Столбцы после переопределения: {list(df.columns)}")
+            st.write(f"Количество строк после: {len(df)}")
     
-    if header_row is not None:
-        # Используем найденную строку как заголовки
-        df.columns = df.iloc[header_row]
-        df = df.iloc[header_row + 1:].reset_index(drop=True)
-        st.write(f"Найдены заголовки на строке {header_row}")
-        st.write(f"Столбцы после переопределения: {list(df.columns)}")
-        st.write(f"Количество строк после: {len(df)}")
+    # Общий поиск заголовков (если ещё не нашли)
+    if len(df.columns) <= 5 or 'From Account' not in str(df.columns):
+        header_row = find_header_row(df, file_name)
+        if header_row is not None:
+            df.columns = df.iloc[header_row]
+            df = df.iloc[header_row + 1:].reset_index(drop=True)
+            st.write(f"Найдены общие заголовки на строке {header_row}")
+            st.write(f"Столбцы после переопределения: {list(df.columns)}")
+            st.write(f"Количество строк после: {len(df)}")
     
-    st.write("Первые 5 строк:")
+    # Показываем первые строки для отладки
+    st.write("Первые 5 строк после обработки заголовков:")
     for i in range(min(5, len(df))):
         st.write(f"Строка {i}: {df.iloc[i].to_dict()}")
     
@@ -157,7 +176,7 @@ def parse_file(file_content, file_name):
     expense_col = None
     
     # Приоритетные названия для даты
-    date_priority = ['posting date', 'booking date', 'date', 'дата транзакции', 'value date']
+    date_priority = ['posting date', 'booking date', 'booking date', 'date', 'дата транзакции', 'value date', 'Date and time']
     for col in df.columns:
         col_lower = str(col).lower()
         for priority in date_priority:
@@ -169,7 +188,7 @@ def parse_file(file_content, file_name):
             break
     
     # Приоритетные названия для суммы
-    amount_priority = ['payment amount', 'amount', 'сумма', 'məxaric', 'mədaxil', 'debit', 'credit']
+    amount_priority = ['payment amount', 'amount', 'сумма', 'məxaric', 'mədaxil', 'debit', 'credit', 'Amount and currency']
     for col in df.columns:
         col_lower = str(col).lower()
         for priority in amount_priority:
@@ -225,7 +244,7 @@ def parse_file(file_content, file_name):
             
             description = ''
             desc_cols = ['message to beneficiary and payer', 'transaction type', 'Description', 
-                        'Təyinat', 'Информация о транзакции', 'Transaction Details']
+                        'Təyinat', 'Информация о транзакции', 'Transaction Details', 'Purpose of payment']
             for col in desc_cols:
                 if col in df.columns and pd.notna(row[col]):
                     description = str(row[col])
@@ -240,28 +259,50 @@ def parse_file(file_content, file_name):
             desc_lower = description.lower()
             
             # Определение статьи
-            if any(kw in desc_lower for kw in ['комиссия', 'commission', 'fee', 'charge', 'maintenance']):
+            if any(kw in desc_lower for kw in ['комиссия', 'commission', 'fee', 'charge', 'maintenance', 'rko']):
                 if amount > 0:
                     amount = -amount
                 article = '1.2.17 РКО'
                 direction = 'Расходы'
                 subdir = 'Банковские комиссии'
-            elif any(kw in desc_lower for kw in ['арендн', 'rent', 'money added', 'from']):
+            elif any(kw in desc_lower for kw in ['арендн', 'rent', 'money added', 'from', 'ire', 'dzivoklis']):
                 article = '1.1.1.1 Арендная плата'
                 direction = 'Доходы'
                 subdir = 'Арендная плата'
-            elif any(kw in desc_lower for kw in ['зарплат', 'salary']):
+            elif any(kw in desc_lower for kw in ['зарплат', 'salary', 'darba alga']):
                 if amount > 0:
                     amount = -amount
                 article = '1.2.15.1 Зарплата'
                 direction = 'Расходы'
                 subdir = 'Зарплата'
-            elif any(kw in desc_lower for kw in ['налог', 'vid', 'budžets']):
+            elif any(kw in desc_lower for kw in ['налог', 'vid', 'budžets', 'nodokļu']):
                 if amount > 0:
                     amount = -amount
                 article = '1.2.16 Налоги'
                 direction = 'Расходы'
                 subdir = 'Налоги'
+            elif any(kw in desc_lower for kw in ['latvenergo']):
+                if amount > 0:
+                    amount = -amount
+                article = '1.2.10.5 Электричество'
+                direction = 'Расходы'
+                subdir = 'Электричество'
+            elif any(kw in desc_lower for kw in ['rigas udens', 'ūdens']):
+                if amount > 0:
+                    amount = -amount
+                article = '1.2.10.3 Вода'
+                direction = 'Расходы'
+                subdir = 'Вода'
+            elif any(kw in desc_lower for kw in ['balta']):
+                if amount > 0:
+                    amount = -amount
+                article = '1.2.8.2 Страхование'
+                direction = 'Расходы'
+                subdir = 'Страхование'
+            elif any(kw in desc_lower for kw in ['airbnb', 'booking']):
+                article = '1.1.1.2 Поступления систем бронирования'
+                direction = 'Доходы'
+                subdir = 'Краткосрочная аренда'
             else:
                 if amount > 0:
                     article = '1.1.1.1 Арендная плата'
