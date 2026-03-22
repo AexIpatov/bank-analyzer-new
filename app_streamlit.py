@@ -47,18 +47,30 @@ def read_file(file_content, file_name):
     with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as tmp:
         tmp.write(file_content)
         tmp_path = tmp.name
-    
     try:
         if file_name.lower().endswith(('.xls', '.xlsx')):
-            try:
-                df = pd.read_excel(tmp_path, engine='xlrd')
-            except:
-                df = pd.read_excel(tmp_path, engine='openpyxl')
+            # Сначала пробуем openpyxl для .xlsx
+            if file_name.lower().endswith('.xlsx'):
+                try:
+                    df = pd.read_excel(tmp_path, engine='openpyxl')
+                except:
+                    df = pd.read_excel(tmp_path)
+            # Для .xls используем xlrd
+            else:
+                try:
+                    df = pd.read_excel(tmp_path, engine='xlrd')
+                except:
+                    # Если xlrd не работает, пробуем openpyxl
+                    try:
+                        df = pd.read_excel(tmp_path, engine='openpyxl')
+                    except:
+                        df = pd.read_excel(tmp_path)
         else:
             with open(tmp_path, 'rb') as f:
                 raw = f.read()
-            encoding = detect_encoding(raw)
-            for sep in [';', ',', '\t']:
+            result = chardet.detect(raw[:10000])
+            encoding = result['encoding'] if result['encoding'] else 'utf-8'
+            for sep in [';', ',']:
                 try:
                     df = pd.read_csv(tmp_path, sep=sep, encoding=encoding, on_bad_lines='skip')
                     if len(df.columns) > 1:
@@ -70,7 +82,6 @@ def read_file(file_content, file_name):
     except Exception as e:
         os.unlink(tmp_path)
         raise e
-    
     os.unlink(tmp_path)
     return df
 
