@@ -37,4 +37,27 @@ class GarpizUnicreditParser(BaseParser):
             
             # Дата
             date = ''
-            if date_col
+            if date_col and pd.notna(row[date_col]):
+                date_str = str(row[date_col])
+                date = self._parse_date(date_str)
+            
+            # Описание
+            description = ''
+            if desc_col and pd.notna(row[desc_col]):
+                description = str(row[desc_col])
+            
+            if date:
+                article, direction, subdirection, amount = self._get_article(description, amount)
+                
+                transactions.append({
+                    'date': date,
+                    'amount': amount,
+                    'currency': 'CZK',
+                    'account_name': file_name.replace('.csv', '').replace('.xls', '').replace('.xlsx', ''),
+                    'description': description[:300],
+                    'article_name': article,
+                    'direction': direction,
+                    'subdirection': subdirection
+                })
+        
+        return transactions
