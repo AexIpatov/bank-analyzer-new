@@ -38,6 +38,7 @@ def read_file(file_content, file_name):
     with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as tmp:
         tmp.write(file_content)
         tmp_path = tmp.name
+    
     try:
         if file_name.lower().endswith(('.xls', '.xlsx')):
             if file_name.lower().endswith('.xlsx'):
@@ -54,22 +55,40 @@ def read_file(file_content, file_name):
                     except:
                         df = pd.read_excel(tmp_path)
         else:
-            # Для CSV файлов читаем без заголовков
+            # Определяем кодировку
             with open(tmp_path, 'rb') as f:
                 raw = f.read()
             result = chardet.detect(raw[:10000])
             encoding = result['encoding'] if result['encoding'] else 'utf-8'
             
-            # Читаем файл без заголовков
-            df = pd.read_csv(tmp_path, sep=';', encoding=encoding, header=None, on_bad_lines='skip')
+            # Пробуем разные разделители
+            df = None
+            for sep in [';', ',', '\t', '|']:
+                try:
+                    df = pd.read_csv(tmp_path, sep=sep, encoding=encoding, header=None, on_bad_lines='skip')
+                    if len(df.columns) > 1 and len(df) > 1:
+                        st.write(f"Файл прочитан с разделителем '{sep}', строк: {len(df)}, столбцов: {len(df.columns)}")
+                        break
+                except:
+                    continue
             
-            # Если столбцов мало, пробуем с запятой
-            if len(df.columns) <= 1:
-                df = pd.read_csv(tmp_path, sep=',', encoding=encoding, header=None, on_bad_lines='skip')
-            
-            # Если всё ещё мало, пробуем latin1
-            if len(df.columns) <= 1:
-                df = pd.read_csv(tmp_path, sep=';', encoding='latin1', header=None, on_bad_lines='skip')
+            if df is None or len(df.columns) <= 1:
+                # Последняя попытка - читать как текст и разбивать вручную
+                with open(tmp_path, 'r', encoding=encoding) as f:
+                    lines = f.readlines()
+                data = []
+                for line in lines:
+                    # Пробуем разбить по точке с запятой
+                    if ';' in line:
+                        parts = line.strip().split(';')
+                    elif ',' in line:
+                        parts = line.strip().split(',')
+                    else:
+                        parts = [line.strip()]
+                    data.append(parts)
+                max_cols = max(len(row) for row in data)
+                df = pd.DataFrame(data)
+                st.write(f"Файл прочитан вручную, строк: {len(df)}, столбцов: {len(df.columns)}")
     except Exception as e:
         os.unlink(tmp_path)
         raise e
@@ -96,8 +115,10 @@ def parse_amount(amount_str):
     amount_str = str(amount_str).strip()
     if amount_str == '' or amount_str == 'nan':
         return 0
-    amount_str = amount_str.replace(',', '.')
-    amount_str = amount_str.replace(' ', '')
+    # Удаляем пробелы и заменяем запятую
+    amount_str = amount_str.replace(',', '.').replace(' ', '')
+    # Удаляем валюту
+    amount_str = re.sub(r'[A-Za-zА-Яа-я]+', '', amount_str)
     try:
         return float(amount_str)
     except:
@@ -110,7 +131,7 @@ def parse_amount(amount_str):
         return 0
 
 def find_data_start_row(df):
-    """Находит строку, с которой начинаются данные (где есть дата в формате DD.MM.YYYY или число)"""
+    """Находит строку, с которой начинаются данные"""
     for idx, row in df.iterrows():
         for val in row.values:
             if pd.notna(val):
@@ -118,7 +139,7 @@ def find_data_start_row(df):
                 # Ищем дату в формате DD.MM.YYYY
                 if re.match(r'\d{2}\.\d{2}\.\d{4}', val_str):
                     return idx
-                # Ищем число (сумму) с возможным минусом
+                # Ищем число (сумму)
                 if re.match(r'^-?\d+[.,]?\d*$', val_str.replace(',', '.')):
                     return max(0, idx - 1)
     return 0
@@ -134,31 +155,21 @@ def parse_file(file_content, file_name):
     st.write(f"Количество строк: {len(df)}")
     
     # Показываем первые строки для отладки
-    st.write("Первые 10 строк файла (без обработки):")
-    for i in range(min(10, len(df))):
+    st.write("Первые 15 строк файла (без обработки):")
+    for i in range(min(15, len(df))):
         st.write(f"Строка {i}: {list(df.iloc[i].values)}")
     
     # Находим строку с заголовками
     name_lower = file_name.lower()
     header_row = None
     
-    # Для UniCredit файлов ищем строку с "From Account"
-    if 'garpiz' in name_lower or 'koruna' in name_lower or 'twohills' in name_lower:
-        for idx, row in df.iterrows():
-            row_text = ' '.join(str(v) for v in row.values if pd.notna(v))
-            if 'From Account' in row_text:
-                header_row = idx
-                st.write(f"Найдена строка с заголовками (From Account) на индексе {idx}")
-                break
-    
-    # Если не нашли, ищем строку с датой или заголовками
-    if header_row is None:
-        for idx, row in df.iterrows():
-            row_text = ' '.join(str(v) for v in row.values if pd.notna(v))
-            if any(kw in row_text for kw in ['Дата транзакции', 'Date and time', 'Date', 'Amount', 'Booking Date']):
-                header_row = idx
-                st.write(f"Найдена строка с заголовками на индексе {idx}")
-                break
+    # Ищем строку с "From Account" или другими заголовками
+    for idx, row in df.iterrows():
+        row_text = ' '.join(str(v) for v in row.values if pd.notna(v))
+        if any(kw in row_text for kw in ['From Account', 'Account Title', 'Booking Date', 'Date', 'Amount']):
+            header_row = idx
+            st.write(f"Найдена строка с заголовками на индексе {idx}")
+            break
     
     if header_row is not None:
         # Устанавливаем заголовки
@@ -167,7 +178,7 @@ def parse_file(file_content, file_name):
         st.write(f"Столбцы после переопределения: {list(df.columns)}")
         st.write(f"Количество строк после: {len(df)}")
     
-    # Если после удаления заголовков строк мало, пробуем найти начало данных
+    # Если строк мало, пробуем найти начало данных
     if len(df) < 3:
         start_row = find_data_start_row(df)
         if start_row > 0:
@@ -175,11 +186,10 @@ def parse_file(file_content, file_name):
             st.write(f"Найдено начало данных на строке {start_row}")
     
     # Показываем первые строки после обработки
-    st.write("Первые 5 строк после обработки заголовков:")
-    for i in range(min(5, len(df))):
+    st.write("Первые 10 строк после обработки заголовков:")
+    for i in range(min(10, len(df))):
         st.write(f"Строка {i}: {df.iloc[i].to_dict()}")
     
-    # Если строк всё ещё нет, возвращаем пустой список
     if len(df) == 0:
         st.warning("⚠️ В файле не найдено данных для обработки")
         return []
@@ -191,7 +201,7 @@ def parse_file(file_content, file_name):
     # Ищем столбец с датой
     for col in df.columns:
         col_lower = str(col).lower()
-        if any(kw in col_lower for kw in ['booking', 'posting', 'date', 'дата']):
+        if any(kw in col_lower for kw in ['booking', 'posting', 'date', 'дата', 'Date']):
             date_col = col
             st.write(f"Найден столбец даты: {date_col}")
             break
@@ -199,16 +209,15 @@ def parse_file(file_content, file_name):
     # Ищем столбец с суммой
     for col in df.columns:
         col_lower = str(col).lower()
-        if any(kw in col_lower for kw in ['amount', 'сумма', 'payment']):
+        if any(kw in col_lower for kw in ['amount', 'сумма', 'payment', 'Amount']):
             amount_col = col
             st.write(f"Найден столбец суммы: {amount_col}")
             break
     
     # Если не нашли по названиям, пробуем по данным
-    if date_col is None and len(df.columns) > 0:
-        # Ищем столбец, где есть даты
+    if date_col is None:
         for col in df.columns:
-            sample = df[col].dropna().head(5)
+            sample = df[col].dropna().head(10)
             for val in sample:
                 val_str = str(val)
                 if re.match(r'\d{2}\.\d{2}\.\d{4}', val_str):
@@ -218,14 +227,13 @@ def parse_file(file_content, file_name):
             if date_col:
                 break
     
-    if amount_col is None and len(df.columns) > 0:
-        # Ищем столбец, где есть числа
+    if amount_col is None:
         for col in df.columns:
             if col != date_col:
-                sample = df[col].dropna().head(5)
+                sample = df[col].dropna().head(10)
                 for val in sample:
                     try:
-                        float(str(val).replace(',', '.'))
+                        num = float(str(val).replace(',', '.').replace(' ', ''))
                         amount_col = col
                         st.write(f"Найден столбец суммы по данным: {amount_col}")
                         break
