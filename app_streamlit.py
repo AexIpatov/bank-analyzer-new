@@ -80,7 +80,15 @@ def parse_date(date_str):
 def parse_file(file_content, file_name):
     df = read_file(file_content, file_name)
     if df is None:
+        st.error("❌ Не удалось прочитать файл")
         return []
+    
+    st.write(f"=== ОТЛАДКА: файл {file_name} ===")
+    st.write(f"Столбцы в файле: {list(df.columns)}")
+    st.write(f"Количество строк: {len(df)}")
+    st.write("Первые 5 строк:")
+    for i in range(min(5, len(df))):
+        st.write(f"Строка {i}: {df.iloc[i].to_dict()}")
     
     date_col = None
     amount_col = None
@@ -91,13 +99,18 @@ def parse_file(file_content, file_name):
         if 'сумм' in col_lower or 'amount' in col_lower:
             amount_col = col
     
+    st.write(f"Найден столбец даты: {date_col}")
+    st.write(f"Найден столбец суммы: {amount_col}")
+    
     if date_col is None and len(df.columns) > 0:
         date_col = df.columns[0]
+        st.write(f"Используем первый столбец как дату: {date_col}")
     if amount_col is None and len(df.columns) > 1:
         amount_col = df.columns[1]
+        st.write(f"Используем второй столбец как сумму: {amount_col}")
     
     transactions = []
-    for _, row in df.iterrows():
+    for idx, row in df.iterrows():
         try:
             if date_col and pd.notna(row[date_col]):
                 date = parse_date(row[date_col])
@@ -144,28 +157,6 @@ def parse_file(file_content, file_name):
                 article = '1.2.16 Налоги'
                 direction = 'Расходы'
                 subdir = 'Налоги'
-            elif 'latvenergo' in desc_lower:
-                if amount > 0:
-                    amount = -amount
-                article = '1.2.10.5 Электричество'
-                direction = 'Расходы'
-                subdir = 'Электричество'
-            elif 'balta' in desc_lower:
-                if amount > 0:
-                    amount = -amount
-                article = '1.2.8.2 Страхование'
-                direction = 'Расходы'
-                subdir = 'Страхование'
-            elif 'airbnb' in desc_lower or 'booking' in desc_lower:
-                article = '1.1.1.2 Поступления систем бронирования'
-                direction = 'Доходы'
-                subdir = 'Краткосрочная аренда'
-            elif 'careem' in desc_lower or 'flydubai' in desc_lower:
-                if amount > 0:
-                    amount = -amount
-                article = '1.2.2 Командировочные расходы'
-                direction = 'Расходы'
-                subdir = 'Командировки'
             else:
                 if amount > 0:
                     article = '1.1.1.1 Арендная плата'
@@ -186,9 +177,12 @@ def parse_file(file_content, file_name):
                 'direction': direction,
                 'subdirection': subdir
             })
-        except:
+            st.write(f"✅ Найдена транзакция: {date} | {amount} | {description[:50]}")
+        except Exception as e:
+            st.write(f"❌ Ошибка в строке {idx}: {e}")
             continue
     
+    st.write(f"=== ИТОГО найдено транзакций: {len(transactions)} ===")
     return transactions
 
 tab1, tab2 = st.tabs(["📂 Один файл", "📚 Несколько файлов"])
