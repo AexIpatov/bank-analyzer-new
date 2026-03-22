@@ -1,11 +1,8 @@
 import streamlit as st
 import pandas as pd
 import io
-import tempfile
-import os
-import chardet
-import re
 from datetime import datetime
+from parsers import *
 
 st.set_page_config(page_title="Аналитик выписок", page_icon="📈", layout="wide")
 
@@ -32,131 +29,34 @@ st.markdown('<div class="main-header"><h1>📊 Финансовый аналит
 with st.sidebar:
     st.markdown("### 🧠 О программе")
     st.markdown("**Поддерживаемые форматы:** Excel (.xlsx, .xls), CSV")
-    st.markdown("**Счет берется из имени файла**")
+    st.markdown("**Поддерживаемые счета:** Antonijas, Paysera, Industra, WIO, Mashreq, Pasha, CSOB, UniCredit и другие")
 
-def read_file(file_content, file_name):
-    """Чтение файла (Excel или CSV)"""
-    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as tmp:
-        tmp.write(file_content)
-        tmp_path = tmp.name
-    
-    try:
-        if file_name.lower().endswith(('.xls', '.xlsx')):
-            df = pd.read_excel(tmp_path, engine='openpyxl')
-        else:
-            with open(tmp_path, 'rb') as f:
-                raw = f.read()
-            result = chardet.detect(raw[:10000])
-            encoding = result['encoding'] if result['encoding'] else 'utf-8'
-            df = pd.read_csv(tmp_path, encoding=encoding, on_bad_lines='skip')
-    except Exception as e:
-        os.unlink(tmp_path)
-        return None
-    
-    os.unlink(tmp_path)
-    return df
+# Словарь для выбора парсера по имени файла
+PARSERS = {
+    'ANTONIJAS NAMS 14 SIA-Industra': AntonijasIndustraParser(),
+    'Antonijas nams 14-Revolut International': AntonijasRevolutParser(),
+    'Industra Bank-Plavas 1': IndustriPlavasParser(),
+    'Paysera-BS PROPERTY, SIA': PayseraPropertyParser(),
+    'Paysera-BS RERUM, SIA': PayseraRerumParser(),
+    'Paysera Sveciy Namai Lithuania EUR': PayseraSveciyParser(),
+    'TwoHills_Molly_Unicredit_CZK': TwoHillsMollyParser(),
+    'WIO Business Bank': WioBusinessParser(),
+    'MASHREQ BANK-AED-NOMIQA': MashreqNomiqaParser(),
+    'Pasha Bunda AED': PashaBundaParser(),
+    'Pasha Bunda AZN': PashaBundaParser(),
+    'DŽIBIK Main CSOB CZK': DzibikCsobParser(),
+    'Garpiz UniCredit Bank CZK': GarpizUnicreditParser(),
+    'Koruna UniCredit- CZK': KorunaUnicreditParser(),
+    'BUNDA LLC-Pasha Bank - AED-дирхам': BundaAEDParser(),
+    'BUNDA LLC-Pasha Bank-AZN': BundaAZNParser(),
+}
 
-def get_article(description, amount):
-    """Определение статьи по описанию"""
-    desc_lower = description.lower()
-    
-    articles = [
-        ('комиссия', '1.2.17 РКО', 'Расходы', 'Банковские комиссии'),
-        ('commission', '1.2.17 РКО', 'Расходы', 'Банковские комиссии'),
-        ('fee', '1.2.17 РКО', 'Расходы', 'Банковские комиссии'),
-        ('арендн', '1.1.1.1 Арендная плата', 'Доходы', 'Арендная плата'),
-        ('rent', '1.1.1.1 Арендная плата', 'Доходы', 'Арендная плата'),
-        ('money added', '1.1.1.1 Арендная плата', 'Доходы', 'Арендная плата'),
-        ('компенсац', '1.1.2.3 Компенсация по коммунальным расходам', 'Доходы', 'Компенсация'),
-        ('зарплат', '1.2.15.1 Зарплата', 'Расходы', 'Зарплата'),
-        ('налог', '1.2.16 Налоги', 'Расходы', 'Налоги'),
-        ('vid', '1.2.16 Налоги', 'Расходы', 'Налоги'),
-        ('latvenergo', '1.2.10.5 Электричество', 'Расходы', 'Электричество'),
-        ('rigas udens', '1.2.10.3 Вода', 'Расходы', 'Вода'),
-        ('balta', '1.2.8.2 Страхование', 'Расходы', 'Страхование'),
-        ('airbnb', '1.1.1.2 Поступления систем бронирования', 'Доходы', 'Краткосрочная аренда'),
-        ('booking', '1.1.1.2 Поступления систем бронирования', 'Доходы', 'Краткосрочная аренда'),
-        ('careem', '1.2.2 Командировочные расходы', 'Расходы', 'Транспорт'),
-        ('flydubai', '1.2.2 Командировочные расходы', 'Расходы', 'Авиабилеты'),
-        ('tiktok', '1.2.3 Оплата рекламных систем', 'Расходы', 'Маркетинг'),
-        ('facebook', '1.2.3 Оплата рекламных систем', 'Расходы', 'Маркетинг'),
-        ('asana', '1.2.9.3 IT сервисы', 'Расходы', 'IT сервисы'),
-    ]
-    
-    for kw, article, direction, subdirection in articles:
-        if kw in desc_lower:
-            if direction == 'Расходы' and amount > 0:
-                amount = -amount
-            return article, direction, subdirection, amount
-    
-    if amount > 0:
-        return '1.1.1.1 Арендная плата', 'Доходы', 'Арендная плата', amount
-    else:
-        return '1.2.8.1 Обслуживание объектов', 'Расходы', 'Обслуживание', amount
-
-def parse_file(file_content, file_name):
-    """Парсинг файла"""
-    df = read_file(file_content, file_name)
-    if df is None:
-        return []
-    
-    transactions = []
-    date_col = None
-    amount_col = None
-    
-    for col in df.columns:
-        col_lower = str(col).lower()
-        if 'дата' in col_lower or 'date' in col_lower:
-            date_col = col
-        if 'сумм' in col_lower or 'amount' in col_lower:
-            amount_col = col
-    
-    if date_col is None and len(df.columns) > 0:
-        date_col = df.columns[0]
-    if amount_col is None and len(df.columns) > 1:
-        amount_col = df.columns[1]
-    
-    for _, row in df.iterrows():
-        try:
-            if date_col and pd.notna(row[date_col]):
-                date_str = str(row[date_col])
-                date = date_str[:10] if len(date_str) >= 10 else date_str
-            else:
-                continue
-            
-            amount = 0
-            if amount_col and pd.notna(row[amount_col]):
-                try:
-                    amount = float(str(row[amount_col]).replace(',', '.'))
-                except:
-                    amount = 0
-            
-            if amount == 0:
-                continue
-            
-            description = ''
-            for col in df.columns:
-                if col not in [date_col, amount_col]:
-                    val = str(row[col]) if pd.notna(row[col]) else ''
-                    if val and val != 'nan':
-                        description += val + ' '
-            
-            article, direction, subdirection, amount = get_article(description, amount)
-            
-            transactions.append({
-                'date': date,
-                'amount': amount,
-                'currency': 'EUR',
-                'account_name': file_name.replace('.xls', '').replace('.xlsx', '').replace('.csv', ''),
-                'description': description[:200],
-                'article_name': article,
-                'direction': direction,
-                'subdirection': subdirection
-            })
-        except:
-            continue
-    
-    return transactions
+def get_parser(file_name):
+    """Определяет парсер по имени файла"""
+    for key, parser in PARSERS.items():
+        if key in file_name:
+            return parser
+    return None
 
 tab1, tab2 = st.tabs(["📂 Один файл", "📚 Несколько файлов"])
 
@@ -168,7 +68,13 @@ with tab1:
         if st.button("🚀 Запустить анализ", key="single_btn"):
             with st.spinner("Анализируем..."):
                 content = uploaded_file.read()
-                transactions = parse_file(content, uploaded_file.name)
+                parser = get_parser(uploaded_file.name)
+                
+                if parser:
+                    transactions = parser.parse(content, uploaded_file.name)
+                else:
+                    st.error(f"❌ Не найден парсер для файла: {uploaded_file.name}")
+                    transactions = []
                 
                 if transactions:
                     df = pd.DataFrame([{
@@ -216,7 +122,14 @@ with tab2:
             for i, f in enumerate(uploaded_files):
                 status_text.text(f"🔄 Обработка: {f.name}")
                 content = f.read()
-                trans = parse_file(content, f.name)
+                parser = get_parser(f.name)
+                
+                if parser:
+                    trans = parser.parse(content, f.name)
+                else:
+                    st.error(f"❌ Не найден парсер для файла: {f.name}")
+                    trans = []
+                
                 for t in trans:
                     t['source_file'] = f.name
                     all_transactions.append(t)
@@ -246,12 +159,3 @@ with tab2:
                     st.metric("📈 Доходы", f"{доход:,.2f}")
                 with col_c:
                     расход = abs(df[df['Сумма'] < 0]['Сумма'].sum()) if len(df[df['Сумма'] < 0]) > 0 else 0
-                    st.metric("📉 Расходы", f"{расход:,.2f}")
-                
-                st.dataframe(df, use_container_width=True)
-                
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df.to_excel(writer, index=False, sheet_name='Все транзакции')
-                output.seek(0)
-                st.download_button("📥 Скачать сводный Excel", data=output, file_name=f"сводка.xlsx")
