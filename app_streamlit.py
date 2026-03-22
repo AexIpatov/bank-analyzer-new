@@ -89,6 +89,29 @@ def parse_date(date_str):
         return date_str[:10]
     return date_str[:10] if len(date_str) >= 10 else date_str
 
+def parse_amount(amount_str):
+    """Преобразует строку суммы в число, обрабатывая запятые и минусы"""
+    if pd.isna(amount_str):
+        return 0
+    amount_str = str(amount_str).strip()
+    if amount_str == '' or amount_str == 'nan':
+        return 0
+    # Заменяем запятую на точку
+    amount_str = amount_str.replace(',', '.')
+    # Удаляем пробелы
+    amount_str = amount_str.replace(' ', '')
+    try:
+        return float(amount_str)
+    except:
+        # Пробуем извлечь число через регулярное выражение
+        match = re.search(r'(-?\d+\.?\d*)', amount_str)
+        if match:
+            try:
+                return float(match.group(1))
+            except:
+                return 0
+        return 0
+
 def parse_file(file_content, file_name):
     df = read_file(file_content, file_name)
     if df is None:
@@ -141,8 +164,11 @@ def parse_file(file_content, file_name):
         col_lower = str(col).lower()
         if 'дата' in col_lower or 'date' in col_lower:
             date_col = col
-        if 'amount' in col_lower and col_lower != 'total amount':
+        if 'payment amount' in col_lower:
             amount_col = col
+        if 'amount' in col_lower and col_lower != 'total amount':
+            if amount_col is None:
+                amount_col = col
         if 'дебет' in col_lower or 'debit' in col_lower:
             debit_col = col
         if 'кредит' in col_lower or 'credit' in col_lower:
@@ -173,50 +199,38 @@ def parse_file(file_content, file_name):
             else:
                 continue
             
-            # Получаем сумму (приоритет: amount_col, income/expense, debit/credit)
+            # Получаем сумму
             amount = 0
             
+            # Приоритет: amount_col, затем payment amount, затем debit/credit
             if amount_col and pd.notna(row[amount_col]):
-                try:
-                    amount = float(row[amount_col])
-                except:
-                    amount = 0
-            elif income_col and pd.notna(row[income_col]) and row[income_col] != 0:
-                try:
-                    amount = float(row[income_col])
-                except:
-                    amount = 0
-            elif expense_col and pd.notna(row[expense_col]) and row[expense_col] != 0:
-                try:
-                    amount = -float(row[expense_col])
-                except:
-                    amount = 0
+                amount = parse_amount(row[amount_col])
             elif debit_col and pd.notna(row[debit_col]) and row[debit_col] != 0:
-                try:
-                    amount = -float(row[debit_col])
-                except:
-                    amount = 0
+                amount = -parse_amount(row[debit_col])
             elif credit_col and pd.notna(row[credit_col]) and row[credit_col] != 0:
-                try:
-                    amount = float(row[credit_col])
-                except:
-                    amount = 0
+                amount = parse_amount(row[credit_col])
+            elif income_col and pd.notna(row[income_col]) and row[income_col] != 0:
+                amount = parse_amount(row[income_col])
+            elif expense_col and pd.notna(row[expense_col]) and row[expense_col] != 0:
+                amount = -parse_amount(row[expense_col])
             
             if amount == 0:
                 continue
             
             # Описание
             description = ''
-            if 'Description' in df.columns and pd.notna(row['Description']):
+            if 'message to beneficiary and payer' in df.columns and pd.notna(row['message to beneficiary and payer']):
+                description = str(row['message to beneficiary and payer'])
+            elif 'Description' in df.columns and pd.notna(row['Description']):
                 description = str(row['Description'])
             elif 'Təyinat' in df.columns and pd.notna(row['Təyinat']):
                 description = str(row['Təyinat'])
+            elif 'transaction type' in df.columns and pd.notna(row['transaction type']):
+                description = str(row['transaction type'])
             elif 'Информация о транзакции' in df.columns and pd.notna(row['Информация о транзакции']):
                 description = str(row['Информация о транзакции'])
             elif 'Тип транзакции' in df.columns and pd.notna(row['Тип транзакции']):
                 description = str(row['Тип транзакции'])
-            elif 'Ödəyən/Benefisiar' in df.columns and pd.notna(row['Ödəyən/Benefisiar']):
-                description = str(row['Ödəyən/Benefisiar'])
             else:
                 for col in df.columns:
                     if col not in [date_col, amount_col, debit_col, credit_col, income_col, expense_col]:
@@ -277,12 +291,18 @@ def parse_file(file_content, file_name):
                 article = '1.2.2 Командировочные расходы'
                 direction = 'Расходы'
                 subdir = 'Командировки'
-            elif 'currency exchange' in desc_lower:
+            elif 'currency exchange' in desc_lower or 'conversion' in desc_lower:
                 article = '1.2.17 РКО'
                 direction = 'Расходы'
                 subdir = 'Банковские комиссии'
                 if amount > 0:
                     amount = -amount
+            elif 'maintenance' in desc_lower or 'charge' in desc_lower:
+                if amount > 0:
+                    amount = -amount
+                article = '1.2.17 РКО'
+                direction = 'Расходы'
+                subdir = 'Банковские комиссии'
             else:
                 if amount > 0:
                     article = '1.1.1.1 Арендная плата'
@@ -301,7 +321,7 @@ def parse_file(file_content, file_name):
             transactions.append({
                 'date': date,
                 'amount': amount,
-                'currency': 'EUR',
+                'currency': 'CZK' if 'CZK' in str(df.columns) else 'EUR',
                 'account_name': account_name,
                 'description': description[:300],
                 'article_name': article,
