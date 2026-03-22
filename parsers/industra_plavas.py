@@ -27,7 +27,16 @@ class IndustriPlavasParser(BaseParser):
             if pd.isna(date_val):
                 continue
             
-            date = self._parse_date(date_val)
+            # Преобразование даты
+            date_str = str(date_val)
+            if '.' in date_str:
+                parts = date_str.split('.')
+                if len(parts) == 3:
+                    date = f"{parts[2]}-{parts[1]}-{parts[0]}"
+                else:
+                    date = date_str[:10]
+            else:
+                date = date_str[:10]
             
             # Определяем сумму (Дебет или Кредит)
             amount = 0
@@ -49,7 +58,55 @@ class IndustriPlavasParser(BaseParser):
             if not description or description == 'nan':
                 description = str(row.get('Получатель / Плательщик', ''))
             
-            article, direction, subdirection, amount = self._get_article(description, amount)
+            # Определение статьи
+            desc_lower = description.lower()
+            if 'комиссия' in desc_lower or 'commission' in desc_lower:
+                article = '1.2.17 РКО'
+                direction = 'Расходы'
+                subdirection = 'Банковские комиссии'
+            elif 'арендн' in desc_lower or 'rent' in desc_lower or 'money added' in desc_lower:
+                article = '1.1.1.1 Арендная плата'
+                direction = 'Доходы'
+                subdirection = 'Арендная плата'
+                if amount > 0:
+                    pass
+            elif 'зарплат' in desc_lower or 'salary' in desc_lower or 'darba alga' in desc_lower:
+                article = '1.2.15.1 Зарплата'
+                direction = 'Расходы'
+                subdirection = 'Зарплата'
+                if amount > 0:
+                    amount = -amount
+            elif 'налог' in desc_lower or 'vid' in desc_lower:
+                article = '1.2.16 Налоги'
+                direction = 'Расходы'
+                subdirection = 'Налоги'
+                if amount > 0:
+                    amount = -amount
+            elif 'latvenergo' in desc_lower:
+                article = '1.2.10.5 Электричество'
+                direction = 'Расходы'
+                subdirection = 'Электричество'
+                if amount > 0:
+                    amount = -amount
+            elif 'balta' in desc_lower:
+                article = '1.2.8.2 Страхование'
+                direction = 'Расходы'
+                subdirection = 'Страхование'
+                if amount > 0:
+                    amount = -amount
+            elif 'airbnb' in desc_lower or 'booking' in desc_lower:
+                article = '1.1.1.2 Поступления систем бронирования'
+                direction = 'Доходы'
+                subdirection = 'Краткосрочная аренда'
+            else:
+                if amount > 0:
+                    article = '1.1.1.1 Арендная плата'
+                    direction = 'Доходы'
+                    subdirection = 'Арендная плата'
+                else:
+                    article = '1.2.8.1 Обслуживание объектов'
+                    direction = 'Расходы'
+                    subdirection = 'Обслуживание'
             
             transactions.append({
                 'date': date,
