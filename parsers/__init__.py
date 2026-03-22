@@ -1,6 +1,6 @@
 from .antonijas_industra import AntonijasIndustraParser
 from .antonijas_revolut import AntonijasRevolutParser
-from .industra_plavas import IndustraPlavasParser
+from .industra_plavas import IndustriPlavasParser
 from .paysera_property import PayseraPropertyParser
 from .paysera_rerum import PayseraRerumParser
 from .paysera_sveciy import PayseraSveciyParser
