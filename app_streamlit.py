@@ -106,7 +106,6 @@ def parse_file(file_content, file_name):
             break
     
     if header_row is not None:
-        # Используем найденную строку как заголовки
         df.columns = df.iloc[header_row]
         df = df.iloc[header_row + 1:].reset_index(drop=True)
         st.write(f"Столбцы после переопределения: {list(df.columns)}")
@@ -116,8 +115,9 @@ def parse_file(file_content, file_name):
     for i in range(min(5, len(df))):
         st.write(f"Строка {i}: {df.iloc[i].to_dict()}")
     
-    # Ищем столбцы с датой, дебетом и кредитом
+    # Ищем столбцы с датой, суммой, дебетом, кредитом
     date_col = None
+    amount_col = None
     debit_col = None
     credit_col = None
     
@@ -125,12 +125,15 @@ def parse_file(file_content, file_name):
         col_lower = str(col).lower()
         if 'дата' in col_lower or 'date' in col_lower:
             date_col = col
+        if 'amount' in col_lower and col_lower != 'total amount':
+            amount_col = col
         if 'дебет' in col_lower or 'debit' in col_lower:
             debit_col = col
         if 'кредит' in col_lower or 'credit' in col_lower:
             credit_col = col
     
     st.write(f"Найден столбец даты: {date_col}")
+    st.write(f"Найден столбец суммы: {amount_col}")
     st.write(f"Найден столбец дебета: {debit_col}")
     st.write(f"Найден столбец кредита: {credit_col}")
     
@@ -148,9 +151,15 @@ def parse_file(file_content, file_name):
             else:
                 continue
             
-            # Получаем сумму из дебета или кредита
+            # Получаем сумму (приоритет: amount_col, затем debit/credit)
             amount = 0
-            if debit_col and pd.notna(row[debit_col]) and row[debit_col] != 0:
+            
+            if amount_col and pd.notna(row[amount_col]):
+                try:
+                    amount = float(row[amount_col])
+                except:
+                    amount = 0
+            elif debit_col and pd.notna(row[debit_col]) and row[debit_col] != 0:
                 try:
                     amount = -float(row[debit_col])
                 except:
@@ -166,19 +175,22 @@ def parse_file(file_content, file_name):
             
             # Описание
             description = ''
-            if 'Информация о транзакции' in df.columns and pd.notna(row['Информация о транзакции']):
+            if 'Description' in df.columns and pd.notna(row['Description']):
+                description = str(row['Description'])
+            elif 'Информация о транзакции' in df.columns and pd.notna(row['Информация о транзакции']):
                 description = str(row['Информация о транзакции'])
             elif 'Тип транзакции' in df.columns and pd.notna(row['Тип транзакции']):
                 description = str(row['Тип транзакции'])
             else:
-                # Собираем все значения в строке
                 for col in df.columns:
-                    if col not in [date_col, debit_col, credit_col]:
+                    if col not in [date_col, amount_col, debit_col, credit_col]:
                         val = str(row[col]) if pd.notna(row[col]) else ''
                         if val and val != 'nan':
                             description += val + ' '
             
             desc_lower = description.lower()
+            
+            # Определение статьи по ключевым словам
             if 'комиссия' in desc_lower or 'commission' in desc_lower or 'fee' in desc_lower:
                 if amount > 0:
                     amount = -amount
@@ -195,7 +207,7 @@ def parse_file(file_content, file_name):
                 article = '1.2.15.1 Зарплата'
                 direction = 'Расходы'
                 subdir = 'Зарплата'
-            elif 'налог' in desc_lower or 'vid' in desc_lower:
+            elif 'налог' in desc_lower or 'vid' in desc_lower or 'budžets' in desc_lower:
                 if amount > 0:
                     amount = -amount
                 article = '1.2.16 Налоги'
@@ -207,6 +219,12 @@ def parse_file(file_content, file_name):
                 article = '1.2.10.5 Электричество'
                 direction = 'Расходы'
                 subdir = 'Электричество'
+            elif 'rigas udens' in desc_lower or 'ūdens' in desc_lower:
+                if amount > 0:
+                    amount = -amount
+                article = '1.2.10.3 Вода'
+                direction = 'Расходы'
+                subdir = 'Вода'
             elif 'balta' in desc_lower:
                 if amount > 0:
                     amount = -amount
@@ -217,6 +235,12 @@ def parse_file(file_content, file_name):
                 article = '1.1.1.2 Поступления систем бронирования'
                 direction = 'Доходы'
                 subdir = 'Краткосрочная аренда'
+            elif 'careem' in desc_lower or 'flydubai' in desc_lower:
+                if amount > 0:
+                    amount = -amount
+                article = '1.2.2 Командировочные расходы'
+                direction = 'Расходы'
+                subdir = 'Командировки'
             else:
                 if amount > 0:
                     article = '1.1.1.1 Арендная плата'
