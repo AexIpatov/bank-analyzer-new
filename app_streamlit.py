@@ -4,6 +4,7 @@ import io
 import tempfile
 import os
 import chardet
+import re
 from datetime import datetime
 
 st.set_page_config(page_title="Аналитик выписок", page_icon="📈", layout="wide")
@@ -32,11 +33,21 @@ with st.sidebar:
     st.markdown("### 🧠 О программе")
     st.markdown("**Поддерживаемые форматы:** Excel (.xlsx, .xls), CSV")
     st.markdown("**Счет берется из имени файла**")
+    st.markdown("**Статьи определяются по ключевым словам**")
+
+# ============================================
+# === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
+# ============================================
+
+def detect_encoding(file_content):
+    result = chardet.detect(file_content[:10000])
+    return result['encoding'] if result['encoding'] else 'utf-8'
 
 def read_file(file_content, file_name):
     with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as tmp:
         tmp.write(file_content)
         tmp_path = tmp.name
+    
     try:
         if file_name.lower().endswith(('.xls', '.xlsx')):
             try:
@@ -46,9 +57,8 @@ def read_file(file_content, file_name):
         else:
             with open(tmp_path, 'rb') as f:
                 raw = f.read()
-            result = chardet.detect(raw[:10000])
-            encoding = result['encoding'] if result['encoding'] else 'utf-8'
-            for sep in [';', ',']:
+            encoding = detect_encoding(raw)
+            for sep in [';', ',', '\t']:
                 try:
                     df = pd.read_csv(tmp_path, sep=sep, encoding=encoding, on_bad_lines='skip')
                     if len(df.columns) > 1:
@@ -59,7 +69,8 @@ def read_file(file_content, file_name):
                 df = pd.read_csv(tmp_path, sep=';', encoding='latin1', on_bad_lines='skip')
     except Exception as e:
         os.unlink(tmp_path)
-        return None
+        raise e
+    
     os.unlink(tmp_path)
     return df
 
@@ -77,113 +88,358 @@ def parse_date(date_str):
         return date_str[:10]
     return date_str[:10] if len(date_str) >= 10 else date_str
 
-def parse_file(file_content, file_name):
-    df = read_file(file_content, file_name)
-    if df is None:
-        st.error("❌ Не удалось прочитать файл")
+def get_article(description, amount):
+    desc_lower = description.lower()
+    
+    articles = [
+        ('комиссия', '1.2.17 РКО', 'Расходы', 'Банковские комиссии'),
+        ('commission', '1.2.17 РКО', 'Расходы', 'Банковские комиссии'),
+        ('fee', '1.2.17 РКО', 'Расходы', 'Банковские комиссии'),
+        ('арендн', '1.1.1.1 Арендная плата', 'Доходы', 'Арендная плата'),
+        ('rent', '1.1.1.1 Арендная плата', 'Доходы', 'Арендная плата'),
+        ('money added', '1.1.1.1 Арендная плата', 'Доходы', 'Арендная плата'),
+        ('компенсац', '1.1.2.3 Компенсация по коммунальным расходам', 'Доходы', 'Компенсация'),
+        ('зарплат', '1.2.15.1 Зарплата', 'Расходы', 'Зарплата'),
+        ('налог', '1.2.16 Налоги', 'Расходы', 'Налоги'),
+        ('latvenergo', '1.2.10.5 Электричество', 'Расходы', 'Электричество'),
+        ('balta', '1.2.8.2 Страхование', 'Расходы', 'Страхование'),
+        ('airbnb', '1.1.1.2 Поступления систем бронирования', 'Доходы', 'Краткосрочная аренда'),
+        ('booking', '1.1.1.2 Поступления систем бронирования', 'Доходы', 'Краткосрочная аренда'),
+        ('careem', '1.2.2 Командировочные расходы', 'Расходы', 'Транспорт'),
+        ('flydubai', '1.2.2 Командировочные расходы', 'Расходы', 'Авиабилеты'),
+        ('facebook', '1.2.3 Оплата рекламных систем', 'Расходы', 'Маркетинг'),
+        ('asana', '1.2.9.3 IT сервисы', 'Расходы', 'IT сервисы'),
+    ]
+    
+    for kw, article, direction, subdirection in articles:
+        if kw in desc_lower:
+            if direction == 'Расходы' and amount > 0:
+                amount = -amount
+            return article, direction, subdirection, amount
+    
+    if amount > 0:
+        return '1.1.1.1 Арендная плата', 'Доходы', 'Арендная плата', amount
+    else:
+        return '1.2.8.1 Обслуживание объектов', 'Расходы', 'Обслуживание', amount
+
+# ============================================
+# === ПАРСЕРЫ ===
+# ============================================
+
+def parse_antonijas_industra(df, file_name):
+    # Ищем строку с заголовками
+    header_row = None
+    for idx, row in df.iterrows():
+        row_text = ' '.join(str(v) for v in row.values if pd.notna(v))
+        if 'Дата транзакции' in row_text:
+            header_row = idx
+            break
+    
+    if header_row is None:
         return []
     
-    st.write(f"=== ОТЛАДКА: файл {file_name} ===")
-    st.write(f"Столбцы в файле: {list(df.columns)}")
-    st.write(f"Количество строк: {len(df)}")
-    st.write("Первые 5 строк:")
-    for i in range(min(5, len(df))):
-        st.write(f"Строка {i}: {df.iloc[i].to_dict()}")
-    
-    date_col = None
-    amount_col = None
-    for col in df.columns:
-        col_lower = str(col).lower()
-        if 'дата' in col_lower or 'date' in col_lower:
-            date_col = col
-        if 'сумм' in col_lower or 'amount' in col_lower:
-            amount_col = col
-    
-    st.write(f"Найден столбец даты: {date_col}")
-    st.write(f"Найден столбец суммы: {amount_col}")
-    
-    if date_col is None and len(df.columns) > 0:
-        date_col = df.columns[0]
-        st.write(f"Используем первый столбец как дату: {date_col}")
-    if amount_col is None and len(df.columns) > 1:
-        amount_col = df.columns[1]
-        st.write(f"Используем второй столбец как сумму: {amount_col}")
+    df.columns = df.iloc[header_row]
+    df = df.iloc[header_row + 1:].reset_index(drop=True)
     
     transactions = []
+    for _, row in df.iterrows():
+        date_val = row.get('Дата транзакции', '')
+        if pd.isna(date_val):
+            continue
+        date = parse_date(date_val)
+        
+        amount = 0
+        debit = row.get('Дебет(D)', row.get('Дебет(Д)', 0))
+        credit = row.get('Кредит(C)', row.get('Кредит(С)', 0))
+        
+        if pd.notna(credit) and credit != 0:
+            amount = float(credit)
+        elif pd.notna(debit) and debit != 0:
+            amount = -float(debit)
+        
+        if amount == 0:
+            continue
+        
+        description = str(row.get('Информация о транзакции', ''))
+        if not description or description == 'nan':
+            description = str(row.get('Тип транзакции', ''))
+        if not description or description == 'nan':
+            description = str(row.get('Получатель / Плательщик', ''))
+        
+        article, direction, subdirection, amount = get_article(description, amount)
+        
+        transactions.append({
+            'date': date,
+            'amount': amount,
+            'currency': 'EUR',
+            'account_name': file_name.replace('.xls', '').replace('.xlsx', '').replace('.csv', ''),
+            'description': description[:300],
+            'article_name': article,
+            'direction': direction,
+            'subdirection': subdirection
+        })
+    return transactions
+
+def parse_antonijas_revolut(df, file_name):
+    transactions = []
+    for _, row in df.iterrows():
+        date_str = str(row.get('Date started (UTC)', ''))
+        if not date_str or date_str == 'nan':
+            continue
+        date = parse_date(date_str)
+        amount = float(row.get('Amount', 0)) if pd.notna(row.get('Amount', 0)) else 0
+        if amount == 0:
+            continue
+        description = str(row.get('Description', ''))
+        if 'To ' in description and amount > 0:
+            amount = -amount
+        article, direction, subdirection, amount = get_article(description, amount)
+        transactions.append({
+            'date': date,
+            'amount': amount,
+            'currency': row.get('Payment currency', 'EUR'),
+            'account_name': file_name.replace('.csv', '').replace('.xls', '').replace('.xlsx', ''),
+            'description': description[:300],
+            'article_name': article,
+            'direction': direction,
+            'subdirection': subdirection
+        })
+    return transactions
+
+def parse_paysera(df, file_name):
+    header_row = None
     for idx, row in df.iterrows():
-        try:
-            if date_col and pd.notna(row[date_col]):
-                date = parse_date(row[date_col])
-            else:
-                continue
-            
-            amount = 0
-            if amount_col and pd.notna(row[amount_col]):
-                try:
-                    amount = float(str(row[amount_col]).replace(',', '.'))
-                except:
-                    amount = 0
-            
-            if amount == 0:
-                continue
-            
-            description = ''
-            for col in df.columns:
-                if col not in [date_col, amount_col]:
-                    val = str(row[col]) if pd.notna(row[col]) else ''
-                    if val and val != 'nan':
-                        description += val + ' '
-            
-            desc_lower = description.lower()
-            if 'комиссия' in desc_lower or 'commission' in desc_lower or 'fee' in desc_lower:
-                if amount > 0:
-                    amount = -amount
-                article = '1.2.17 РКО'
-                direction = 'Расходы'
-                subdir = 'Банковские комиссии'
-            elif 'арендн' in desc_lower or 'rent' in desc_lower or 'money added' in desc_lower:
-                article = '1.1.1.1 Арендная плата'
-                direction = 'Доходы'
-                subdir = 'Арендная плата'
-            elif 'зарплат' in desc_lower or 'salary' in desc_lower:
-                if amount > 0:
-                    amount = -amount
-                article = '1.2.15.1 Зарплата'
-                direction = 'Расходы'
-                subdir = 'Зарплата'
-            elif 'налог' in desc_lower or 'vid' in desc_lower:
-                if amount > 0:
-                    amount = -amount
-                article = '1.2.16 Налоги'
-                direction = 'Расходы'
-                subdir = 'Налоги'
-            else:
-                if amount > 0:
-                    article = '1.1.1.1 Арендная плата'
-                    direction = 'Доходы'
-                    subdir = 'Арендная плата'
-                else:
-                    article = '1.2.8.1 Обслуживание объектов'
-                    direction = 'Расходы'
-                    subdir = 'Обслуживание'
-            
+        row_text = ' '.join(str(v) for v in row.values if pd.notna(v))
+        if 'Date and time' in row_text:
+            header_row = idx
+            break
+    if header_row is None:
+        return []
+    df.columns = df.iloc[header_row]
+    df = df.iloc[header_row + 1:].reset_index(drop=True)
+    
+    transactions = []
+    for _, row in df.iterrows():
+        if pd.isna(row.get('Date and time', pd.NA)):
+            continue
+        date = parse_date(str(row.get('Date and time', '')))
+        amount_str = str(row.get('Amount and currency', '0'))
+        amount = 0
+        amount_match = re.search(r'([-]?\d+[.,]?\d*)', amount_str)
+        if amount_match:
+            try:
+                amount = float(amount_match.group(1).replace(',', '.'))
+            except:
+                amount = 0
+        cd = str(row.get('Credit/Debit', '')).upper()
+        if cd == 'D' and amount > 0:
+            amount = -amount
+        description = str(row.get('Purpose of payment', ''))
+        if not description or description == 'nan':
+            description = str(row.get('Recipient / Payer', ''))
+        if date and amount != 0:
+            article, direction, subdirection, amount = get_article(description, amount)
             transactions.append({
                 'date': date,
                 'amount': amount,
                 'currency': 'EUR',
-                'account_name': file_name.replace('.xls', '').replace('.xlsx', '').replace('.csv', '').replace('.CSV', ''),
+                'account_name': file_name.replace('.xls', '').replace('.xlsx', '').replace('.csv', ''),
                 'description': description[:300],
                 'article_name': article,
                 'direction': direction,
-                'subdirection': subdir
+                'subdirection': subdirection
             })
-            st.write(f"✅ Найдена транзакция: {date} | {amount} | {description[:50]}")
-        except Exception as e:
-            st.write(f"❌ Ошибка в строке {idx}: {e}")
-            continue
-    
-    st.write(f"=== ИТОГО найдено транзакций: {len(transactions)} ===")
     return transactions
+
+def parse_wio(df, file_name):
+    transactions = []
+    for _, row in df.iterrows():
+        date_str = str(row.get('Date', ''))
+        if not date_str or date_str == 'nan':
+            continue
+        date = parse_date(date_str)
+        amount = float(row.get('Amount', 0)) if pd.notna(row.get('Amount', 0)) else 0
+        if amount == 0:
+            continue
+        description = str(row.get('Description', ''))
+        article, direction, subdirection, amount = get_article(description, amount)
+        transactions.append({
+            'date': date,
+            'amount': amount,
+            'currency': row.get('Account currency', 'AED'),
+            'account_name': file_name.replace('.csv', '').replace('.xls', '').replace('.xlsx', ''),
+            'description': description[:300],
+            'article_name': article,
+            'direction': direction,
+            'subdirection': subdirection
+        })
+    return transactions
+
+def parse_unicredit(df, file_name):
+    amount_col = None
+    date_col = None
+    desc_col = None
+    for col in df.columns:
+        col_lower = str(col).lower()
+        if 'amount' in col_lower:
+            amount_col = col
+        if 'booking' in col_lower or 'date' in col_lower:
+            date_col = col
+        if 'transaction' in col_lower or 'details' in col_lower:
+            desc_col = col
+    if amount_col is None:
+        return []
+    
+    transactions = []
+    for _, row in df.iterrows():
+        amount = 0
+        try:
+            amount = float(str(row[amount_col]).replace(',', '.'))
+        except:
+            continue
+        if amount == 0:
+            continue
+        date = ''
+        if date_col and pd.notna(row[date_col]):
+            date = parse_date(str(row[date_col]))
+        description = ''
+        if desc_col and pd.notna(row[desc_col]):
+            description = str(row[desc_col])
+        if date:
+            article, direction, subdirection, amount = get_article(description, amount)
+            transactions.append({
+                'date': date,
+                'amount': amount,
+                'currency': 'CZK',
+                'account_name': file_name.replace('.csv', '').replace('.xls', '').replace('.xlsx', ''),
+                'description': description[:300],
+                'article_name': article,
+                'direction': direction,
+                'subdirection': subdirection
+            })
+    return transactions
+
+def parse_mashreq(df, file_name):
+    try:
+        df.columns = df.iloc[8]
+        df = df.iloc[9:].reset_index(drop=True)
+    except:
+        pass
+    
+    transactions = []
+    for _, row in df.iterrows():
+        date_str = str(row.get('Date', ''))
+        if pd.isna(date_str) or date_str == 'nan':
+            continue
+        date = parse_date(date_str)
+        credit = row.get('Credit', 0)
+        debit = row.get('Debit', 0)
+        amount = credit if pd.notna(credit) and credit != 0 else -debit if pd.notna(debit) and debit != 0 else 0
+        if amount == 0:
+            continue
+        description = str(row.get('Description', ''))
+        article, direction, subdirection, amount = get_article(description, amount)
+        transactions.append({
+            'date': date,
+            'amount': amount,
+            'currency': 'AED',
+            'account_name': file_name.replace('.xlsx', '').replace('.xls', '').replace('.csv', ''),
+            'description': description[:300],
+            'article_name': article,
+            'direction': direction,
+            'subdirection': subdirection
+        })
+    return transactions
+
+def parse_pasha(df, file_name):
+    header_row = None
+    for idx, row in df.iterrows():
+        row_text = ' '.join(str(v) for v in row.values if pd.notna(v))
+        if 'Əməliyyat tarixi' in row_text:
+            header_row = idx
+            break
+    if header_row is None:
+        return []
+    df.columns = df.iloc[header_row]
+    df = df.iloc[header_row + 1:].reset_index(drop=True)
+    
+    transactions = []
+    for _, row in df.iterrows():
+        date_str = str(row.get('Əməliyyat tarixi', ''))
+        if pd.isna(date_str) or date_str == 'nan':
+            continue
+        date = parse_date(date_str)
+        income = row.get('Mədaxil', 0)
+        expense = row.get('Məxaric', 0)
+        amount = income if pd.notna(income) and income != 0 else -expense if pd.notna(expense) and expense != 0 else 0
+        if amount == 0:
+            continue
+        description = str(row.get('Təyinat', ''))
+        article, direction, subdirection, amount = get_article(description, amount)
+        transactions.append({
+            'date': date,
+            'amount': amount,
+            'currency': 'AZN' if 'AZN' in file_name else 'AED',
+            'account_name': file_name.replace('.xlsx', '').replace('.xls', '').replace('.csv', ''),
+            'description': description[:300],
+            'article_name': article,
+            'direction': direction,
+            'subdirection': subdirection
+        })
+    return transactions
+
+# ============================================
+# === ОСНОВНАЯ ФУНКЦИЯ ===
+# ============================================
+
+def process_file(file_content, file_name):
+    df = read_file(file_content, file_name)
+    if df is None:
+        return []
+    
+    name_lower = file_name.lower()
+    
+    # Antonijas Industra
+    if 'antonijas nams 14 sia-industra' in name_lower:
+        return parse_antonijas_industra(df, file_name)
+    
+    # Antonijas Revolut
+    if 'antonijas nams 14-revolut' in name_lower:
+        return parse_antonijas_revolut(df, file_name)
+    
+    # Industra Plavas
+    if 'industra bank-plavas 1' in name_lower:
+        return parse_antonijas_industra(df, file_name)
+    
+    # Paysera
+    if 'paysera' in name_lower:
+        return parse_paysera(df, file_name)
+    
+    # WIO
+    if 'wio' in name_lower:
+        return parse_wio(df, file_name)
+    
+    # Mashreq
+    if 'mashreq' in name_lower:
+        return parse_mashreq(df, file_name)
+    
+    # Pasha / Bunda
+    if 'pasha' in name_lower or 'bunda' in name_lower:
+        return parse_pasha(df, file_name)
+    
+    # UniCredit (Garpiz, Koruna, TwoHills)
+    if 'unicredit' in name_lower or 'garpiz' in name_lower or 'koruna' in name_lower or 'twohills' in name_lower:
+        return parse_unicredit(df, file_name)
+    
+    # CSOB (Džibik)
+    if 'csob' in name_lower or 'dzibik' in name_lower:
+        return parse_unicredit(df, file_name)
+    
+    return []
+
+# ============================================
+# === ИНТЕРФЕЙС ===
+# ============================================
 
 tab1, tab2 = st.tabs(["📂 Один файл", "📚 Несколько файлов"])
 
@@ -195,18 +451,20 @@ with tab1:
         if st.button("🚀 Запустить анализ", key="single_btn"):
             with st.spinner("Анализируем..."):
                 content = uploaded_file.read()
-                transactions = parse_file(content, uploaded_file.name)
+                transactions = process_file(content, uploaded_file.name)
+                
                 if transactions:
                     df = pd.DataFrame([{
                         'Дата': t['date'],
                         'Сумма': t['amount'],
                         'Валюта': t['currency'],
                         'Счет': t['account_name'],
-                        'Статья': t['article_name'],
-                        'Направление': t['direction'],
-                        'Субнаправление': t['subdirection'],
+                        'Статья': t.get('article_name', 'Требует уточнения'),
+                        'Направление': t.get('direction', 'Требует уточнения'),
+                        'Субнаправление': t.get('subdirection', ''),
                         'Описание': t['description'][:100]
                     } for t in transactions])
+                    
                     st.markdown("---")
                     col_a, col_b, col_c = st.columns(3)
                     with col_a:
@@ -217,7 +475,9 @@ with tab1:
                     with col_c:
                         расход = abs(df[df['Сумма'] < 0]['Сумма'].sum()) if len(df[df['Сумма'] < 0]) > 0 else 0
                         st.metric("📉 Расходы", f"{расход:,.2f}")
+                    
                     st.dataframe(df, use_container_width=True)
+                    
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
                         df.to_excel(writer, index=False, sheet_name='Транзакции')
@@ -235,15 +495,18 @@ with tab2:
             all_transactions = []
             progress_bar = st.progress(0)
             status_text = st.empty()
+            
             for i, f in enumerate(uploaded_files):
                 status_text.text(f"🔄 Обработка: {f.name}")
                 content = f.read()
-                trans = parse_file(content, f.name)
+                trans = process_file(content, f.name)
                 for t in trans:
                     t['source_file'] = f.name
                     all_transactions.append(t)
                 progress_bar.progress((i + 1) / len(uploaded_files))
+            
             status_text.text("✅ Обработка завершена!")
+            
             if all_transactions:
                 df = pd.DataFrame([{
                     'Дата': t['date'],
@@ -251,11 +514,12 @@ with tab2:
                     'Валюта': t['currency'],
                     'Счет': t['account_name'],
                     'Исходный файл': t.get('source_file', ''),
-                    'Статья': t['article_name'],
-                    'Направление': t['direction'],
-                    'Субнаправление': t['subdirection'],
+                    'Статья': t.get('article_name', 'Требует уточнения'),
+                    'Направление': t.get('direction', 'Требует уточнения'),
+                    'Субнаправление': t.get('subdirection', ''),
                     'Описание': t['description'][:100]
                 } for t in all_transactions])
+                
                 st.markdown("---")
                 col_a, col_b, col_c = st.columns(3)
                 with col_a:
@@ -266,7 +530,9 @@ with tab2:
                 with col_c:
                     расход = abs(df[df['Сумма'] < 0]['Сумма'].sum()) if len(df[df['Сумма'] < 0]) > 0 else 0
                     st.metric("📉 Расходы", f"{расход:,.2f}")
+                
                 st.dataframe(df, use_container_width=True)
+                
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df.to_excel(writer, index=False, sheet_name='Все транзакции')
