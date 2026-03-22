@@ -1,7 +1,7 @@
 import pandas as pd
 from .base_parser import BaseParser
 
-class IndustriPlavasParser(BaseParser):
+class IndustraPlavasParser(BaseParser):
     """Парсер для Industra Bank-Plavas 1.xls"""
     
     def parse(self, file_content, file_name):
