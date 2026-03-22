@@ -4,7 +4,6 @@ import io
 import tempfile
 import os
 import chardet
-import re
 from datetime import datetime
 
 st.set_page_config(page_title="Аналитик выписок", page_icon="📈", layout="wide")
@@ -33,14 +32,11 @@ with st.sidebar:
     st.markdown("### 🧠 О программе")
     st.markdown("**Поддерживаемые форматы:** Excel (.xlsx, .xls), CSV")
     st.markdown("**Счет берется из имени файла**")
-    st.markdown("**Статьи определяются автоматически**")
 
 def read_file(file_content, file_name):
-    """Чтение файла (Excel или CSV)"""
     with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as tmp:
         tmp.write(file_content)
         tmp_path = tmp.name
-    
     try:
         if file_name.lower().endswith(('.xls', '.xlsx')):
             try:
@@ -52,8 +48,7 @@ def read_file(file_content, file_name):
                 raw = f.read()
             result = chardet.detect(raw[:10000])
             encoding = result['encoding'] if result['encoding'] else 'utf-8'
-            
-            for sep in [';', ',', '\t']:
+            for sep in [';', ',']:
                 try:
                     df = pd.read_csv(tmp_path, sep=sep, encoding=encoding, on_bad_lines='skip')
                     if len(df.columns) > 1:
@@ -65,61 +60,30 @@ def read_file(file_content, file_name):
     except Exception as e:
         os.unlink(tmp_path)
         return None
-    
     os.unlink(tmp_path)
     return df
 
-def get_article(description, amount):
-    """Определение статьи по описанию"""
-    desc_lower = description.lower()
-    
-    articles = [
-        ('комиссия', '1.2.17 РКО', 'Расходы', 'Банковские комиссии'),
-        ('commission', '1.2.17 РКО', 'Расходы', 'Банковские комиссии'),
-        ('fee', '1.2.17 РКО', 'Расходы', 'Банковские комиссии'),
-        ('арендн', '1.1.1.1 Арендная плата', 'Доходы', 'Арендная плата'),
-        ('rent', '1.1.1.1 Арендная плата', 'Доходы', 'Арендная плата'),
-        ('money added', '1.1.1.1 Арендная плата', 'Доходы', 'Арендная плата'),
-        ('компенсац', '1.1.2.3 Компенсация по коммунальным расходам', 'Доходы', 'Компенсация'),
-        ('utilities', '1.1.2.3 Компенсация по коммунальным расходам', 'Доходы', 'Компенсация'),
-        ('зарплат', '1.2.15.1 Зарплата', 'Расходы', 'Зарплата'),
-        ('salary', '1.2.15.1 Зарплата', 'Расходы', 'Зарплата'),
-        ('налог', '1.2.16 Налоги', 'Расходы', 'Налоги'),
-        ('vid', '1.2.16 Налоги', 'Расходы', 'Налоги'),
-        ('latvenergo', '1.2.10.5 Электричество', 'Расходы', 'Электричество'),
-        ('rigas udens', '1.2.10.3 Вода', 'Расходы', 'Вода'),
-        ('balta', '1.2.8.2 Страхование', 'Расходы', 'Страхование'),
-        ('airbnb', '1.1.1.2 Поступления систем бронирования', 'Доходы', 'Краткосрочная аренда'),
-        ('booking', '1.1.1.2 Поступления систем бронирования', 'Доходы', 'Краткосрочная аренда'),
-        ('careem', '1.2.2 Командировочные расходы', 'Расходы', 'Транспорт'),
-        ('flydubai', '1.2.2 Командировочные расходы', 'Расходы', 'Авиабилеты'),
-        ('tiktok', '1.2.3 Оплата рекламных систем', 'Расходы', 'Маркетинг'),
-        ('facebook', '1.2.3 Оплата рекламных систем', 'Расходы', 'Маркетинг'),
-        ('asana', '1.2.9.3 IT сервисы', 'Расходы', 'IT сервисы'),
-    ]
-    
-    for kw, article, direction, subdirection in articles:
-        if kw in desc_lower:
-            if direction == 'Расходы' and amount > 0:
-                amount = -amount
-            return article, direction, subdirection, amount
-    
-    if amount > 0:
-        return '1.1.1.1 Арендная плата', 'Доходы', 'Арендная плата', amount
-    else:
-        return '1.2.8.1 Обслуживание объектов', 'Расходы', 'Обслуживание', amount
+def parse_date(date_str):
+    if pd.isna(date_str):
+        return ''
+    date_str = str(date_str)
+    if '.' in date_str:
+        parts = date_str.split('.')
+        if len(parts) == 3:
+            return f"{parts[2]}-{parts[1]}-{parts[0]}"
+    if ' ' in date_str:
+        date_str = date_str.split(' ')[0]
+    if '-' in date_str and len(date_str) >= 10:
+        return date_str[:10]
+    return date_str[:10] if len(date_str) >= 10 else date_str
 
 def parse_file(file_content, file_name):
-    """Парсинг файла"""
     df = read_file(file_content, file_name)
     if df is None:
         return []
     
-    transactions = []
     date_col = None
     amount_col = None
-    
-    # Ищем столбцы с датой и суммой
     for col in df.columns:
         col_lower = str(col).lower()
         if 'дата' in col_lower or 'date' in col_lower:
@@ -132,24 +96,14 @@ def parse_file(file_content, file_name):
     if amount_col is None and len(df.columns) > 1:
         amount_col = df.columns[1]
     
+    transactions = []
     for _, row in df.iterrows():
         try:
-            # Дата
             if date_col and pd.notna(row[date_col]):
-                date_str = str(row[date_col])
-                # Преобразование даты
-                if '.' in date_str:
-                    parts = date_str.split('.')
-                    if len(parts) == 3:
-                        date = f"{parts[2]}-{parts[1]}-{parts[0]}"
-                    else:
-                        date = date_str[:10]
-                else:
-                    date = date_str[:10]
+                date = parse_date(row[date_col])
             else:
                 continue
             
-            # Сумма
             amount = 0
             if amount_col and pd.notna(row[amount_col]):
                 try:
@@ -160,7 +114,6 @@ def parse_file(file_content, file_name):
             if amount == 0:
                 continue
             
-            # Описание
             description = ''
             for col in df.columns:
                 if col not in [date_col, amount_col]:
@@ -168,17 +121,70 @@ def parse_file(file_content, file_name):
                     if val and val != 'nan':
                         description += val + ' '
             
-            article, direction, subdirection, amount = get_article(description, amount)
+            desc_lower = description.lower()
+            if 'комиссия' in desc_lower or 'commission' in desc_lower or 'fee' in desc_lower:
+                if amount > 0:
+                    amount = -amount
+                article = '1.2.17 РКО'
+                direction = 'Расходы'
+                subdir = 'Банковские комиссии'
+            elif 'арендн' in desc_lower or 'rent' in desc_lower or 'money added' in desc_lower:
+                article = '1.1.1.1 Арендная плата'
+                direction = 'Доходы'
+                subdir = 'Арендная плата'
+            elif 'зарплат' in desc_lower or 'salary' in desc_lower:
+                if amount > 0:
+                    amount = -amount
+                article = '1.2.15.1 Зарплата'
+                direction = 'Расходы'
+                subdir = 'Зарплата'
+            elif 'налог' in desc_lower or 'vid' in desc_lower:
+                if amount > 0:
+                    amount = -amount
+                article = '1.2.16 Налоги'
+                direction = 'Расходы'
+                subdir = 'Налоги'
+            elif 'latvenergo' in desc_lower:
+                if amount > 0:
+                    amount = -amount
+                article = '1.2.10.5 Электричество'
+                direction = 'Расходы'
+                subdir = 'Электричество'
+            elif 'balta' in desc_lower:
+                if amount > 0:
+                    amount = -amount
+                article = '1.2.8.2 Страхование'
+                direction = 'Расходы'
+                subdir = 'Страхование'
+            elif 'airbnb' in desc_lower or 'booking' in desc_lower:
+                article = '1.1.1.2 Поступления систем бронирования'
+                direction = 'Доходы'
+                subdir = 'Краткосрочная аренда'
+            elif 'careem' in desc_lower or 'flydubai' in desc_lower:
+                if amount > 0:
+                    amount = -amount
+                article = '1.2.2 Командировочные расходы'
+                direction = 'Расходы'
+                subdir = 'Командировки'
+            else:
+                if amount > 0:
+                    article = '1.1.1.1 Арендная плата'
+                    direction = 'Доходы'
+                    subdir = 'Арендная плата'
+                else:
+                    article = '1.2.8.1 Обслуживание объектов'
+                    direction = 'Расходы'
+                    subdir = 'Обслуживание'
             
             transactions.append({
                 'date': date,
                 'amount': amount,
                 'currency': 'EUR',
-                'account_name': file_name.replace('.xls', '').replace('.xlsx', '').replace('.csv', ''),
+                'account_name': file_name.replace('.xls', '').replace('.xlsx', '').replace('.csv', '').replace('.CSV', ''),
                 'description': description[:300],
                 'article_name': article,
                 'direction': direction,
-                'subdirection': subdirection
+                'subdirection': subdir
             })
         except:
             continue
@@ -196,19 +202,17 @@ with tab1:
             with st.spinner("Анализируем..."):
                 content = uploaded_file.read()
                 transactions = parse_file(content, uploaded_file.name)
-                
                 if transactions:
                     df = pd.DataFrame([{
                         'Дата': t['date'],
                         'Сумма': t['amount'],
                         'Валюта': t['currency'],
                         'Счет': t['account_name'],
-                        'Статья': t.get('article_name', 'Требует уточнения'),
-                        'Направление': t.get('direction', 'Требует уточнения'),
-                        'Субнаправление': t.get('subdirection', ''),
+                        'Статья': t['article_name'],
+                        'Направление': t['direction'],
+                        'Субнаправление': t['subdirection'],
                         'Описание': t['description'][:100]
                     } for t in transactions])
-                    
                     st.markdown("---")
                     col_a, col_b, col_c = st.columns(3)
                     with col_a:
@@ -219,9 +223,7 @@ with tab1:
                     with col_c:
                         расход = abs(df[df['Сумма'] < 0]['Сумма'].sum()) if len(df[df['Сумма'] < 0]) > 0 else 0
                         st.metric("📉 Расходы", f"{расход:,.2f}")
-                    
                     st.dataframe(df, use_container_width=True)
-                    
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
                         df.to_excel(writer, index=False, sheet_name='Транзакции')
@@ -239,7 +241,6 @@ with tab2:
             all_transactions = []
             progress_bar = st.progress(0)
             status_text = st.empty()
-            
             for i, f in enumerate(uploaded_files):
                 status_text.text(f"🔄 Обработка: {f.name}")
                 content = f.read()
@@ -248,9 +249,7 @@ with tab2:
                     t['source_file'] = f.name
                     all_transactions.append(t)
                 progress_bar.progress((i + 1) / len(uploaded_files))
-            
             status_text.text("✅ Обработка завершена!")
-            
             if all_transactions:
                 df = pd.DataFrame([{
                     'Дата': t['date'],
@@ -258,12 +257,11 @@ with tab2:
                     'Валюта': t['currency'],
                     'Счет': t['account_name'],
                     'Исходный файл': t.get('source_file', ''),
-                    'Статья': t.get('article_name', 'Требует уточнения'),
-                    'Направление': t.get('direction', 'Требует уточнения'),
-                    'Субнаправление': t.get('subdirection', ''),
+                    'Статья': t['article_name'],
+                    'Направление': t['direction'],
+                    'Субнаправление': t['subdirection'],
                     'Описание': t['description'][:100]
                 } for t in all_transactions])
-                
                 st.markdown("---")
                 col_a, col_b, col_c = st.columns(3)
                 with col_a:
@@ -274,9 +272,7 @@ with tab2:
                 with col_c:
                     расход = abs(df[df['Сумма'] < 0]['Сумма'].sum()) if len(df[df['Сумма'] < 0]) > 0 else 0
                     st.metric("📉 Расходы", f"{расход:,.2f}")
-                
                 st.dataframe(df, use_container_width=True)
-                
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df.to_excel(writer, index=False, sheet_name='Все транзакции')
