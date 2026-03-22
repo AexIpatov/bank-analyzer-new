@@ -88,7 +88,6 @@ def read_file(file_content, file_name):
                     row.append('')
             
             df = pd.DataFrame(data)
-            st.write(f"Файл прочитан вручную, строк: {len(df)}, столбцов: {len(df.columns)}")
     except Exception as e:
         os.unlink(tmp_path)
         raise e
@@ -160,20 +159,6 @@ def parse_file(file_content, file_name):
         df = df.iloc[header_row + 1:].reset_index(drop=True)
         st.write(f"Столбцы после переопределения: {list(df.columns)}")
         st.write(f"Количество строк после: {len(df)}")
-    else:
-        # Если не нашли, ищем другие заголовки
-        for idx, row in df.iterrows():
-            row_text = ' '.join(str(v) for v in row.values if pd.notna(v))
-            if any(kw in row_text for kw in ['Date', 'Amount', 'Booking Date']):
-                header_row = idx
-                st.write(f"Найдена строка с заголовками на индексе {idx}")
-                break
-        
-        if header_row is not None:
-            df.columns = df.iloc[header_row]
-            df = df.iloc[header_row + 1:].reset_index(drop=True)
-            st.write(f"Столбцы после переопределения: {list(df.columns)}")
-            st.write(f"Количество строк после: {len(df)}")
     
     # Показываем первые строки после обработки
     st.write("Первые 15 строк после обработки заголовков:")
@@ -199,7 +184,7 @@ def parse_file(file_content, file_name):
     # Ищем столбец с суммой
     for col in df.columns:
         col_lower = str(col).lower()
-        if any(kw in col_lower for kw in ['amount']):
+        if 'amount' in col_lower:
             amount_col = col
             st.write(f"Найден столбец суммы: {amount_col}")
             break
@@ -252,24 +237,35 @@ def parse_file(file_content, file_name):
     transactions = []
     for idx, row in df.iterrows():
         try:
-            if date_col and pd.notna(row[date_col]):
-                date = parse_date(row[date_col])
-            else:
+            # Получаем дату
+            date = ''
+            if date_col is not None:
+                date_val = row[date_col]
+                if pd.notna(date_val):
+                    date = parse_date(date_val)
+            
+            if not date:
                 continue
             
+            # Получаем сумму
             amount = 0
-            if amount_col and pd.notna(row[amount_col]):
-                amount = parse_amount(row[amount_col])
+            if amount_col is not None:
+                amount_val = row[amount_col]
+                if pd.notna(amount_val):
+                    amount = parse_amount(amount_val)
             
             if amount == 0:
                 continue
             
+            # Описание
             description = ''
             for col in df.columns:
                 if col not in [date_col, amount_col]:
-                    val = str(row[col]) if pd.notna(row[col]) else ''
-                    if val and val != 'nan':
-                        description += val + ' '
+                    val = row[col]
+                    if pd.notna(val):
+                        val_str = str(val)
+                        if val_str and val_str != 'nan':
+                            description += val_str + ' '
             
             desc_lower = description.lower()
             
