@@ -1,11 +1,12 @@
 from .base_parser import BaseParser
 
 class TwoHillsMollyParser(BaseParser):
-    """Парсер для TwoHills_Molly_Unicredit_CZK (Excel/CSV)"""
+    """Парсер для TwoHills_Molly_Unicredit_CZK_0226.csv (UniCredit)"""
     
     def parse(self, file_content, file_name):
         df = self._read_file(file_content, file_name)
         
+        # Ищем столбцы
         amount_col = None
         date_col = None
         desc_col = None
@@ -26,18 +27,21 @@ class TwoHillsMollyParser(BaseParser):
         for _, row in df.iterrows():
             amount = 0
             try:
-                amount = float(str(row[amount_col]).replace(',', '.'))
+                amount_str = str(row[amount_col]).replace(',', '.')
+                amount = float(amount_str)
             except:
                 continue
             
             if amount == 0:
                 continue
             
+            # Дата
             date = ''
             if date_col and pd.notna(row[date_col]):
                 date_str = str(row[date_col])
-                date = date_str[:10] if len(date_str) >= 10 else ''
+                date = self._parse_date(date_str)
             
+            # Описание
             description = ''
             if desc_col and pd.notna(row[desc_col]):
                 description = str(row[desc_col])
@@ -50,9 +54,10 @@ class TwoHillsMollyParser(BaseParser):
                     'amount': amount,
                     'currency': 'CZK',
                     'account_name': file_name.replace('.csv', '').replace('.xls', '').replace('.xlsx', ''),
-                    'description': description[:200],
+                    'description': description[:300],
                     'article_name': article,
                     'direction': direction,
                     'subdirection': subdirection
                 })
+        
         return transactions
