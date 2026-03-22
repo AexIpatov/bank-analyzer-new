@@ -160,30 +160,53 @@ def parse_file(file_content, file_name):
     income_col = None
     expense_col = None
     
+    # Сначала ищем posting date (для CSOB)
     for col in df.columns:
         col_lower = str(col).lower()
-        # Дата
-        if 'дата' in col_lower or 'date' in col_lower:
+        if 'posting date' in col_lower:
             date_col = col
-        # Сумма (для разных форматов)
+            st.write(f"Найден столбец даты (posting date): {date_col}")
+            break
+    
+    # Если не нашли, ищем другие варианты
+    if date_col is None:
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if 'дата' in col_lower or 'date' in col_lower:
+                date_col = col
+                st.write(f"Найден столбец даты: {date_col}")
+                break
+    
+    # Ищем сумму (сначала payment amount для CSOB)
+    for col in df.columns:
+        col_lower = str(col).lower()
         if 'payment amount' in col_lower:
             amount_col = col
-        if 'amount' in col_lower and col_lower != 'total amount':
-            if amount_col is None:
+            st.write(f"Найден столбец суммы (payment amount): {amount_col}")
+            break
+    
+    if amount_col is None:
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if 'amount' in col_lower and col_lower != 'total amount':
                 amount_col = col
-        # Дебет/Кредит
+                st.write(f"Найден столбец суммы: {amount_col}")
+                break
+    
+    # Ищем дебет/кредит
+    for col in df.columns:
+        col_lower = str(col).lower()
         if 'дебет' in col_lower or 'debit' in col_lower:
             debit_col = col
         if 'кредит' in col_lower or 'credit' in col_lower:
             credit_col = col
-        # Доходы/Расходы для Pasha
         if 'mədaxil' in col_lower or 'income' in col_lower:
             income_col = col
         if 'məxaric' in col_lower or 'expense' in col_lower:
             expense_col = col
     
-    st.write(f"Найден столбец даты: {date_col}")
-    st.write(f"Найден столбец суммы: {amount_col}")
+    st.write(f"Итоговый столбец даты: {date_col}")
+    st.write(f"Итоговый столбец суммы: {amount_col}")
     st.write(f"Найден столбец дебета: {debit_col}")
     st.write(f"Найден столбец кредита: {credit_col}")
     st.write(f"Найден столбец доходов: {income_col}")
@@ -203,7 +226,7 @@ def parse_file(file_content, file_name):
             else:
                 continue
             
-            # Получаем сумму (приоритет: amount_col, затем payment amount, затем debit/credit)
+            # Получаем сумму
             amount = 0
             
             if amount_col and pd.notna(row[amount_col]):
@@ -321,10 +344,15 @@ def parse_file(file_content, file_name):
             for ext in ['.xls', '.xlsx', '.csv', '.CSV', '.xlsm']:
                 account_name = account_name.replace(ext, '')
             
+            # Определяем валюту
+            currency = 'CZK' if 'CZK' in str(df.columns) else 'EUR'
+            if 'payment currency' in df.columns and pd.notna(row['payment currency']):
+                currency = str(row['payment currency'])
+            
             transactions.append({
                 'date': date,
                 'amount': amount,
-                'currency': 'CZK' if 'CZK' in str(df.columns) else 'EUR',
+                'currency': currency,
                 'account_name': account_name,
                 'description': description[:300],
                 'article_name': article,
