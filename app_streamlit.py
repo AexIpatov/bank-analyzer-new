@@ -70,8 +70,6 @@ def read_file(file_content, file_name):
             # Если всё ещё мало, пробуем latin1
             if len(df.columns) <= 1:
                 df = pd.read_csv(tmp_path, sep=';', encoding='latin1', header=None, on_bad_lines='skip')
-            
-            st.write(f"Файл прочитан без заголовков. Столбцов: {len(df.columns)}, строк: {len(df)}")
     except Exception as e:
         os.unlink(tmp_path)
         raise e
@@ -112,7 +110,7 @@ def parse_amount(amount_str):
         return 0
 
 def find_data_start_row(df):
-    """Находит строку, с которой начинаются данные (где есть дата в формате DD.MM.YYYY)"""
+    """Находит строку, с которой начинаются данные (где есть дата в формате DD.MM.YYYY или число)"""
     for idx, row in df.iterrows():
         for val in row.values:
             if pd.notna(val):
@@ -120,7 +118,7 @@ def find_data_start_row(df):
                 # Ищем дату в формате DD.MM.YYYY
                 if re.match(r'\d{2}\.\d{2}\.\d{4}', val_str):
                     return idx
-                # Ищем число (сумму)
+                # Ищем число (сумму) с возможным минусом
                 if re.match(r'^-?\d+[.,]?\d*$', val_str.replace(',', '.')):
                     return max(0, idx - 1)
     return 0
@@ -153,11 +151,11 @@ def parse_file(file_content, file_name):
                 st.write(f"Найдена строка с заголовками (From Account) на индексе {idx}")
                 break
     
-    # Если не нашли, ищем строку с датой
+    # Если не нашли, ищем строку с датой или заголовками
     if header_row is None:
         for idx, row in df.iterrows():
             row_text = ' '.join(str(v) for v in row.values if pd.notna(v))
-            if 'Дата транзакции' in row_text or 'Date and time' in row_text:
+            if any(kw in row_text for kw in ['Дата транзакции', 'Date and time', 'Date', 'Amount', 'Booking Date']):
                 header_row = idx
                 st.write(f"Найдена строка с заголовками на индексе {idx}")
                 break
@@ -169,8 +167,8 @@ def parse_file(file_content, file_name):
         st.write(f"Столбцы после переопределения: {list(df.columns)}")
         st.write(f"Количество строк после: {len(df)}")
     
-    # Если всё ещё нет данных, ищем строку с датой и используем её как начало данных
-    if len(df) == 0 or len(df.columns) <= 1:
+    # Если после удаления заголовков строк мало, пробуем найти начало данных
+    if len(df) < 3:
         start_row = find_data_start_row(df)
         if start_row > 0:
             df = df.iloc[start_row:].reset_index(drop=True)
@@ -181,16 +179,19 @@ def parse_file(file_content, file_name):
     for i in range(min(5, len(df))):
         st.write(f"Строка {i}: {df.iloc[i].to_dict()}")
     
+    # Если строк всё ещё нет, возвращаем пустой список
+    if len(df) == 0:
+        st.warning("⚠️ В файле не найдено данных для обработки")
+        return []
+    
     # Поиск столбцов
     date_col = None
     amount_col = None
-    debit_col = None
-    credit_col = None
     
     # Ищем столбец с датой
     for col in df.columns:
         col_lower = str(col).lower()
-        if 'booking' in col_lower or 'posting' in col_lower or 'date' in col_lower:
+        if any(kw in col_lower for kw in ['booking', 'posting', 'date', 'дата']):
             date_col = col
             st.write(f"Найден столбец даты: {date_col}")
             break
@@ -198,33 +199,48 @@ def parse_file(file_content, file_name):
     # Ищем столбец с суммой
     for col in df.columns:
         col_lower = str(col).lower()
-        if 'amount' in col_lower:
+        if any(kw in col_lower for kw in ['amount', 'сумма', 'payment']):
             amount_col = col
             st.write(f"Найден столбец суммы: {amount_col}")
             break
     
-    # Если не нашли, ищем по индексам
+    # Если не нашли по названиям, пробуем по данным
+    if date_col is None and len(df.columns) > 0:
+        # Ищем столбец, где есть даты
+        for col in df.columns:
+            sample = df[col].dropna().head(5)
+            for val in sample:
+                val_str = str(val)
+                if re.match(r'\d{2}\.\d{2}\.\d{4}', val_str):
+                    date_col = col
+                    st.write(f"Найден столбец даты по данным: {date_col}")
+                    break
+            if date_col:
+                break
+    
+    if amount_col is None and len(df.columns) > 0:
+        # Ищем столбец, где есть числа
+        for col in df.columns:
+            if col != date_col:
+                sample = df[col].dropna().head(5)
+                for val in sample:
+                    try:
+                        float(str(val).replace(',', '.'))
+                        amount_col = col
+                        st.write(f"Найден столбец суммы по данным: {amount_col}")
+                        break
+                    except:
+                        continue
+            if amount_col:
+                break
+    
     if date_col is None and len(df.columns) > 0:
         date_col = df.columns[0]
         st.write(f"Используем первый столбец как дату: {date_col}")
     
     if amount_col is None and len(df.columns) > 1:
-        # Пробуем найти столбец с числами
-        for col in df.columns:
-            if col != date_col:
-                # Проверяем, есть ли числа в этом столбце
-                sample = df[col].dropna().head(5)
-                if len(sample) > 0:
-                    try:
-                        float(str(sample.iloc[0]).replace(',', '.'))
-                        amount_col = col
-                        st.write(f"Найден столбец суммы (по данным): {amount_col}")
-                        break
-                    except:
-                        continue
-        if amount_col is None:
-            amount_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
-            st.write(f"Используем второй столбец как сумму: {amount_col}")
+        amount_col = df.columns[1]
+        st.write(f"Используем второй столбец как сумму: {amount_col}")
     
     st.write(f"Итоговый столбец даты: {date_col}")
     st.write(f"Итоговый столбец суммы: {amount_col}")
