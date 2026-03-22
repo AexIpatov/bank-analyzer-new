@@ -3,11 +3,12 @@ import re
 from .base_parser import BaseParser
 
 class PayseraPropertyParser(BaseParser):
-    """Парсер для Paysera-BS PROPERTY, SIA (Excel/CSV)"""
+    """Парсер для Paysera-BS PROPERTY, SIA.xls (Paysera)"""
     
     def parse(self, file_content, file_name):
         df = self._read_file(file_content, file_name)
         
+        # Ищем строку с заголовками
         header_row = None
         for idx, row in df.iterrows():
             row_text = ' '.join(str(v) for v in row.values if pd.notna(v))
@@ -15,9 +16,11 @@ class PayseraPropertyParser(BaseParser):
                 header_row = idx
                 break
         
-        if header_row is not None:
-            df.columns = df.iloc[header_row]
-            df = df.iloc[header_row + 1:].reset_index(drop=True)
+        if header_row is None:
+            return []
+        
+        df.columns = df.iloc[header_row]
+        df = df.iloc[header_row + 1:].reset_index(drop=True)
         
         transactions = []
         for _, row in df.iterrows():
@@ -25,8 +28,9 @@ class PayseraPropertyParser(BaseParser):
                 continue
             
             date_str = str(row.get('Date and time', ''))
-            date = date_str[:10] if len(date_str) >= 10 else ''
+            date = self._parse_date(date_str)
             
+            # Парсим сумму
             amount_str = str(row.get('Amount and currency', '0'))
             amount = 0
             amount_match = re.search(r'([-]?\d+[.,]?\d*)', amount_str)
@@ -36,10 +40,12 @@ class PayseraPropertyParser(BaseParser):
                 except:
                     amount = 0
             
+            # Определяем знак по Credit/Debit
             cd = str(row.get('Credit/Debit', '')).upper()
             if cd == 'D' and amount > 0:
                 amount = -amount
             
+            # Описание
             description = str(row.get('Purpose of payment', ''))
             if not description or description == 'nan':
                 description = str(row.get('Recipient / Payer', ''))
@@ -52,9 +58,10 @@ class PayseraPropertyParser(BaseParser):
                     'amount': amount,
                     'currency': 'EUR',
                     'account_name': file_name.replace('.xls', '').replace('.xlsx', '').replace('.csv', ''),
-                    'description': description[:200],
+                    'description': description[:300],
                     'article_name': article,
                     'direction': direction,
                     'subdirection': subdirection
                 })
+        
         return transactions
