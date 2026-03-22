@@ -162,17 +162,21 @@ def parse_file(file_content, file_name):
     
     for col in df.columns:
         col_lower = str(col).lower()
+        # Дата
         if 'дата' in col_lower or 'date' in col_lower:
             date_col = col
+        # Сумма (для разных форматов)
         if 'payment amount' in col_lower:
             amount_col = col
         if 'amount' in col_lower and col_lower != 'total amount':
             if amount_col is None:
                 amount_col = col
+        # Дебет/Кредит
         if 'дебет' in col_lower or 'debit' in col_lower:
             debit_col = col
         if 'кредит' in col_lower or 'credit' in col_lower:
             credit_col = col
+        # Доходы/Расходы для Pasha
         if 'mədaxil' in col_lower or 'income' in col_lower:
             income_col = col
         if 'məxaric' in col_lower or 'expense' in col_lower:
@@ -199,10 +203,9 @@ def parse_file(file_content, file_name):
             else:
                 continue
             
-            # Получаем сумму
+            # Получаем сумму (приоритет: amount_col, затем payment amount, затем debit/credit)
             amount = 0
             
-            # Приоритет: amount_col, затем payment amount, затем debit/credit
             if amount_col and pd.notna(row[amount_col]):
                 amount = parse_amount(row[amount_col])
             elif debit_col and pd.notna(row[debit_col]) and row[debit_col] != 0:
@@ -221,12 +224,12 @@ def parse_file(file_content, file_name):
             description = ''
             if 'message to beneficiary and payer' in df.columns and pd.notna(row['message to beneficiary and payer']):
                 description = str(row['message to beneficiary and payer'])
+            elif 'transaction type' in df.columns and pd.notna(row['transaction type']):
+                description = str(row['transaction type'])
             elif 'Description' in df.columns and pd.notna(row['Description']):
                 description = str(row['Description'])
             elif 'Təyinat' in df.columns and pd.notna(row['Təyinat']):
                 description = str(row['Təyinat'])
-            elif 'transaction type' in df.columns and pd.notna(row['transaction type']):
-                description = str(row['transaction type'])
             elif 'Информация о транзакции' in df.columns and pd.notna(row['Информация о транзакции']):
                 description = str(row['Информация о транзакции'])
             elif 'Тип транзакции' in df.columns and pd.notna(row['Тип транзакции']):
