@@ -116,50 +116,67 @@ def parse_file(file_content, file_name):
     for i in range(min(5, len(df))):
         st.write(f"Строка {i}: {df.iloc[i].to_dict()}")
     
+    # Ищем столбцы с датой, дебетом и кредитом
     date_col = None
-    amount_col = None
+    debit_col = None
+    credit_col = None
+    
     for col in df.columns:
         col_lower = str(col).lower()
         if 'дата' in col_lower or 'date' in col_lower:
             date_col = col
-        if 'сумм' in col_lower or 'amount' in col_lower:
-            amount_col = col
+        if 'дебет' in col_lower or 'debit' in col_lower:
+            debit_col = col
+        if 'кредит' in col_lower or 'credit' in col_lower:
+            credit_col = col
     
     st.write(f"Найден столбец даты: {date_col}")
-    st.write(f"Найден столбец суммы: {amount_col}")
+    st.write(f"Найден столбец дебета: {debit_col}")
+    st.write(f"Найден столбец кредита: {credit_col}")
     
     # Если не нашли столбцы, пробуем по индексам
     if date_col is None and len(df.columns) > 0:
         date_col = df.columns[0]
         st.write(f"Используем первый столбец как дату: {date_col}")
-    if amount_col is None and len(df.columns) > 1:
-        amount_col = df.columns[1]
-        st.write(f"Используем второй столбец как сумму: {amount_col}")
     
     transactions = []
     for idx, row in df.iterrows():
         try:
+            # Получаем дату
             if date_col and pd.notna(row[date_col]):
                 date = parse_date(row[date_col])
             else:
                 continue
             
+            # Получаем сумму из дебета или кредита
             amount = 0
-            if amount_col and pd.notna(row[amount_col]):
+            if debit_col and pd.notna(row[debit_col]) and row[debit_col] != 0:
                 try:
-                    amount = float(str(row[amount_col]).replace(',', '.'))
+                    amount = -float(row[debit_col])
+                except:
+                    amount = 0
+            elif credit_col and pd.notna(row[credit_col]) and row[credit_col] != 0:
+                try:
+                    amount = float(row[credit_col])
                 except:
                     amount = 0
             
             if amount == 0:
                 continue
             
+            # Описание
             description = ''
-            for col in df.columns:
-                if col not in [date_col, amount_col]:
-                    val = str(row[col]) if pd.notna(row[col]) else ''
-                    if val and val != 'nan':
-                        description += val + ' '
+            if 'Информация о транзакции' in df.columns and pd.notna(row['Информация о транзакции']):
+                description = str(row['Информация о транзакции'])
+            elif 'Тип транзакции' in df.columns and pd.notna(row['Тип транзакции']):
+                description = str(row['Тип транзакции'])
+            else:
+                # Собираем все значения в строке
+                for col in df.columns:
+                    if col not in [date_col, debit_col, credit_col]:
+                        val = str(row[col]) if pd.notna(row[col]) else ''
+                        if val and val != 'nan':
+                            description += val + ' '
             
             desc_lower = description.lower()
             if 'комиссия' in desc_lower or 'commission' in desc_lower or 'fee' in desc_lower:
@@ -184,6 +201,22 @@ def parse_file(file_content, file_name):
                 article = '1.2.16 Налоги'
                 direction = 'Расходы'
                 subdir = 'Налоги'
+            elif 'latvenergo' in desc_lower:
+                if amount > 0:
+                    amount = -amount
+                article = '1.2.10.5 Электричество'
+                direction = 'Расходы'
+                subdir = 'Электричество'
+            elif 'balta' in desc_lower:
+                if amount > 0:
+                    amount = -amount
+                article = '1.2.8.2 Страхование'
+                direction = 'Расходы'
+                subdir = 'Страхование'
+            elif 'airbnb' in desc_lower or 'booking' in desc_lower:
+                article = '1.1.1.2 Поступления систем бронирования'
+                direction = 'Доходы'
+                subdir = 'Краткосрочная аренда'
             else:
                 if amount > 0:
                     article = '1.1.1.1 Арендная плата'
