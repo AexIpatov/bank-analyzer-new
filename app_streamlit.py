@@ -58,15 +58,27 @@ def read_file(file_content, file_name):
                 raw = f.read()
             result = chardet.detect(raw[:10000])
             encoding = result['encoding'] if result['encoding'] else 'utf-8'
-            for sep in [';', ',']:
+            
+            # Специальная обработка для UniCredit файлов (Garpiz, Koruna)
+            name_lower = file_name.lower()
+            if 'garpiz' in name_lower or 'koruna' in name_lower or 'twohills' in name_lower:
+                # Для UniCredit файлов используем разделитель ';' и пропускаем первые строки
                 try:
-                    df = pd.read_csv(tmp_path, sep=sep, encoding=encoding, on_bad_lines='skip')
-                    if len(df.columns) > 1:
-                        break
+                    df = pd.read_csv(tmp_path, sep=';', encoding=encoding, on_bad_lines='skip', skiprows=1)
+                    if len(df.columns) <= 1:
+                        df = pd.read_csv(tmp_path, sep=';', encoding='latin1', on_bad_lines='skip', skiprows=1)
                 except:
-                    continue
-            if len(df.columns) <= 1:
-                df = pd.read_csv(tmp_path, sep=';', encoding='latin1', on_bad_lines='skip')
+                    df = pd.read_csv(tmp_path, sep=';', encoding='latin1', on_bad_lines='skip', skiprows=1)
+            else:
+                for sep in [';', ',']:
+                    try:
+                        df = pd.read_csv(tmp_path, sep=sep, encoding=encoding, on_bad_lines='skip')
+                        if len(df.columns) > 1:
+                            break
+                    except:
+                        continue
+                if len(df.columns) <= 1:
+                    df = pd.read_csv(tmp_path, sep=';', encoding='latin1', on_bad_lines='skip')
     except Exception as e:
         os.unlink(tmp_path)
         raise e
@@ -108,13 +120,11 @@ def parse_amount(amount_str):
 
 def find_header_row(df, file_name):
     """Ищет строку с заголовками данных"""
-    name_lower = file_name.lower()
-    
-    # Специальные ключевые слова для разных банков
     header_keywords = [
         'Дата транзакции', 'Date', 'Datum', 'Booking Date', 'Value Date',
         'From Account', 'Amount', 'Transaction Details', 'Əməliyyat tarixi',
-        'account number', 'posting date', 'payment amount', 'Type', 'Date and time'
+        'account number', 'posting date', 'payment amount', 'Type', 'Date and time',
+        'Account Title', 'From Account', 'Amount'
     ]
     
     for idx, row in df.iterrows():
@@ -137,7 +147,7 @@ def parse_file(file_content, file_name):
     # Специальная обработка для UniCredit файлов (Garpiz, Koruna, TwoHills)
     name_lower = file_name.lower()
     if 'garpiz' in name_lower or 'koruna' in name_lower or 'twohills' in name_lower:
-        # Ищем строку с заголовками "From Account"
+        # Для UniCredit файлов данные начинаются после строки с "From Account"
         header_row = None
         for idx, row in df.iterrows():
             row_text = ' '.join(str(v) for v in row.values if pd.notna(v))
@@ -151,11 +161,25 @@ def parse_file(file_content, file_name):
             df = df.iloc[header_row + 1:].reset_index(drop=True)
             st.write(f"Столбцы после переопределения: {list(df.columns)}")
             st.write(f"Количество строк после: {len(df)}")
+        else:
+            # Если не нашли "From Account", пробуем найти другие заголовки
+            for idx, row in df.iterrows():
+                row_text = ' '.join(str(v) for v in row.values if pd.notna(v))
+                if 'Booking Date' in row_text or 'Amount' in row_text:
+                    header_row = idx
+                    st.write(f"Найдены альтернативные заголовки на индексе {idx}")
+                    break
+            
+            if header_row is not None:
+                df.columns = df.iloc[header_row]
+                df = df.iloc[header_row + 1:].reset_index(drop=True)
+                st.write(f"Столбцы после переопределения: {list(df.columns)}")
+                st.write(f"Количество строк после: {len(df)}")
     
     # Общий поиск заголовков (если ещё не нашли)
-    if len(df.columns) <= 5 or 'From Account' not in str(df.columns):
+    if len(df.columns) <= 5 or len(df) > 0:
         header_row = find_header_row(df, file_name)
-        if header_row is not None:
+        if header_row is not None and header_row > 0:
             df.columns = df.iloc[header_row]
             df = df.iloc[header_row + 1:].reset_index(drop=True)
             st.write(f"Найдены общие заголовки на строке {header_row}")
@@ -176,7 +200,7 @@ def parse_file(file_content, file_name):
     expense_col = None
     
     # Приоритетные названия для даты
-    date_priority = ['posting date', 'booking date', 'booking date', 'date', 'дата транзакции', 'value date', 'Date and time']
+    date_priority = ['booking date', 'posting date', 'value date', 'date', 'дата транзакции', 'Date and time']
     for col in df.columns:
         col_lower = str(col).lower()
         for priority in date_priority:
@@ -188,7 +212,7 @@ def parse_file(file_content, file_name):
             break
     
     # Приоритетные названия для суммы
-    amount_priority = ['payment amount', 'amount', 'сумма', 'məxaric', 'mədaxil', 'debit', 'credit', 'Amount and currency']
+    amount_priority = ['amount', 'payment amount', 'сумма', 'məxaric', 'mədaxil', 'debit', 'credit', 'Amount and currency']
     for col in df.columns:
         col_lower = str(col).lower()
         for priority in amount_priority:
