@@ -446,8 +446,7 @@ def parse_file(file_content, file_name):
         return transactions
     
     # ==================== СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ BUDAPEST ====================
-        # ==================== СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ BUDAPEST ====================
-   if 'budapest' in file_lower:
+    if 'budapest' in file_lower:
         st.write(f"=== Специальная обработка BUDAPEST: {file_name} ===")
         
         # Показываем первые 10 строк для отладки
