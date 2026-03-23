@@ -125,101 +125,136 @@ def get_article(description, amount):
     """Определение статьи на основе описания и суммы"""
     desc_lower = description.lower()
     
-    # Банковские комиссии
-    if any(kw in desc_lower for kw in ['комиссия', 'commission', 'fee', 'charge', 'maintenance', 'rko', 'subscription', 'atm withdrawal', 'foreign exchange']):
-        if amount > 0:
-            amount = -amount
-        return '1.2.17 РКО', 'Расходы', 'Банковские комиссии', amount
-    
-    # Арендная плата (доходы)
-    if any(kw in desc_lower for kw in ['арендн', 'rent', 'money added', 'from', 'ire', 'dzivoklis']):
-        return '1.1.1.3 Арендная плата (счёт)', 'Доходы', 'Арендная плата', amount
-    
-    # Компенсация коммунальных расходов
-    if any(kw in desc_lower for kw in ['компенсац', 'utilities', 'komunālie']):
-        return '1.1.2.3 Компенсация по коммунальным расходам', 'Доходы', 'Компенсация коммунальных', amount
-    
-    # Зарплата
-    if any(kw in desc_lower for kw in ['зарплат', 'salary', 'darba alga', 'algas izmaksa']):
-        if amount > 0:
-            amount = -amount
-        return '1.2.15.1 Зарплата', 'Расходы', 'Зарплата', amount
-    
-    # Налоги
-    if any(kw in desc_lower for kw in ['налог', 'vid', 'budžets', 'nodokļu']):
-        if amount > 0:
-            amount = -amount
-        return '1.2.16 Налоги', 'Расходы', 'Налоги', amount
-    
-    # Электричество
-    if any(kw in desc_lower for kw in ['latvenergo', 'elektri', 'электричеств']):
-        if amount > 0:
-            amount = -amount
-        return '1.2.10.5 Электричество', 'Расходы', 'Электричество', amount
-    
-    # Вода
-    if any(kw in desc_lower for kw in ['rigas udens', 'ūdens', 'вода']):
-        if amount > 0:
-            amount = -amount
-        return '1.2.10.3 Вода', 'Расходы', 'Вода', amount
-    
-    # Газ
-    if any(kw in desc_lower for kw in ['gāze', 'газ']):
-        if amount > 0:
-            amount = -amount
-        return '1.2.10.2 Газ', 'Расходы', 'Газ', amount
-    
-    # Мусор
-    if any(kw in desc_lower for kw in ['atkritumi', 'мусор', 'eco baltia']):
-        if amount > 0:
-            amount = -amount
-        return '1.2.10.1 Мусор', 'Расходы', 'Вывоз мусора', amount
-    
-    # Страхование
-    if any(kw in desc_lower for kw in ['balta', 'страхование']):
-        if amount > 0:
-            amount = -amount
-        return '1.2.8.2 Страхование', 'Расходы', 'Страхование', amount
-    
-    # Краткосрочная аренда (Airbnb, Booking)
-    if any(kw in desc_lower for kw in ['airbnb', 'booking']):
-        return '1.1.1.2 Поступления систем бронирования (Airbnb, Booking и пр.)', 'Доходы', 'Краткосрочная аренда', amount
-    
-    # Связь и интернет
-    if any(kw in desc_lower for kw in ['tele2', 'bite', 'tet', 'internet', 'связь']):
-        if amount > 0:
-            amount = -amount
-        return '1.2.9.1 Связь, интернет, TV', 'Расходы', 'Связь и интернет', amount
-    
-    # IT сервисы
-    if any(kw in desc_lower for kw in ['asana', 'albato', 'slack']):
-        if amount > 0:
-            amount = -amount
-        return '1.2.9.3 IT сервисы', 'Расходы', 'IT сервисы', amount
-    
-    # Реклама и маркетинг
-    if any(kw in desc_lower for kw in ['facebook', 'facbk', 'tiktok', 'ads', 'marketing', 'реклам']):
-        if amount > 0:
-            amount = -amount
-        return '1.2.3 Оплата рекламных систем (бюджет)', 'Расходы', 'Маркетинг', amount
-    
-    # Командировочные расходы
-    if any(kw in desc_lower for kw in ['careem', 'flydubai', 'taxi', 'командир']):
-        if amount > 0:
-            amount = -amount
-        return '1.2.2 Командировочные расходы', 'Расходы', 'Командировки', amount
-    
-    # Обслуживание объектов
-    if any(kw in desc_lower for kw in ['apmaksa par rēķinu', 'обслуживание', 'ремонт']):
-        if amount > 0:
-            amount = -amount
-        return '1.2.8.1 Обслуживание объектов', 'Расходы', 'Обслуживание', amount
-    
-    # По умолчанию
+    # ========== ДОХОДЫ (положительные суммы) ==========
     if amount > 0:
+        # 1.1.1.2 Поступления систем бронирования (Airbnb, Booking)
+        if any(kw in desc_lower for kw in ['airbnb', 'booking.com', 'booking b.v.', 'booking.com b.v.']):
+            return '1.1.1.2 Поступления систем бронирования (Airbnb, Booking и пр.)', 'Доходы', 'Краткосрочная аренда', amount
+        
+        # 1.1.1.3 Арендная плата (счёт)
+        if any(kw in desc_lower for kw in ['арендн', 'rent', 'money added', 'ire', 'dzivoklis', 'apmaksa par dzivokli', 'ires maksa', 'rekina numurs', 'rekins nr', 'par dzivokli', 'komunaliem pakalpojumiem']):
+            return '1.1.1.3 Арендная плата (счёт)', 'Доходы', 'Арендная плата', amount
+        
+        # 1.1.1.1 Арендная плата (наличные)
+        if any(kw in desc_lower for kw in ['наличные', 'cash', 'rent for january']):
+            return '1.1.1.1 Арендная плата (наличные)', 'Доходы', 'Арендная плата наличные', amount
+        
+        # 1.1.1.4 Получение гарантийного депозита
+        if any(kw in desc_lower for kw in ['depozits', 'депозит', 'deposit', 'garantijas depozits']):
+            return '1.1.1.4 Получение гарантийного депозита', 'Доходы', 'Гарантийный депозит', amount
+        
+        # 1.1.2.3 Компенсация по коммунальным расходам
+        if any(kw in desc_lower for kw in ['komunālie', 'utilities', 'компенсац', 'возмещени', 'komunaliem pakalpojumiem']):
+            return '1.1.2.3 Компенсация по коммунальным расходам', 'Доходы', 'Компенсация коммунальных', amount
+        
+        # 1.1.4.1 Комиссия за продажу недвижимости (Nomiqa, Bunda)
+        if any(kw in desc_lower for kw in ['commission', 'agency commissions', 'marketing and advertisement', 'consultancy fees', 'комиссия за продажу', 'incoming swift payment']):
+            return '1.1.4.1 Комиссия за продажу недвижимости', 'Доходы', 'Комиссия за продажу', amount
+        
+        # 1.1.2.4 Прочие мелкие поступления (кэшбэк, возвраты)
+        if any(kw in desc_lower for kw in ['кэшбэк', 'cashback', 'refund', 'возврат', 'прочие']):
+            return '1.1.2.4 Прочие мелкие поступления', 'Доходы', 'Прочие доходы', amount
+        
+        # 3.1.3 Получение внутригруппового займа
+        if any(kw in desc_lower for kw in ['loan', 'займ', 'baltic solutions', 'payment acc loan agreement']):
+            return '3.1.3 Получение внутригруппового займа', 'Доходы', 'Внутригрупповой займ', amount
+        
+        # 3.1.4 Возврат выданного внутригруппового займа
+        if any(kw in desc_lower for kw in ['loan return', 'возврат займа']):
+            return '3.1.4 Возврат выданного внутригруппового займа', 'Доходы', 'Возврат займа', amount
+        
+        # 3.1.1 Ввод средств
+        if any(kw in desc_lower for kw in ['transfer to own account', 'между своими счетами']):
+            return '3.1.1 Ввод средств', 'Доходы', 'Ввод средств', amount
+        
+        # По умолчанию для доходов
         return '1.1.1.3 Арендная плата (счёт)', 'Доходы', 'Арендная плата', amount
+    
+    # ========== РАСХОДЫ (отрицательные суммы) ==========
     else:
-        return '1.2.8.1 Обслуживание объектов', 'Расходы', 'Обслуживание', amount
+        # 1.2.17 РКО — банковские комиссии
+        if any(kw in desc_lower for kw in ['комиссия', 'commission', 'fee', 'charge', 'maintenance', 'rko', 'subscription', 'atm withdrawal', 'foreign exchange', 'плата за обслуживание', 'service package', 'számlakivonat díja', 'netbankár monthly fee']):
+            return '1.2.17 РКО', 'Расходы', 'Банковские комиссии', amount
+        
+        # 1.2.15.1 Зарплата
+        if any(kw in desc_lower for kw in ['зарплат', 'salary', 'darba alga', 'algas izmaksa', 'darba algas izmaksa']):
+            return '1.2.15.1 Зарплата', 'Расходы', 'Зарплата', amount
+        
+        # 1.2.15.2 Налоги на ФОТ
+        if any(kw in desc_lower for kw in ['nodokļu nomaksa', 'vid', 'budžets', 'налог', 'valsts budžets']):
+            return '1.2.15.2 Налоги на ФОТ', 'Расходы', 'Налоги на ФОТ', amount
+        
+        # 1.2.16.3 НДС
+        if any(kw in desc_lower for kw in ['value added tax', 'vat', 'ндс', 'pvn']):
+            return '1.2.16.3 НДС', 'Расходы', 'НДС', amount
+        
+        # 1.2.10.5 Электричество
+        if any(kw in desc_lower for kw in ['latvenergo', 'elektri', 'электричеств', 'electricity']):
+            return '1.2.10.5 Электричество', 'Расходы', 'Электричество', amount
+        
+        # 1.2.10.2 Газ
+        if any(kw in desc_lower for kw in ['gāze', 'газ', 'latvenergo']):
+            if 'газ' in desc_lower or 'gāze' in desc_lower:
+                return '1.2.10.2 Газ', 'Расходы', 'Газ', amount
+        
+        # 1.2.10.3 Вода
+        if any(kw in desc_lower for kw in ['rigas udens', 'ūdens', 'вода']):
+            return '1.2.10.3 Вода', 'Расходы', 'Вода', amount
+        
+        # 1.2.10.1 Мусор
+        if any(kw in desc_lower for kw in ['atkritumi', 'мусор', 'eco baltia', 'clean r']):
+            return '1.2.10.1 Мусор', 'Расходы', 'Вывоз мусора', amount
+        
+        # 1.2.10.6 Коммунальные УК дома
+        if any(kw in desc_lower for kw in ['rigas namu pārvaldnieks', 'latvijas namsaimnieks', 'biedrība', 'dzīvokļu īpašnieku']):
+            return '1.2.10.6 Коммунальные УК дома', 'Расходы', 'Управляющая компания', amount
+        
+        # 1.2.9.1 Связь, интернет, TV
+        if any(kw in desc_lower for kw in ['tele2', 'bite', 'tet', 'internet', 'связь', 'telenet']):
+            return '1.2.9.1 Связь, интернет, TV', 'Расходы', 'Связь и интернет', amount
+        
+        # 1.2.9.3 IT сервисы
+        if any(kw in desc_lower for kw in ['asana', 'albato', 'slack', 'google one', 'lovable', 'openai', 'chatgpt', 'browsec', 'it сервисы']):
+            return '1.2.9.3 IT сервисы', 'Расходы', 'IT сервисы', amount
+        
+        # 1.2.3 Оплата рекламных систем (бюджет)
+        if any(kw in desc_lower for kw in ['facebook', 'facbk', 'tiktok', 'ads', 'marketing', 'реклам', 'airbnb', 'meta']):
+            return '1.2.3 Оплата рекламных систем (бюджет)', 'Расходы', 'Маркетинг', amount
+        
+        # 1.2.2 Командировочные расходы
+        if any(kw in desc_lower for kw in ['careem', 'flydubai', 'taxi', 'командир', 'flixbus', 'bolt', 'uber', 'inflight internet']):
+            return '1.2.2 Командировочные расходы', 'Расходы', 'Командировки', amount
+        
+        # 1.2.8.1 Обслуживание объектов (бытовые вопросы, без ремонта)
+        if any(kw in desc_lower for kw in ['apmaksa par rēķinu', 'обслуживание', 'ремонт', 'lifti', 'taipans', 'sidorans', 'komval']):
+            return '1.2.8.1 Обслуживание объектов', 'Расходы', 'Обслуживание объектов', amount
+        
+        # 1.2.8.2 Страхование
+        if any(kw in desc_lower for kw in ['balta', 'страхование', 'insurance']):
+            return '1.2.8.2 Страхование', 'Расходы', 'Страхование', amount
+        
+        # 1.2.21.1 Аренда офиса
+        if any(kw in desc_lower for kw in ['аренда офиса', 'office rent']):
+            return '1.2.21.1 Аренда офиса', 'Расходы', 'Аренда офиса', amount
+        
+        # 1.2.12 Бухгалтер
+        if any(kw in desc_lower for kw in ['lubova loseva', 'loseva', 'бухгалтер']):
+            return '1.2.12 Бухгалтер', 'Расходы', 'Бухгалтерские услуги', amount
+        
+        # 1.2.37 Возврат гарантийных депозитов
+        if any(kw in desc_lower for kw in ['deposit return', 'depozīta atgriešana', 'возврат депозита']):
+            return '1.2.37 Возврат гарантийных депозитов', 'Расходы', 'Возврат депозита', amount
+        
+        # 2.2.7 Расходы по приобретению недвижимости
+        if any(kw in desc_lower for kw in ['pirkuma liguma', 'приобретение недвижимости']):
+            return '2.2.7 Расходы по приобретению недвижимости', 'Расходы', 'Покупка недвижимости', amount
+        
+        # 4.1 Перевод между счетами
+        if any(kw in desc_lower for kw in ['currency exchange', 'конвертация', 'transfer to own account', 'между своими счетами', 'internal payment']):
+            return 'Перевод между счетами', 'Расходы', 'Внутренний перевод', amount
+        
+        # По умолчанию для расходов
+        return '1.2.8.1 Обслуживание объектов', 'Расходы', 'Обслуживание объектов', amount
 
 def find_header_row(df, file_name):
     """Ищет строку с заголовками данных"""
