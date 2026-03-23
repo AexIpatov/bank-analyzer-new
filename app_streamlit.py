@@ -446,16 +446,35 @@ def parse_file(file_content, file_name):
         return transactions
     
     # ==================== СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ BUDAPEST ====================
+        # ==================== СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ BUDAPEST ====================
     if 'budapest' in file_lower:
         st.write(f"=== Специальная обработка BUDAPEST: {file_name} ===")
         
+        # Показываем первые 10 строк для отладки
+        st.write("Первые 10 строк файла:")
+        for i in range(min(10, len(df))):
+            row_values = list(df.iloc[i].values)
+            st.write(f"Строка {i}: {row_values[:15] if len(row_values) > 15 else row_values}")
+        
+        # Ищем строку с заголовками Serial number, Value date, Amount
         header_row = None
-        for idx in range(min(30, len(df))):
+        for idx in range(min(50, len(df))):
             row_values = list(df.iloc[idx].values)
-            row_text = ' '.join(str(v) for v in row_values if pd.notna(v))
+            row_text = ' '.join(str(v) for v in row_values if pd.notna(v) and str(v).strip())
             if 'Serial number' in row_text and 'Value date' in row_text and 'Amount' in row_text:
                 header_row = idx
+                st.write(f"Найдена строка заголовков на индексе {idx}")
                 break
+        
+        # Если не нашли по точному совпадению, ищем по частичным
+        if header_row is None:
+            for idx in range(min(50, len(df))):
+                row_values = list(df.iloc[idx].values)
+                row_text = ' '.join(str(v) for v in row_values if pd.notna(v) and str(v).strip())
+                if 'Value date' in row_text and 'Amount' in row_text:
+                    header_row = idx
+                    st.write(f"Найдена строка заголовков (частично) на индексе {idx}")
+                    break
         
         if header_row is not None:
             headers = list(df.iloc[header_row].values)
@@ -466,18 +485,34 @@ def parse_file(file_content, file_name):
                 else:
                     clean_headers.append(f'col_{len(clean_headers)}')
             
+            # Убираем дубликаты заголовков
+            seen = {}
+            unique_headers = []
+            for h in clean_headers:
+                if h in seen:
+                    seen[h] += 1
+                    unique_headers.append(f"{h}_{seen[h]}")
+                else:
+                    seen[h] = 0
+                    unique_headers.append(h)
+            
             data_rows = []
             for idx in range(header_row + 1, len(df)):
                 row = list(df.iloc[idx].values)
-                if len(row) < len(clean_headers):
-                    row.extend([''] * (len(clean_headers) - len(row)))
-                data_rows.append(row[:len(clean_headers)])
+                if len(row) < len(unique_headers):
+                    row.extend([''] * (len(unique_headers) - len(row)))
+                data_rows.append(row[:len(unique_headers)])
             
-            df = pd.DataFrame(data_rows, columns=clean_headers)
+            df = pd.DataFrame(data_rows, columns=unique_headers)
+            st.write(f"Создан DataFrame с колонками: {list(df.columns)}")
+        else:
+            st.warning("Не найдена строка с заголовками, пробуем использовать данные как есть")
         
+        # Ищем столбцы с датой и суммой
         date_col = None
         amount_col = None
         
+        # Сначала ищем по названиям колонок
         for col in df.columns:
             col_lower = str(col).lower()
             if 'value date' in col_lower:
@@ -485,12 +520,44 @@ def parse_file(file_content, file_name):
             if 'amount' in col_lower:
                 amount_col = col
         
+        # Если не нашли по названиям, пробуем по позициям (на основе структуры MKB файла)
         if date_col is None and len(df.columns) > 1:
             date_col = df.columns[1]
-        if amount_col is None and len(df.columns) > 8:
+            st.write(f"Используем колонку 1 как дату: {date_col}")
+        
+        if amount_col is None:
+            # Пробуем найти колонку, которая содержит числа (суммы)
+            for col_idx, col in enumerate(df.columns):
+                # Проверяем несколько строк на наличие чисел
+                numeric_count = 0
+                for row_idx in range(min(5, len(df))):
+                    val = df.iloc[row_idx][col]
+                    if pd.notna(val) and str(val).strip():
+                        try:
+                            float(str(val).replace(',', '.').replace(' ', ''))
+                            numeric_count += 1
+                        except:
+                            pass
+                if numeric_count >= 2:
+                    amount_col = col
+                    st.write(f"Найдена колонка с числами для суммы: {col} (индекс {col_idx})")
+                    break
+        
+        # Если все еще не нашли, используем колонку 9 (10-я колонка)
+        if amount_col is None and len(df.columns) > 9:
             amount_col = df.columns[9]
+            st.write(f"Используем колонку 9 как сумму: {amount_col}")
+        elif amount_col is None and len(df.columns) > 8:
+            amount_col = df.columns[8]
+            st.write(f"Используем колонку 8 как сумму: {amount_col}")
+        
+        st.write(f"Итоговый столбец даты: {date_col}")
+        st.write(f"Итоговый столбец суммы: {amount_col}")
         
         transactions = []
+        skipped_no_date = 0
+        skipped_no_amount = 0
+        
         for idx in range(len(df)):
             try:
                 row = df.iloc[idx]
@@ -502,6 +569,7 @@ def parse_file(file_content, file_name):
                         date = parse_date(date_val)
                 
                 if not date:
+                    skipped_no_date += 1
                     continue
                 
                 amount = 0
@@ -511,6 +579,12 @@ def parse_file(file_content, file_name):
                         amount = parse_amount(amount_val)
                 
                 if amount == 0:
+                    skipped_no_amount += 1
+                    continue
+                
+                # Пропускаем слишком большие суммы (ошибки парсинга)
+                if abs(amount) > 1000000:
+                    st.write(f"⚠️ Пропущена подозрительная сумма: {amount} в строке {idx}")
                     continue
                 
                 description = ''
@@ -525,7 +599,7 @@ def parse_file(file_content, file_name):
                 if article is None:
                     continue
                 
-                account_name = file_name.replace('.xls', '').replace('.xlsx', '')
+                account_name = file_name.replace('.xls', '').replace('.xlsx', '').replace('.xlsm', '')
                 currency = 'HUF' if 'HUF' in file_lower else 'EUR'
                 
                 transactions.append({
@@ -538,8 +612,14 @@ def parse_file(file_content, file_name):
                     'direction': direction,
                     'subdirection': subdir
                 })
+                st.write(f"✅ Транзакция Budapest: {date} | {amount} {currency} | {description[:50]}")
             except Exception as e:
+                st.write(f"❌ Ошибка в строке {idx}: {e}")
                 continue
+        
+        st.write(f"=== ИТОГО BUDAPEST транзакций: {len(transactions)} ===")
+        st.write(f"=== Пропущено (нет даты): {skipped_no_date} ===")
+        st.write(f"=== Пропущено (нет суммы): {skipped_no_amount} ===")
         
         return transactions
     
