@@ -687,4 +687,53 @@ with tab1:
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
                         df.to_excel(writer, index=False, sheet_name='Транзакции')
                     output.seek(0)
-                    st.download_button("📥 Скачать Excel", data=output, file_name=f"анализ_{uploaded_file
+                    st.download_button("📥 Скачать Excel", data=output, file_name=f"анализ_{uploaded_file.name}.xlsx")
+                else:
+                    st.warning("⚠️ Не найдено транзакций")
+
+with tab2:
+    st.markdown("### Загрузите несколько файлов")
+    uploaded_files = st.file_uploader("Выберите файлы", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key="multiple")
+    if uploaded_files:
+        st.info(f"📄 Выбрано файлов: {len(uploaded_files)}")
+        if st.button("🚀 Запустить анализ всех", key="multi_btn"):
+            all_transactions = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            for i, f in enumerate(uploaded_files):
+                status_text.text(f"🔄 Обработка: {f.name}")
+                content = f.read()
+                trans = parse_file(content, f.name)
+                for t in trans:
+                    t['source_file'] = f.name
+                    all_transactions.append(t)
+                progress_bar.progress((i + 1) / len(uploaded_files))
+            status_text.text("✅ Обработка завершена!")
+            if all_transactions:
+                df = pd.DataFrame([{
+                    'Дата': t['date'],
+                    'Сумма': t['amount'],
+                    'Валюта': t['currency'],
+                    'Счет': t['account_name'],
+                    'Исходный файл': t.get('source_file', ''),
+                    'Статья': t['article_name'],
+                    'Направление': t['direction'],
+                    'Субнаправление': t['subdirection'],
+                    'Описание': t['description'][:100]
+                } for t in all_transactions])
+                st.markdown("---")
+                col_a, col_b, col_c = st.columns(3)
+                with col_a:
+                    st.metric("📊 Всего операций", len(all_transactions))
+                with col_b:
+                    доход = df[df['Сумма'] > 0]['Сумма'].sum() if len(df[df['Сумма'] > 0]) > 0 else 0
+                    st.metric("📈 Доходы", f"{доход:,.2f}")
+                with col_c:
+                    расход = abs(df[df['Сумма'] < 0]['Сумма'].sum()) if len(df[df['Сумма'] < 0]) > 0 else 0
+                    st.metric("📉 Расходы", f"{расход:,.2f}")
+                st.dataframe(df, use_container_width=True)
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False, sheet_name='Все транзакции')
+                output.seek(0)
+                st.download_button("📥 Скачать сводный Excel", data=output, file_name=f"сводка.xlsx")
