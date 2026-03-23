@@ -347,6 +347,7 @@ def parse_file(file_content, file_name):
         st.write(f"Столбец типа: {type_col}")
         
         transactions = []
+        skipped_count = 0
         for idx in range(len(df)):
             try:
                 row = df.iloc[idx]
@@ -358,6 +359,7 @@ def parse_file(file_content, file_name):
                         date = parse_date(date_val)
                 
                 if not date:
+                    skipped_count += 1
                     continue
                 
                 # Ищем сумму во всех возможных колонках
@@ -386,6 +388,7 @@ def parse_file(file_content, file_name):
                                     break
                 
                 if amount == 0:
+                    skipped_count += 1
                     continue
                 
                 st.write(f"Сумма {amount} найдена в колонке: {amount_source}")
@@ -439,6 +442,7 @@ def parse_file(file_content, file_name):
                 continue
         
         st.write(f"=== ИТОГО REVOLUT транзакций: {len(transactions)} ===")
+        st.write(f"=== Пропущено строк: {skipped_count} ===")
         return transactions
     
     # ==================== СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ BUDAPEST ====================
@@ -910,7 +914,11 @@ with tab1:
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
                         df.to_excel(writer, index=False, sheet_name='Транзакции')
                     output.seek(0)
-                    st.download_button("📥 Скачать Excel", data=output, file_name=f"анализ_{uploaded_file.name}.xlsx")
+                    st.download_button(
+                        "📥 Скачать Excel", 
+                        data=output, 
+                        file_name=f"анализ_{uploaded_file.name}.xlsx"
+                    )
                 else:
                     st.warning("⚠️ Не найдено транзакций")
 
@@ -959,4 +967,8 @@ with tab2:
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df.to_excel(writer, index=False, sheet_name='Все транзакции')
                 output.seek(0)
-                st.download_button("📥 Скачать сводный Excel", data=output, file_name=f"сводка.xlsx")
+                st.download_button(
+                    "📥 Скачать сводный Excel", 
+                    data=output, 
+                    file_name="сводка.xlsx"
+                )
