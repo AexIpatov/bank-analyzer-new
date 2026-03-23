@@ -143,8 +143,12 @@ def get_article(description, amount, transaction_type=None):
     
     # ========== РАСХОДЫ (отрицательные суммы) ==========
     if amount < 0:
+        # 1.2.21.2 Административные офисные расходы (для Budapest Service package)
+        if any(kw in desc_lower for kw in ['service package monthly fee', 'számlakivonat díja', 'netbankár monthly fee']):
+            return '1.2.21.2 Административные офисные расходы', 'Расходы', 'Офисные расходы', amount
+        
         # 1.2.17 РКО — банковские комиссии
-        if any(kw in desc_lower for kw in ['комиссия', 'commission', 'fee', 'charge', 'maintenance', 'rko', 'subscription', 'atm withdrawal', 'foreign exchange', 'плата за обслуживание', 'service package', 'számlakivonat díja', 'netbankár monthly fee', 'charge for', 'conversion fee']):
+        if any(kw in desc_lower for kw in ['комиссия', 'commission', 'fee', 'charge', 'maintenance', 'rko', 'subscription', 'atm withdrawal', 'foreign exchange', 'плата за обслуживание', 'charge for', 'conversion fee']):
             return '1.2.17 РКО', 'Расходы', 'Банковские комиссии', amount
         
         # 1.2.15.1 Зарплата
@@ -277,7 +281,7 @@ def get_article(description, amount, transaction_type=None):
             return '1.1.2.4 Прочие мелкие поступления', 'Доходы', 'Прочие доходы', amount
         
         # 1.1.1.3 Арендная плата (счёт)
-        if any(kw in desc_lower for kw in ['арендн', 'rent', 'money added', 'ire', 'dzivoklis', 'apmaksa par dzivokli', 'ires maksa', 'rekina numurs', 'rekins nr', 'from']):
+        if any(kw in desc_lower for kw in ['арендн', 'rent', 'money added', 'ire', 'dzivoklis', 'apmaksa par dzivokli', 'ires maksa', 'rekina numurs', 'rekins nr', 'from', 'credit of sepa']):
             return '1.1.1.3 Арендная плата (счёт)', 'Доходы', 'Арендная плата', amount
         
         # По умолчанию для доходов
@@ -286,6 +290,10 @@ def get_article(description, amount, transaction_type=None):
 def get_direction_and_subdirection(description):
     """Определяет направление и субнаправление на основе описания"""
     desc_lower = description.lower()
+    
+    # ==================== BUDAPEST (приоритетная проверка) ====================
+    if any(kw in desc_lower for kw in ['budapest', 'yulia galvin', 'service package monthly fee', 'számlakivonat díja', 'netbankár monthly fee']):
+        return 'Europe', 'F6 Помещение в доме Будапешт'
     
     # ==================== LATVIA ====================
     # Антониас 14
@@ -301,7 +309,7 @@ def get_direction_and_subdirection(description):
         return 'Latvia', 'M81 - Matisa 81'
     
     # Бривибас 117
-    if any(kw in desc_lower for kw in ['brīvības 117', 'b117', 'brivibas 117', 'briVības iela 117']):
+    if any(kw in desc_lower for kw in ['brīvības 117', 'b117', 'brivibas 117']):
         return 'Latvia', 'B117 Бривибас, 117'
     
     # Бривибас 78
@@ -309,31 +317,31 @@ def get_direction_and_subdirection(description):
         return 'Latvia', 'B78 Бривибас, 78'
     
     # Гертрудес 77
-    if any(kw in desc_lower for kw in ['gertrudes', 'g77', 'gertrūdes', 'gertrudes 77']):
+    if any(kw in desc_lower for kw in ['gertrudes', 'g77', 'gertrūdes']):
         return 'Latvia', 'G77 Гертрудес, 77'
     
     # Валдемара 22
-    if any(kw in desc_lower for kw in ['valdemara', 'v22', 'valdemāra', 'valdemara 22']):
+    if any(kw in desc_lower for kw in ['valdemara', 'v22', 'valdemāra']):
         return 'Latvia', 'V22 К. Валдемара 22'
     
     # Муцениеку 3
-    if any(kw in desc_lower for kw in ['mucenieku', 'mu3', 'mucenieku 3']):
+    if any(kw in desc_lower for kw in ['mucenieku', 'mu3']):
         return 'Latvia', 'MU3 - Mucenieku 3 - 4'
     
     # Дзирнаву 1
-    if any(kw in desc_lower for kw in ['dzirnavu', 'ds1', 'dzirnavu iela 1']):
+    if any(kw in desc_lower for kw in ['dzirnavu', 'ds1']):
         return 'Latvia', 'DS1 Дзирнаву, 1'
     
     # Цесу 23
-    if any(kw in desc_lower for kw in ['cesu', 'c23', 'cēsu', 'cesu iela 23']):
+    if any(kw in desc_lower for kw in ['cesu', 'c23', 'cēsu']):
         return 'Latvia', 'C23 Цесу, 23'
     
     # Скунью 3
-    if any(kw in desc_lower for kw in ['skunu', 'sk3', 'skūņu', 'skunu iela 13']):
+    if any(kw in desc_lower for kw in ['skunu', 'sk3', 'skūņu']):
         return 'Latvia', 'SK3-Skunju 3'
     
     # Деглава 4
-    if any(kw in desc_lower for kw in ['deglava', 'd4', 'degļava', 'deglava 4']):
+    if any(kw in desc_lower for kw in ['deglava', 'd4', 'degļava']):
         return 'Latvia', 'D4 Парковка-Deglava4'
     
     # Хоспиталю
@@ -353,10 +361,6 @@ def get_direction_and_subdirection(description):
         return 'Latvia', 'UK_Latvia'
     
     # ==================== EUROPE ====================
-    # Будапешт
-    if any(kw in desc_lower for kw in ['budapest', 'yulia galvin']):
-        return 'Europe', 'F6 Помещение в доме Будапешт'
-    
     # DZIBIK
     if any(kw in desc_lower for kw in ['dzibik', 'bilych nadiia']):
         return 'Europe', 'DZ1_Dzibik1'
@@ -387,16 +391,12 @@ def get_direction_and_subdirection(description):
     
     # ==================== EAST ====================
     if any(kw in desc_lower for kw in ['baku', 'azerbaijan', 'azərbaycan', 'kapital bank', 'pasha bank']):
-        # BIS - Icheri Sheher
         if any(kw in desc_lower for kw in ['icheri sheher', 'bis']):
             return 'East-Восток', 'BIS - Baku, Icheri Sheher 1,2'
-        # UKA аренда офиса
         if any(kw in desc_lower for kw in ['office rent', 'icare od', 'rufet abdullayev']):
             return 'East-Восток', 'UKA - UK_AZ-Аренда'
-        # Aliyarbekova
         if any(kw in desc_lower for kw in ['aliyarbekova']):
             return 'East-Восток', 'AL0 - AL0 Aliyarbekova0etaj'
-        # Общий
         return 'East-Восток', 'UKA - UK_AZ-Аренда'
     
     # ==================== NOMIQA ====================
@@ -566,7 +566,6 @@ def parse_file(file_content, file_name):
                 
                 account_name = file_name.replace('.csv', '').replace('.xlsx', '').replace('.xls', '')
                 
-                # Определяем направление и субнаправление
                 direction_name, subdirection_name = get_direction_and_subdirection(description)
                 
                 transactions.append({
@@ -699,7 +698,6 @@ def parse_file(file_content, file_name):
                 account_name = file_name.replace('.xls', '').replace('.xlsx', '').replace('.xlsm', '')
                 currency = 'HUF' if 'HUF' in file_lower else 'EUR'
                 
-                # Определяем направление и субнаправление
                 direction_name, subdirection_name = get_direction_and_subdirection(description)
                 
                 transactions.append({
