@@ -92,10 +92,8 @@ def parse_date(date_str):
     if pd.isna(date_str):
         return ''
     date_str = str(date_str).strip()
-    # Убираем время
     if ' ' in date_str:
         date_str = date_str.split(' ')[0]
-    # Формат DD.MM.YYYY
     if '.' in date_str:
         parts = date_str.split('.')
         if len(parts) == 3 and len(parts[2]) == 4:
@@ -103,7 +101,6 @@ def parse_date(date_str):
         if len(parts) == 3 and len(parts[2]) == 2:
             year = 2000 + int(parts[2])
             return f"{year}-{parts[1]}-{parts[0]}"
-    # Формат YYYY-MM-DD
     if '-' in date_str and len(date_str) >= 10:
         return date_str[:10]
     return date_str
@@ -115,19 +112,15 @@ def parse_amount(amount_str):
     if amount_str == '' or amount_str == 'nan':
         return 0
     
-    # Если это явно дата — пропускаем
     if re.match(r'^\d{1,2}\.\d{1,2}\.\d{2,4}$', amount_str):
         return 0
     if re.match(r'^\d{4}-\d{2}-\d{2}', amount_str):
         return 0
     
-    # Убираем префикс -+ для Industra
     if amount_str.startswith('-+'):
         amount_str = '-' + amount_str[2:]
     
-    # Убираем валюту и лишние символы
     amount_str = amount_str.replace(',', '.').replace(' ', '')
-    # Убираем знаки + и - в начале, но сохраняем для определения
     has_minus = amount_str.startswith('-')
     amount_str = re.sub(r'[^0-9\.\-]', '', amount_str)
     if amount_str == '' or amount_str == '-':
@@ -141,156 +134,118 @@ def parse_amount(amount_str):
         return 0
 
 def get_article(description, amount, transaction_type=None):
-    """Определение статьи на основе описания и суммы"""
     desc_lower = description.lower()
     
-    # ========== ИСКЛЮЧАЕМ СЛУЖЕБНЫЕ СТРОКИ ==========
     if any(kw in desc_lower for kw in ['dövrün sonuna balans', 'mövcud balans', 'start balance', 'final balance', 'debit turnover', 'credit turnover', 'balance']):
         return None, None, None, None
     
-    # ========== ДОХОДЫ (положительные суммы) ==========
     if amount > 0:
-        # 1.1.1.2 Поступления систем бронирования (Airbnb, Booking)
         if any(kw in desc_lower for kw in ['airbnb', 'booking.com', 'booking b.v.']):
             return '1.1.1.2 Поступления систем бронирования (Airbnb, Booking и пр.)', 'Доходы', 'Краткосрочная аренда', amount
         
-        # 1.1.1.4 Получение гарантийного депозита
         if any(kw in desc_lower for kw in ['depozits', 'депозит', 'deposit', 'garantijas depozits']):
             return '1.1.1.4 Получение гарантийного депозита', 'Доходы', 'Гарантийный депозит', amount
         
-        # 1.1.4.1 Комиссия за продажу недвижимости
         if any(kw in desc_lower for kw in ['commission', 'agency commissions', 'marketing and advertisement', 'consultancy fees', 'incoming swift payment']):
             return '1.1.4.1 Комиссия за продажу недвижимости', 'Доходы', 'Комиссия за продажу', amount
         
-        # 3.1.3 Получение внутригруппового займа
         if any(kw in desc_lower for kw in ['loan', 'займ', 'baltic solutions', 'payment acc loan agreement']):
             return '3.1.3 Получение внутригруппового займа', 'Доходы', 'Внутригрупповой займ', amount
         
-        # 3.1.4 Возврат выданного внутригруппового займа
         if any(kw in desc_lower for kw in ['loan return', 'возврат займа']):
             return '3.1.4 Возврат выданного внутригруппового займа', 'Доходы', 'Возврат займа', amount
         
-        # 3.1.1 Ввод средств
         if any(kw in desc_lower for kw in ['transfer to own account', 'между своими счетами']):
             return '3.1.1 Ввод средств', 'Доходы', 'Ввод средств', amount
         
-        # 1.1.1.1 Арендная плата (наличные)
         if any(kw in desc_lower for kw in ['наличные', 'cash', 'rent for january', 'c89-1(3)-01/26', 'rahul amanpreet singh']):
             return '1.1.1.1 Арендная плата (наличные)', 'Доходы', 'Арендная плата наличные', amount
         
-        # 1.1.2.3 Компенсация по коммунальным расходам
         if any(kw in desc_lower for kw in ['komunālie', 'utilities', 'компенсац', 'возмещени']):
             return '1.1.2.3 Компенсация по коммунальным расходам', 'Доходы', 'Компенсация коммунальных', amount
         
-        # 1.1.2.4 Прочие мелкие поступления (кэшбэк)
         if any(kw in desc_lower for kw in ['кэшбэк', 'cashback', 'u rok do']):
             return '1.1.2.4 Прочие мелкие поступления', 'Доходы', 'Прочие доходы', amount
         
-        # 1.1.1.3 Арендная плата (счёт)
         if any(kw in desc_lower for kw in ['арендн', 'rent', 'money added', 'ire', 'dzivoklis', 'apmaksa par dzivokli', 'ires maksa', 'rekina numurs', 'rekins nr', 'from']):
             return '1.1.1.3 Арендная плата (счёт)', 'Доходы', 'Арендная плата', amount
         
-        # По умолчанию для доходов
         return '1.1.1.3 Арендная плата (счёт)', 'Доходы', 'Арендная плата', amount
     
-    # ========== РАСХОДЫ (отрицательные суммы) ==========
     else:
-        # 1.2.17 РКО — банковские комиссии
         if any(kw in desc_lower for kw in ['комиссия', 'commission', 'fee', 'charge', 'maintenance', 'rko', 'subscription', 'atm withdrawal', 'foreign exchange', 'плата за обслуживание', 'service package', 'számlakivonat díja', 'netbankár monthly fee', 'charge for', 'conversion fee']):
             return '1.2.17 РКО', 'Расходы', 'Банковские комиссии', amount
         
-        # 1.2.15.1 Зарплата
         if any(kw in desc_lower for kw in ['зарплат', 'salary', 'darba alga', 'algas izmaksa', 'darba algas izmaksa']):
             return '1.2.15.1 Зарплата', 'Расходы', 'Зарплата', amount
         
-        # 1.2.15.2 Налоги на ФОТ
         if any(kw in desc_lower for kw in ['nodokļu nomaksa', 'vid', 'budžets', 'налог']):
             if '1.2.15.2' in desc_lower:
                 return '1.2.15.2 Налоги на ФОТ', 'Расходы', 'Налоги на ФОТ', amount
             if '1.2.16.4' in desc_lower:
                 return '1.2.16.3 НДС', 'Расходы', 'НДС', amount
+            return '1.2.16 Налоги', 'Расходы', 'Налоги', amount
         
-        # 1.2.16.3 НДС
         if any(kw in desc_lower for kw in ['value added tax', 'vat', 'ндс', 'pvn']):
             return '1.2.16.3 НДС', 'Расходы', 'НДС', amount
         
-        # 1.2.16.1 Налог на недвижимость
         if any(kw in desc_lower for kw in ['nekustamā īpašuma nodoklis', 'налог на недвижимость', 'pašvaldība']):
             return '1.2.16.1 Налог на недвижимость', 'Расходы', 'Налог на недвижимость', amount
         
-        # 1.2.10.5 Электричество
         if any(kw in desc_lower for kw in ['latvenergo', 'elektri', 'электричеств', 'electricity']):
             return '1.2.10.5 Электричество', 'Расходы', 'Электричество', amount
         
-        # 1.2.10.2 Газ
         if any(kw in desc_lower for kw in ['gāze', 'газ']):
             return '1.2.10.2 Газ', 'Расходы', 'Газ', amount
         
-        # 1.2.10.3 Вода
         if any(kw in desc_lower for kw in ['rigas udens', 'ūdens', 'вода']):
             return '1.2.10.3 Вода', 'Расходы', 'Вода', amount
         
-        # 1.2.10.1 Мусор
         if any(kw in desc_lower for kw in ['atkritumi', 'мусор', 'eco baltia', 'clean r']):
             return '1.2.10.1 Мусор', 'Расходы', 'Вывоз мусора', amount
         
-        # 1.2.10.6 Коммунальные УК дома
         if any(kw in desc_lower for kw in ['rigas namu pārvaldnieks', 'latvijas namsaimnieks', 'biedrība', 'dzīvokļu īpašnieku']):
             return '1.2.10.6 Коммунальные УК дома', 'Расходы', 'Управляющая компания', amount
         
-        # 1.2.9.1 Связь, интернет, TV
         if any(kw in desc_lower for kw in ['tele2', 'bite', 'tet', 'internet', 'связь', 'telenet']):
             return '1.2.9.1 Связь, интернет, TV', 'Расходы', 'Связь и интернет', amount
         
-        # 1.2.9.3 IT сервисы
         if any(kw in desc_lower for kw in ['asana', 'albato', 'slack', 'google one', 'lovable', 'openai', 'chatgpt', 'browsec', 'it сервисы']):
             return '1.2.9.3 IT сервисы', 'Расходы', 'IT сервисы', amount
         
-        # 1.2.3 Оплата рекламных систем
         if any(kw in desc_lower for kw in ['facebook', 'facbk', 'tiktok', 'ads', 'marketing', 'реклам']):
             return '1.2.3 Оплата рекламных систем (бюджет)', 'Расходы', 'Маркетинг', amount
         
-        # 1.2.2 Командировочные расходы
         if any(kw in desc_lower for kw in ['careem', 'flydubai', 'taxi', 'командир', 'flixbus', 'bolt', 'uber', 'inflight internet', 'flix']):
             return '1.2.2 Командировочные расходы', 'Расходы', 'Командировки', amount
         
-        # 1.2.8.1 Обслуживание объектов
         if any(kw in desc_lower for kw in ['apmaksa par rēķinu', 'обслуживание', 'ремонт', 'lifti', 'taipans', 'sidorans', 'komval', 'rīgas lifti', 'sedlecky kaolin']):
             return '1.2.8.1 Обслуживание объектов', 'Расходы', 'Обслуживание объектов', amount
         
-        # 1.2.8.2 Страхование
         if any(kw in desc_lower for kw in ['balta', 'страхование', 'insurance']):
             return '1.2.8.2 Страхование', 'Расходы', 'Страхование', amount
         
-        # 1.2.21.1 Аренда офиса
         if any(kw in desc_lower for kw in ['аренда офиса', 'office rent', 'icare od']):
             return '1.2.21.1 Аренда офиса', 'Расходы', 'Аренда офиса', amount
         
-        # 1.2.12 Бухгалтер
         if any(kw in desc_lower for kw in ['lubova loseva', 'loseva', 'бухгалтер']):
             return '1.2.12 Бухгалтер', 'Расходы', 'Бухгалтерские услуги', amount
         
-        # 1.2.37 Возврат гарантийных депозитов
         if any(kw in desc_lower for kw in ['deposit return', 'depozīta atgriešana', 'возврат депозита']):
             return '1.2.37 Возврат гарантийных депозитов', 'Расходы', 'Возврат депозита', amount
         
-        # 2.2.7 Расходы по приобретению недвижимости
         if any(kw in desc_lower for kw in ['pirkuma liguma', 'приобретение недвижимости']):
             return '2.2.7 Расходы по приобретению недвижимости', 'Расходы', 'Покупка недвижимости', amount
         
-        # 2.2.4 Прочее (судебные, нотариусы)
         if any(kw in desc_lower for kw in ['notāra', 'tiesu administrācija', 'valsts kase']):
             return '2.2.4 Прочее', 'Расходы', 'Прочие расходы', amount
         
-        # 4.1 Перевод между счетами
         if any(kw in desc_lower for kw in ['currency exchange', 'конвертация', 'internal payment']):
             return 'Перевод между счетами', 'Расходы', 'Внутренний перевод', amount
         
-        # По умолчанию для расходов
         return '1.2.8.1 Обслуживание объектов', 'Расходы', 'Обслуживание объектов', amount
 
 def find_header_row(df, file_name):
-    """Ищет строку с заголовками данных"""
     header_keywords = [
         'Дата транзакции', 'Date', 'Datum', 'Booking Date', 'Value Date',
         'From Account', 'Amount', 'Transaction Details', 'Əməliyyat tarixi',
@@ -319,7 +274,18 @@ def parse_file(file_content, file_name):
     if 'revolut' in file_lower:
         st.write(f"=== Специальная обработка REVOLUT: {file_name} ===")
         
-        header_row = find_header_row(df, file_name)
+        # Ищем строку с заголовками
+        header_row = None
+        for idx in range(min(50, len(df))):
+            row_values = list(df.iloc[idx].values)
+            row_text = ' '.join(str(v) for v in row_values if pd.notna(v))
+            if 'Date started (UTC)' in row_text and 'Type' in row_text and 'Amount' in row_text:
+                header_row = idx
+                st.write(f"Найдена строка заголовков на индексе {idx}")
+                break
+        
+        if header_row is None:
+            header_row = find_header_row(df, file_name)
         
         if header_row is not None:
             headers = list(df.iloc[header_row].values)
@@ -330,16 +296,27 @@ def parse_file(file_content, file_name):
                 else:
                     clean_headers.append(f'col_{len(clean_headers)}')
             
+            seen = {}
+            unique_headers = []
+            for h in clean_headers:
+                if h in seen:
+                    seen[h] += 1
+                    unique_headers.append(f"{h}_{seen[h]}")
+                else:
+                    seen[h] = 0
+                    unique_headers.append(h)
+            
             data_rows = []
             for idx in range(header_row + 1, len(df)):
                 row = list(df.iloc[idx].values)
-                if len(row) < len(clean_headers):
-                    row.extend([''] * (len(clean_headers) - len(row)))
-                data_rows.append(row[:len(clean_headers)])
+                if len(row) < len(unique_headers):
+                    row.extend([''] * (len(unique_headers) - len(row)))
+                data_rows.append(row[:len(unique_headers)])
             
-            df = pd.DataFrame(data_rows, columns=clean_headers)
+            df = pd.DataFrame(data_rows, columns=unique_headers)
+            st.write(f"Создан DataFrame с колонками: {list(df.columns)}")
         
-        # Ищем столбцы
+        # Определяем колонки
         date_col = None
         amount_col = None
         type_col = None
@@ -349,17 +326,21 @@ def parse_file(file_content, file_name):
             col_lower = str(col).lower()
             if 'started' in col_lower and 'date' in col_lower:
                 date_col = col
-            if 'orig amount' in col_lower:
-                amount_col = col
             if col_lower == 'type':
                 type_col = col
             if 'description' in col_lower:
                 desc_col = col
+            if 'orig amount' in col_lower:
+                amount_col = col
+            if 'amount' in col_lower and amount_col is None and 'orig' not in col_lower:
+                amount_col = col
         
         if date_col is None:
             date_col = df.columns[0] if len(df.columns) > 0 else None
-        if amount_col is None:
-            amount_col = df.columns[12] if len(df.columns) > 12 else None
+        
+        st.write(f"Столбец даты: {date_col}")
+        st.write(f"Столбец суммы: {amount_col}")
+        st.write(f"Столбец типа: {type_col}")
         
         transactions = []
         for idx in range(len(df)):
@@ -375,11 +356,23 @@ def parse_file(file_content, file_name):
                 if not date:
                     continue
                 
+                # Получаем сумму из нескольких возможных колонок
                 amount = 0
                 if amount_col is not None:
                     amount_val = row[amount_col]
                     if pd.notna(amount_val):
                         amount = parse_amount(amount_val)
+                
+                # Если сумма не найдена, пробуем другие колонки
+                if amount == 0:
+                    for col in df.columns:
+                        if 'amount' in str(col).lower() and col != amount_col:
+                            amount_val = row[col]
+                            if pd.notna(amount_val):
+                                amount = parse_amount(amount_val)
+                                if amount != 0:
+                                    st.write(f"Найдена сумма в колонке {col}: {amount}")
+                                    break
                 
                 if amount == 0:
                     continue
@@ -406,6 +399,10 @@ def parse_file(file_content, file_name):
                 if transaction_type == 'TRANSFER' and amount > 0:
                     amount = -amount
                 
+                # Если это FEE (комиссия) — расход
+                if transaction_type == 'FEE' and amount > 0:
+                    amount = -amount
+                
                 article, direction, subdir, amount = get_article(description, amount, transaction_type)
                 
                 if article is None:
@@ -423,16 +420,18 @@ def parse_file(file_content, file_name):
                     'direction': direction,
                     'subdirection': subdir
                 })
+                st.write(f"✅ Транзакция: {date} | {amount} EUR | {transaction_type} | {description[:50]}")
             except Exception as e:
+                st.write(f"❌ Ошибка в строке {idx}: {e}")
                 continue
         
+        st.write(f"=== ИТОГО REVOLUT транзакций: {len(transactions)} ===")
         return transactions
     
     # ==================== СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ BUDAPEST ====================
     if 'budapest' in file_lower:
         st.write(f"=== Специальная обработка BUDAPEST: {file_name} ===")
         
-        # Ищем строку с заголовками Serial number, Value date, Amount
         header_row = None
         for idx in range(min(30, len(df))):
             row_values = list(df.iloc[idx].values)
@@ -459,7 +458,6 @@ def parse_file(file_content, file_name):
             
             df = pd.DataFrame(data_rows, columns=clean_headers)
         
-        # Ищем столбцы
         date_col = None
         amount_col = None
         
@@ -532,7 +530,6 @@ def parse_file(file_content, file_name):
     if 'industra' in file_lower:
         st.write(f"=== Специальная обработка INDUSTRA: {file_name} ===")
         
-        # Ищем строку с заголовками
         header_row = None
         for idx in range(min(50, len(df))):
             row_values = list(df.iloc[idx].values)
@@ -564,7 +561,6 @@ def parse_file(file_content, file_name):
             df = pd.DataFrame(data_rows, columns=clean_headers)
             st.write(f"Создан DataFrame с колонками: {list(df.columns)}")
         
-        # Ищем столбцы
         date_col = None
         amount_col = None
         
@@ -596,7 +592,6 @@ def parse_file(file_content, file_name):
                 if not date:
                     continue
                 
-                # Получаем сумму
                 amount = 0
                 if amount_col is not None:
                     amount_val = row[amount_col]
@@ -701,7 +696,6 @@ def parse_file(file_content, file_name):
                     if pd.notna(val) and str(val).strip():
                         description += str(val) + ' '
                 
-                # Пропускаем итоговые строки
                 if any(kw in description.lower() for kw in ['dövrün sonuna', 'mövcud balans']):
                     continue
                 
@@ -773,7 +767,6 @@ def parse_file(file_content, file_name):
         st.warning("⚠️ В файле не найдено данных для обработки")
         return []
     
-    # Поиск столбцов
     date_col = None
     amount_col = None
     
@@ -825,7 +818,6 @@ def parse_file(file_content, file_name):
             if amount == 0:
                 continue
             
-            # Пропускаем слишком большие суммы (ошибки парсинга)
             if abs(amount) > 1000000:
                 continue
             
