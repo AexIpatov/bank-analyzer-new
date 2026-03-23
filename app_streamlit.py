@@ -100,15 +100,12 @@ def parse_date(date_str):
         parts = date_str.split('.')
         if len(parts) == 3 and len(parts[2]) == 4:
             return f"{parts[2]}-{parts[1]}-{parts[0]}"
-    # Формат YYYY-MM-DD
-    if '-' in date_str and len(date_str) >= 10:
-        return date_str[:10]
-    # Формат DD.MM.YY
-    if '.' in date_str:
-        parts = date_str.split('.')
         if len(parts) == 3 and len(parts[2]) == 2:
             year = 2000 + int(parts[2])
             return f"{year}-{parts[1]}-{parts[0]}"
+    # Формат YYYY-MM-DD
+    if '-' in date_str and len(date_str) >= 10:
+        return date_str[:10]
     return date_str
 
 def parse_amount(amount_str):
@@ -121,17 +118,22 @@ def parse_amount(amount_str):
     # Если это явно дата — пропускаем
     if re.match(r'^\d{1,2}\.\d{1,2}\.\d{2,4}$', amount_str):
         return 0
+    if re.match(r'^\d{4}-\d{2}-\d{2}', amount_str):
+        return 0
+    
+    # Убираем префикс -+ для Industra
+    if amount_str.startswith('-+'):
+        amount_str = '-' + amount_str[2:]
     
     # Убираем валюту и лишние символы
     amount_str = amount_str.replace(',', '.').replace(' ', '')
     # Убираем знаки + и - в начале, но сохраняем для определения
-    has_minus = amount_str.startswith('-') or amount_str.startswith('-+')
+    has_minus = amount_str.startswith('-')
     amount_str = re.sub(r'[^0-9\.\-]', '', amount_str)
     if amount_str == '' or amount_str == '-':
         return 0
     try:
         val = float(amount_str)
-        # Если исходная сумма была с минусом, но val положительный
         if has_minus and val > 0:
             val = -val
         return val
@@ -185,7 +187,7 @@ def get_article(description, amount, transaction_type=None):
             return '1.1.2.4 Прочие мелкие поступления', 'Доходы', 'Прочие доходы', amount
         
         # 1.1.1.3 Арендная плата (счёт)
-        if any(kw in desc_lower for kw in ['арендн', 'rent', 'money added', 'ire', 'dzivoklis', 'apmaksa par dzivokli', 'ires maksa', 'rekina numurs', 'rekins nr']):
+        if any(kw in desc_lower for kw in ['арендн', 'rent', 'money added', 'ire', 'dzivoklis', 'apmaksa par dzivokli', 'ires maksa', 'rekina numurs', 'rekins nr', 'from']):
             return '1.1.1.3 Арендная плата (счёт)', 'Доходы', 'Арендная плата', amount
         
         # По умолчанию для доходов
@@ -203,7 +205,7 @@ def get_article(description, amount, transaction_type=None):
         
         # 1.2.15.2 Налоги на ФОТ
         if any(kw in desc_lower for kw in ['nodokļu nomaksa', 'vid', 'budžets', 'налог']):
-            if '1.2.15.2' in desc_lower or 'nodokļu nomaksa (1.2.15.2)' in desc_lower:
+            if '1.2.15.2' in desc_lower:
                 return '1.2.15.2 Налоги на ФОТ', 'Расходы', 'Налоги на ФОТ', amount
             if '1.2.16.4' in desc_lower:
                 return '1.2.16.3 НДС', 'Расходы', 'НДС', amount
@@ -400,7 +402,7 @@ def parse_file(file_content, file_name):
                         if pd.notna(val) and str(val).strip() and str(val) != 'nan':
                             description += ' ' + str(val)
                 
-                # Если это TRANSFER и сумма отрицательная — это расход
+                # Если это TRANSFER и сумма положительная — это расход
                 if transaction_type == 'TRANSFER' and amount > 0:
                     amount = -amount
                 
@@ -530,7 +532,18 @@ def parse_file(file_content, file_name):
     if 'industra' in file_lower:
         st.write(f"=== Специальная обработка INDUSTRA: {file_name} ===")
         
-        header_row = find_header_row(df, file_name)
+        # Ищем строку с заголовками
+        header_row = None
+        for idx in range(min(50, len(df))):
+            row_values = list(df.iloc[idx].values)
+            row_text = ' '.join(str(v) for v in row_values if pd.notna(v))
+            if 'Дата транзакции' in row_text and 'Дебет(D)' in row_text:
+                header_row = idx
+                st.write(f"Найдена строка заголовков на индексе {idx}")
+                break
+        
+        if header_row is None:
+            header_row = find_header_row(df, file_name)
         
         if header_row is not None:
             headers = list(df.iloc[header_row].values)
@@ -549,6 +562,7 @@ def parse_file(file_content, file_name):
                 data_rows.append(row[:len(clean_headers)])
             
             df = pd.DataFrame(data_rows, columns=clean_headers)
+            st.write(f"Создан DataFrame с колонками: {list(df.columns)}")
         
         # Ищем столбцы
         date_col = None
@@ -565,6 +579,8 @@ def parse_file(file_content, file_name):
         
         if date_col is None and len(df.columns) > 0:
             date_col = df.columns[0]
+        
+        st.write(f"Столбец даты: {date_col}, столбец суммы: {amount_col}")
         
         transactions = []
         for idx in range(len(df)):
@@ -585,11 +601,7 @@ def parse_file(file_content, file_name):
                 if amount_col is not None:
                     amount_val = row[amount_col]
                     if pd.notna(amount_val):
-                        amount_str = str(amount_val).strip()
-                        # Убираем префикс -+
-                        if amount_str.startswith('-+'):
-                            amount_str = '-' + amount_str[2:]
-                        amount = parse_amount(amount_str)
+                        amount = parse_amount(amount_val)
                 
                 if amount == 0:
                     continue
@@ -618,9 +630,12 @@ def parse_file(file_content, file_name):
                     'direction': direction,
                     'subdirection': subdir
                 })
+                st.write(f"✅ Найдена транзакция: {date} | {amount} EUR | {description[:50]}")
             except Exception as e:
+                st.write(f"❌ Ошибка в строке {idx}: {e}")
                 continue
         
+        st.write(f"=== ИТОГО INDUSTRA транзакций: {len(transactions)} ===")
         return transactions
     
     # ==================== СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ PASHA BANK ====================
