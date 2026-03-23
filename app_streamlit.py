@@ -91,7 +91,7 @@ def read_file(file_content, file_name):
 def parse_date(date_str):
     if pd.isna(date_str):
         return ''
-    date_str = str(date_str)
+    date_str = str(date_str).strip()
     # Убираем время
     if ' ' in date_str:
         date_str = date_str.split(' ')[0]
@@ -103,13 +103,23 @@ def parse_date(date_str):
     # Формат YYYY-MM-DD
     if '-' in date_str and len(date_str) >= 10:
         return date_str[:10]
-    return date_str[:10] if len(date_str) >= 10 else date_str
+    # Формат DD.MM.YY
+    if '.' in date_str:
+        parts = date_str.split('.')
+        if len(parts) == 3 and len(parts[2]) == 2:
+            year = 2000 + int(parts[2])
+            return f"{year}-{parts[1]}-{parts[0]}"
+    return date_str
 
 def parse_amount(amount_str):
     if pd.isna(amount_str):
         return 0
     amount_str = str(amount_str).strip()
     if amount_str == '' or amount_str == 'nan':
+        return 0
+    
+    # Если это явно дата — пропускаем
+    if re.match(r'^\d{1,2}\.\d{1,2}\.\d{2,4}$', amount_str):
         return 0
     
     # Убираем валюту и лишние символы
@@ -121,24 +131,19 @@ def parse_amount(amount_str):
         return 0
     try:
         val = float(amount_str)
+        # Если исходная сумма была с минусом, но val положительный
         if has_minus and val > 0:
             val = -val
         return val
     except:
-        match = re.search(r'(-?\d+\.?\d*)', amount_str)
-        if match:
-            try:
-                return float(match.group(1))
-            except:
-                return 0
         return 0
 
 def get_article(description, amount, transaction_type=None):
     """Определение статьи на основе описания и суммы"""
     desc_lower = description.lower()
     
-    # Проверяем, является ли строка итоговой (не транзакция)
-    if any(kw in desc_lower for kw in ['dövrün sonuna balans', 'mövcud balans', 'start balance', 'final balance', 'debit turnover', 'credit turnover']):
+    # ========== ИСКЛЮЧАЕМ СЛУЖЕБНЫЕ СТРОКИ ==========
+    if any(kw in desc_lower for kw in ['dövrün sonuna balans', 'mövcud balans', 'start balance', 'final balance', 'debit turnover', 'credit turnover', 'balance']):
         return None, None, None, None
     
     # ========== ДОХОДЫ (положительные суммы) ==========
@@ -151,8 +156,8 @@ def get_article(description, amount, transaction_type=None):
         if any(kw in desc_lower for kw in ['depozits', 'депозит', 'deposit', 'garantijas depozits']):
             return '1.1.1.4 Получение гарантийного депозита', 'Доходы', 'Гарантийный депозит', amount
         
-        # 1.1.4.1 Комиссия за продажу недвижимости (Nomiqa, Bunda)
-        if any(kw in desc_lower for kw in ['commission', 'agency commissions', 'marketing and advertisement', 'consultancy fees', 'комиссия за продажу', 'incoming swift payment']):
+        # 1.1.4.1 Комиссия за продажу недвижимости
+        if any(kw in desc_lower for kw in ['commission', 'agency commissions', 'marketing and advertisement', 'consultancy fees', 'incoming swift payment']):
             return '1.1.4.1 Комиссия за продажу недвижимости', 'Доходы', 'Комиссия за продажу', amount
         
         # 3.1.3 Получение внутригруппового займа
@@ -168,19 +173,19 @@ def get_article(description, amount, transaction_type=None):
             return '3.1.1 Ввод средств', 'Доходы', 'Ввод средств', amount
         
         # 1.1.1.1 Арендная плата (наличные)
-        if any(kw in desc_lower for kw in ['наличные', 'cash', 'rent for january']):
+        if any(kw in desc_lower for kw in ['наличные', 'cash', 'rent for january', 'c89-1(3)-01/26', 'rahul amanpreet singh']):
             return '1.1.1.1 Арендная плата (наличные)', 'Доходы', 'Арендная плата наличные', amount
         
         # 1.1.2.3 Компенсация по коммунальным расходам
         if any(kw in desc_lower for kw in ['komunālie', 'utilities', 'компенсац', 'возмещени']):
             return '1.1.2.3 Компенсация по коммунальным расходам', 'Доходы', 'Компенсация коммунальных', amount
         
-        # 1.1.2.4 Прочие мелкие поступления (кэшбэк, возвраты)
-        if any(kw in desc_lower for kw in ['кэшбэк', 'cashback', 'refund', 'возврат', 'прочие', 'u rok do']):
+        # 1.1.2.4 Прочие мелкие поступления (кэшбэк)
+        if any(kw in desc_lower for kw in ['кэшбэк', 'cashback', 'u rok do']):
             return '1.1.2.4 Прочие мелкие поступления', 'Доходы', 'Прочие доходы', amount
         
-        # 1.1.1.3 Арендная плата (счёт) — только для TOPUP в Revolut
-        if transaction_type == 'TOPUP' or any(kw in desc_lower for kw in ['арендн', 'rent', 'money added', 'ire', 'dzivoklis', 'apmaksa par dzivokli', 'ires maksa', 'rekina numurs']):
+        # 1.1.1.3 Арендная плата (счёт)
+        if any(kw in desc_lower for kw in ['арендн', 'rent', 'money added', 'ire', 'dzivoklis', 'apmaksa par dzivokli', 'ires maksa', 'rekina numurs', 'rekins nr']):
             return '1.1.1.3 Арендная плата (счёт)', 'Доходы', 'Арендная плата', amount
         
         # По умолчанию для доходов
@@ -197,8 +202,11 @@ def get_article(description, amount, transaction_type=None):
             return '1.2.15.1 Зарплата', 'Расходы', 'Зарплата', amount
         
         # 1.2.15.2 Налоги на ФОТ
-        if any(kw in desc_lower for kw in ['nodokļu nomaksa', 'vid', 'budžets', 'налог', 'valsts budžets']):
-            return '1.2.15.2 Налоги на ФОТ', 'Расходы', 'Налоги на ФОТ', amount
+        if any(kw in desc_lower for kw in ['nodokļu nomaksa', 'vid', 'budžets', 'налог']):
+            if '1.2.15.2' in desc_lower or 'nodokļu nomaksa (1.2.15.2)' in desc_lower:
+                return '1.2.15.2 Налоги на ФОТ', 'Расходы', 'Налоги на ФОТ', amount
+            if '1.2.16.4' in desc_lower:
+                return '1.2.16.3 НДС', 'Расходы', 'НДС', amount
         
         # 1.2.16.3 НДС
         if any(kw in desc_lower for kw in ['value added tax', 'vat', 'ндс', 'pvn']):
@@ -233,11 +241,11 @@ def get_article(description, amount, transaction_type=None):
             return '1.2.9.1 Связь, интернет, TV', 'Расходы', 'Связь и интернет', amount
         
         # 1.2.9.3 IT сервисы
-        if any(kw in desc_lower for kw in ['asana', 'albato', 'slack', 'google one', 'lovable', 'openai', 'chatgpt', 'browsec', 'it сервисы', 'lovable.dev']):
+        if any(kw in desc_lower for kw in ['asana', 'albato', 'slack', 'google one', 'lovable', 'openai', 'chatgpt', 'browsec', 'it сервисы']):
             return '1.2.9.3 IT сервисы', 'Расходы', 'IT сервисы', amount
         
-        # 1.2.3 Оплата рекламных систем (бюджет)
-        if any(kw in desc_lower for kw in ['facebook', 'facbk', 'tiktok', 'ads', 'marketing', 'реклам', 'meta', 'airbnb', 'airbnb payments']):
+        # 1.2.3 Оплата рекламных систем
+        if any(kw in desc_lower for kw in ['facebook', 'facbk', 'tiktok', 'ads', 'marketing', 'реклам']):
             return '1.2.3 Оплата рекламных систем (бюджет)', 'Расходы', 'Маркетинг', amount
         
         # 1.2.2 Командировочные расходы
@@ -273,7 +281,7 @@ def get_article(description, amount, transaction_type=None):
             return '2.2.4 Прочее', 'Расходы', 'Прочие расходы', amount
         
         # 4.1 Перевод между счетами
-        if any(kw in desc_lower for kw in ['currency exchange', 'конвертация', 'transfer to own account', 'между своими счетами', 'internal payment']):
+        if any(kw in desc_lower for kw in ['currency exchange', 'конвертация', 'internal payment']):
             return 'Перевод между счетами', 'Расходы', 'Внутренний перевод', amount
         
         # По умолчанию для расходов
@@ -286,7 +294,7 @@ def find_header_row(df, file_name):
         'From Account', 'Amount', 'Transaction Details', 'Əməliyyat tarixi',
         'account number', 'posting date', 'payment amount', 'Type', 'Date and time',
         'Дата', 'Плательщик/ Получатель', 'Сумма', 'Валюта',
-        'Date started (UTC)', 'Type', 'State', 'Description'
+        'Date started (UTC)', 'State', 'Description', 'Serial number'
     ]
     
     for idx in range(min(50, len(df))):
@@ -309,7 +317,6 @@ def parse_file(file_content, file_name):
     if 'revolut' in file_lower:
         st.write(f"=== Специальная обработка REVOLUT: {file_name} ===")
         
-        # Ищем строку с заголовками
         header_row = find_header_row(df, file_name)
         
         if header_row is not None:
@@ -340,7 +347,7 @@ def parse_file(file_content, file_name):
             col_lower = str(col).lower()
             if 'started' in col_lower and 'date' in col_lower:
                 date_col = col
-            if 'amount' in col_lower and 'orig' in col_lower:
+            if 'orig amount' in col_lower:
                 amount_col = col
             if col_lower == 'type':
                 type_col = col
@@ -349,6 +356,8 @@ def parse_file(file_content, file_name):
         
         if date_col is None:
             date_col = df.columns[0] if len(df.columns) > 0 else None
+        if amount_col is None:
+            amount_col = df.columns[12] if len(df.columns) > 12 else None
         
         transactions = []
         for idx in range(len(df)):
@@ -373,7 +382,7 @@ def parse_file(file_content, file_name):
                 if amount == 0:
                     continue
                 
-                # Определяем тип операции для правильной классификации
+                # Определяем тип операции
                 transaction_type = ''
                 if type_col is not None:
                     transaction_type = str(row[type_col]).upper() if pd.notna(row[type_col]) else ''
@@ -390,6 +399,10 @@ def parse_file(file_content, file_name):
                         val = row[col]
                         if pd.notna(val) and str(val).strip() and str(val) != 'nan':
                             description += ' ' + str(val)
+                
+                # Если это TRANSFER и сумма отрицательная — это расход
+                if transaction_type == 'TRANSFER' and amount > 0:
+                    amount = -amount
                 
                 article, direction, subdir, amount = get_article(description, amount, transaction_type)
                 
@@ -413,16 +426,16 @@ def parse_file(file_content, file_name):
         
         return transactions
     
-    # ==================== СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ PASHA BANK ====================
-    if 'pasha' in file_lower:
-        st.write(f"=== Специальная обработка PASHA BANK: {file_name} ===")
+    # ==================== СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ BUDAPEST ====================
+    if 'budapest' in file_lower:
+        st.write(f"=== Специальная обработка BUDAPEST: {file_name} ===")
         
-        # Ищем строку с заголовками
+        # Ищем строку с заголовками Serial number, Value date, Amount
         header_row = None
         for idx in range(min(30, len(df))):
             row_values = list(df.iloc[idx].values)
             row_text = ' '.join(str(v) for v in row_values if pd.notna(v))
-            if 'Əməliyyat tarixi' in row_text and 'İcra tarixi' in row_text:
+            if 'Serial number' in row_text and 'Value date' in row_text and 'Amount' in row_text:
                 header_row = idx
                 break
         
@@ -450,7 +463,202 @@ def parse_file(file_content, file_name):
         
         for col in df.columns:
             col_lower = str(col).lower()
-            if 'tarixi' in col_lower:
+            if 'value date' in col_lower:
+                date_col = col
+            if 'amount' in col_lower:
+                amount_col = col
+        
+        if date_col is None and len(df.columns) > 1:
+            date_col = df.columns[1]
+        if amount_col is None and len(df.columns) > 8:
+            amount_col = df.columns[9]
+        
+        transactions = []
+        for idx in range(len(df)):
+            try:
+                row = df.iloc[idx]
+                
+                date = ''
+                if date_col is not None:
+                    date_val = row[date_col]
+                    if pd.notna(date_val):
+                        date = parse_date(date_val)
+                
+                if not date:
+                    continue
+                
+                amount = 0
+                if amount_col is not None:
+                    amount_val = row[amount_col]
+                    if pd.notna(amount_val):
+                        amount = parse_amount(amount_val)
+                
+                if amount == 0:
+                    continue
+                
+                description = ''
+                for col in df.columns:
+                    if col not in [date_col, amount_col]:
+                        val = row[col]
+                        if pd.notna(val) and str(val).strip() and str(val) != 'nan':
+                            description += str(val) + ' '
+                
+                article, direction, subdir, amount = get_article(description, amount)
+                
+                if article is None:
+                    continue
+                
+                account_name = file_name.replace('.xls', '').replace('.xlsx', '')
+                currency = 'HUF' if 'HUF' in file_lower else 'EUR'
+                
+                transactions.append({
+                    'date': date,
+                    'amount': amount,
+                    'currency': currency,
+                    'account_name': account_name,
+                    'description': description[:300],
+                    'article_name': article,
+                    'direction': direction,
+                    'subdirection': subdir
+                })
+            except Exception as e:
+                continue
+        
+        return transactions
+    
+    # ==================== СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ INDUSTRA ====================
+    if 'industra' in file_lower:
+        st.write(f"=== Специальная обработка INDUSTRA: {file_name} ===")
+        
+        header_row = find_header_row(df, file_name)
+        
+        if header_row is not None:
+            headers = list(df.iloc[header_row].values)
+            clean_headers = []
+            for h in headers:
+                if pd.notna(h) and str(h).strip():
+                    clean_headers.append(str(h).strip())
+                else:
+                    clean_headers.append(f'col_{len(clean_headers)}')
+            
+            data_rows = []
+            for idx in range(header_row + 1, len(df)):
+                row = list(df.iloc[idx].values)
+                if len(row) < len(clean_headers):
+                    row.extend([''] * (len(clean_headers) - len(row)))
+                data_rows.append(row[:len(clean_headers)])
+            
+            df = pd.DataFrame(data_rows, columns=clean_headers)
+        
+        # Ищем столбцы
+        date_col = None
+        amount_col = None
+        
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if 'дата транзакции' in col_lower:
+                date_col = col
+            if 'дебет(d)' in col_lower:
+                amount_col = col
+            if 'кредит(c)' in col_lower and amount_col is None:
+                amount_col = col
+        
+        if date_col is None and len(df.columns) > 0:
+            date_col = df.columns[0]
+        
+        transactions = []
+        for idx in range(len(df)):
+            try:
+                row = df.iloc[idx]
+                
+                date = ''
+                if date_col is not None:
+                    date_val = row[date_col]
+                    if pd.notna(date_val):
+                        date = parse_date(date_val)
+                
+                if not date:
+                    continue
+                
+                # Получаем сумму
+                amount = 0
+                if amount_col is not None:
+                    amount_val = row[amount_col]
+                    if pd.notna(amount_val):
+                        amount_str = str(amount_val).strip()
+                        # Убираем префикс -+
+                        if amount_str.startswith('-+'):
+                            amount_str = '-' + amount_str[2:]
+                        amount = parse_amount(amount_str)
+                
+                if amount == 0:
+                    continue
+                
+                description = ''
+                for col in df.columns:
+                    if col not in [date_col, amount_col]:
+                        val = row[col]
+                        if pd.notna(val) and str(val).strip() and str(val) != 'nan':
+                            description += str(val) + ' '
+                
+                article, direction, subdir, amount = get_article(description, amount)
+                
+                if article is None:
+                    continue
+                
+                account_name = file_name.replace('.csv', '').replace('.xlsx', '')
+                
+                transactions.append({
+                    'date': date,
+                    'amount': amount,
+                    'currency': 'EUR',
+                    'account_name': account_name,
+                    'description': description[:300],
+                    'article_name': article,
+                    'direction': direction,
+                    'subdirection': subdir
+                })
+            except Exception as e:
+                continue
+        
+        return transactions
+    
+    # ==================== СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ PASHA BANK ====================
+    if 'pasha' in file_lower:
+        st.write(f"=== Специальная обработка PASHA BANK: {file_name} ===")
+        
+        header_row = None
+        for idx in range(min(30, len(df))):
+            row_values = list(df.iloc[idx].values)
+            row_text = ' '.join(str(v) for v in row_values if pd.notna(v))
+            if 'Əməliyyat tarixi' in row_text and 'İcra tarixi' in row_text:
+                header_row = idx
+                break
+        
+        if header_row is not None:
+            headers = list(df.iloc[header_row].values)
+            clean_headers = []
+            for h in headers:
+                if pd.notna(h) and str(h).strip():
+                    clean_headers.append(str(h).strip())
+                else:
+                    clean_headers.append(f'col_{len(clean_headers)}')
+            
+            data_rows = []
+            for idx in range(header_row + 1, len(df)):
+                row = list(df.iloc[idx].values)
+                if len(row) < len(clean_headers):
+                    row.extend([''] * (len(clean_headers) - len(row)))
+                data_rows.append(row[:len(clean_headers)])
+            
+            df = pd.DataFrame(data_rows, columns=clean_headers)
+        
+        date_col = None
+        amount_col = None
+        
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if 'tarixi' in col_lower and 'ə' in col_lower:
                 date_col = col
             if 'доход' in col_lower:
                 amount_col = col
@@ -472,14 +680,14 @@ def parse_file(file_content, file_name):
                 if not date:
                     continue
                 
-                # Пропускаем итоговые строки
-                desc_text = ''
+                description = ''
                 for col in df.columns:
                     val = row[col]
                     if pd.notna(val) and str(val).strip():
-                        desc_text += str(val) + ' '
+                        description += str(val) + ' '
                 
-                if any(kw in desc_text.lower() for kw in ['dövrün sonuna', 'mövcud balans']):
+                # Пропускаем итоговые строки
+                if any(kw in description.lower() for kw in ['dövrün sonuna', 'mövcud balans']):
                     continue
                 
                 amount = 0
@@ -491,7 +699,6 @@ def parse_file(file_content, file_name):
                 if amount == 0:
                     continue
                 
-                description = desc_text[:300]
                 article, direction, subdir, amount = get_article(description, amount)
                 
                 if article is None:
@@ -517,7 +724,6 @@ def parse_file(file_content, file_name):
     
     # ==================== ОБЩАЯ ОБРАБОТКА ====================
     
-    # Ищем строку с заголовками
     header_row = find_header_row(df, file_name)
     
     if header_row is not None:
@@ -552,11 +758,11 @@ def parse_file(file_content, file_name):
         st.warning("⚠️ В файле не найдено данных для обработки")
         return []
     
-    # Поиск столбцов даты и суммы
+    # Поиск столбцов
     date_col = None
     amount_col = None
     
-    date_keywords = ['date', 'дата', 'booking date', 'posting date', 'value date', 'datum', 'transaction date']
+    date_keywords = ['date', 'дата', 'booking date', 'posting date', 'value date', 'datum']
     for col in df.columns:
         col_lower = str(col).lower()
         for kw in date_keywords:
@@ -566,7 +772,7 @@ def parse_file(file_content, file_name):
         if date_col:
             break
     
-    amount_keywords = ['amount', 'сумма', 'payment amount', 'orig amount', 'total amount', 'credit', 'debit', 'доход', 'расход']
+    amount_keywords = ['amount', 'сумма', 'payment amount', 'orig amount', 'total amount', 'credit', 'debit']
     for col in df.columns:
         col_lower = str(col).lower()
         for kw in amount_keywords:
@@ -581,7 +787,6 @@ def parse_file(file_content, file_name):
     if amount_col is None and len(df.columns) > 1:
         amount_col = df.columns[1]
     
-    # Обработка транзакций
     transactions = []
     for idx in range(len(df)):
         try:
@@ -596,9 +801,6 @@ def parse_file(file_content, file_name):
             if not date:
                 continue
             
-            if not ('2026' in date or '2025' in date):
-                continue
-            
             amount = 0
             if amount_col is not None:
                 amount_val = row[amount_col]
@@ -608,6 +810,7 @@ def parse_file(file_content, file_name):
             if amount == 0:
                 continue
             
+            # Пропускаем слишком большие суммы (ошибки парсинга)
             if abs(amount) > 1000000:
                 continue
             
@@ -628,7 +831,7 @@ def parse_file(file_content, file_name):
                 account_name = account_name.replace(ext, '')
             
             currency = 'EUR'
-            if 'CZK' in str(df.columns) or 'czk' in file_lower:
+            if 'CZK' in file_lower:
                 currency = 'CZK'
             elif 'HUF' in file_lower:
                 currency = 'HUF'
