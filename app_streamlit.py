@@ -318,9 +318,11 @@ def parse_file(file_content, file_name):
         
         # Определяем колонки
         date_col = None
-        amount_col = None
         type_col = None
         desc_col = None
+        
+        # Список возможных колонок с суммой (в порядке приоритета)
+        amount_cols = []
         
         for col in df.columns:
             col_lower = str(col).lower()
@@ -331,15 +333,17 @@ def parse_file(file_content, file_name):
             if 'description' in col_lower:
                 desc_col = col
             if 'orig amount' in col_lower:
-                amount_col = col
-            if 'amount' in col_lower and amount_col is None and 'orig' not in col_lower:
-                amount_col = col
+                amount_cols.append(col)
+            if 'amount' in col_lower and 'orig' not in col_lower and 'total' not in col_lower:
+                amount_cols.append(col)
+            if 'total amount' in col_lower:
+                amount_cols.append(col)
         
         if date_col is None:
             date_col = df.columns[0] if len(df.columns) > 0 else None
         
         st.write(f"Столбец даты: {date_col}")
-        st.write(f"Столбец суммы: {amount_col}")
+        st.write(f"Колонки для поиска суммы: {amount_cols}")
         st.write(f"Столбец типа: {type_col}")
         
         transactions = []
@@ -356,26 +360,35 @@ def parse_file(file_content, file_name):
                 if not date:
                     continue
                 
-                # Получаем сумму из нескольких возможных колонок
+                # Ищем сумму во всех возможных колонках
                 amount = 0
-                if amount_col is not None:
-                    amount_val = row[amount_col]
-                    if pd.notna(amount_val):
-                        amount = parse_amount(amount_val)
+                amount_source = None
+                for col in amount_cols:
+                    if col in row and pd.notna(row[col]):
+                        amount_val = row[col]
+                        if amount_val is not None and str(amount_val).strip() and str(amount_val).strip() != '':
+                            parsed = parse_amount(amount_val)
+                            if parsed != 0:
+                                amount = parsed
+                                amount_source = col
+                                break
                 
-                # Если сумма не найдена, пробуем другие колонки
                 if amount == 0:
+                    # Если не нашли, пробуем все колонки
                     for col in df.columns:
-                        if 'amount' in str(col).lower() and col != amount_col:
-                            amount_val = row[col]
-                            if pd.notna(amount_val):
-                                amount = parse_amount(amount_val)
-                                if amount != 0:
-                                    st.write(f"Найдена сумма в колонке {col}: {amount}")
+                        if col not in amount_cols:
+                            val = row[col]
+                            if pd.notna(val):
+                                parsed = parse_amount(val)
+                                if parsed != 0:
+                                    amount = parsed
+                                    amount_source = col
                                     break
                 
                 if amount == 0:
                     continue
+                
+                st.write(f"Сумма {amount} найдена в колонке: {amount_source}")
                 
                 # Определяем тип операции
                 transaction_type = ''
@@ -390,7 +403,7 @@ def parse_file(file_content, file_name):
                         description = str(desc_val)
                 
                 for col in df.columns:
-                    if col not in [date_col, amount_col, type_col, desc_col]:
+                    if col not in [date_col, amount_source, type_col, desc_col]:
                         val = row[col]
                         if pd.notna(val) and str(val).strip() and str(val) != 'nan':
                             description += ' ' + str(val)
