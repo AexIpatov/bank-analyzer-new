@@ -447,7 +447,7 @@ def parse_file(file_content, file_name):
     
     # ==================== СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ BUDAPEST ====================
         # ==================== СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ BUDAPEST ====================
-    if 'budapest' in file_lower:
+   if 'budapest' in file_lower:
         st.write(f"=== Специальная обработка BUDAPEST: {file_name} ===")
         
         # Показываем первые 10 строк для отладки
@@ -466,7 +466,6 @@ def parse_file(file_content, file_name):
                 st.write(f"Найдена строка заголовков на индексе {idx}")
                 break
         
-        # Если не нашли по точному совпадению, ищем по частичным
         if header_row is None:
             for idx in range(min(50, len(df))):
                 row_values = list(df.iloc[idx].values)
@@ -485,7 +484,6 @@ def parse_file(file_content, file_name):
                 else:
                     clean_headers.append(f'col_{len(clean_headers)}')
             
-            # Убираем дубликаты заголовков
             seen = {}
             unique_headers = []
             for h in clean_headers:
@@ -506,53 +504,43 @@ def parse_file(file_content, file_name):
             df = pd.DataFrame(data_rows, columns=unique_headers)
             st.write(f"Создан DataFrame с колонками: {list(df.columns)}")
         else:
-            st.warning("Не найдена строка с заголовками, пробуем использовать данные как есть")
+            st.warning("Не найдена строка с заголовками")
+            return []
         
         # Ищем столбцы с датой и суммой
         date_col = None
         amount_col = None
         
-        # Сначала ищем по названиям колонок
+        # Ищем по точным названиям
         for col in df.columns:
             col_lower = str(col).lower()
-            if 'value date' in col_lower:
+            if col_lower == 'value date':
                 date_col = col
-            if 'amount' in col_lower:
+                st.write(f"Найден столбец даты: {col}")
+            if col_lower == 'amount':
                 amount_col = col
+                st.write(f"Найден столбец суммы: {col}")
         
-        # Если не нашли по названиям, пробуем по позициям (на основе структуры MKB файла)
-        if date_col is None and len(df.columns) > 1:
-            date_col = df.columns[1]
-            st.write(f"Используем колонку 1 как дату: {date_col}")
-        
+        # Если не нашли amount, ищем колонку, содержащую 'amount' (не 'return')
         if amount_col is None:
-            # Пробуем найти колонку, которая содержит числа (суммы)
-            for col_idx, col in enumerate(df.columns):
-                # Проверяем несколько строк на наличие чисел
-                numeric_count = 0
-                for row_idx in range(min(5, len(df))):
-                    val = df.iloc[row_idx][col]
-                    if pd.notna(val) and str(val).strip():
-                        try:
-                            float(str(val).replace(',', '.').replace(' ', ''))
-                            numeric_count += 1
-                        except:
-                            pass
-                if numeric_count >= 2:
+            for col in df.columns:
+                col_lower = str(col).lower()
+                if 'amount' in col_lower and 'return' not in col_lower:
                     amount_col = col
-                    st.write(f"Найдена колонка с числами для суммы: {col} (индекс {col_idx})")
+                    st.write(f"Найден столбец суммы (по частичному совпадению): {col}")
                     break
         
-        # Если все еще не нашли, используем колонку 9 (10-я колонка)
+        # Если все еще не нашли, пробуем по позиции (в MKB файле сумма в 10-й колонке, индекс 9)
         if amount_col is None and len(df.columns) > 9:
             amount_col = df.columns[9]
             st.write(f"Используем колонку 9 как сумму: {amount_col}")
-        elif amount_col is None and len(df.columns) > 8:
-            amount_col = df.columns[8]
-            st.write(f"Используем колонку 8 как сумму: {amount_col}")
         
         st.write(f"Итоговый столбец даты: {date_col}")
         st.write(f"Итоговый столбец суммы: {amount_col}")
+        
+        if date_col is None or amount_col is None:
+            st.error("Не удалось определить столбцы даты и суммы")
+            return []
         
         transactions = []
         skipped_no_date = 0
