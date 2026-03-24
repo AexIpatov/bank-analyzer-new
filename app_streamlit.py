@@ -540,14 +540,16 @@ def parse_file(file_content, file_name):
     
     file_lower = file_name.lower()
     
-    # Определяем тип файла с помощью детектора
+    # Определяем тип файла и получаем информацию о счете
     file_type = HEADER_DETECTOR.detect_file_type(file_name)
     direction, subdirection, default_currency, account_name = get_account_info(file_name, df)
     
-    # Находим строку заголовков
+    # Находим строку заголовков с помощью умного детектора
     header_row = HEADER_DETECTOR.find_header_row(df)
+    
     if header_row is not None and HEADER_DETECTOR.validate_header_row(df, header_row):
-        # Используем найденный заголовок
+        st.write(f"✅ Найдена строка заголовков на индексе {header_row}")
+        
         headers = list(df.iloc[header_row].values)
         clean_headers = []
         for h in headers:
@@ -556,7 +558,7 @@ def parse_file(file_content, file_name):
             else:
                 clean_headers.append(f'col_{len(clean_headers)}')
         
-        # Убираем дубликаты
+        # Убираем дубликаты заголовков
         seen = {}
         unique_headers = []
         for h in clean_headers:
@@ -575,6 +577,7 @@ def parse_file(file_content, file_name):
             data_rows.append(row[:len(unique_headers)])
         
         df = pd.DataFrame(data_rows, columns=unique_headers)
+        st.write(f"Создан DataFrame с колонками: {list(df.columns)}")
     else:
         st.warning("⚠️ Не удалось найти строку заголовков, будут использованы стандартные имена колонок")
     
@@ -582,59 +585,199 @@ def parse_file(file_content, file_name):
         st.warning("⚠️ В файле не найдено данных для обработки")
         return []
     
-    # ==================== ДАЛЬНЕЙШАЯ ОБРАБОТКА В ЗАВИСИМОСТИ ОТ ТИПА ФАЙЛА ====================
-    # Здесь оставляем ту же логику, что и раньше, но с улучшенным определением заголовков
-    # (код специальных обработок остаётся без изменений, так как они уже используют df с правильными колонками)
+    # ==================== ПОИСК СТОЛБЦОВ ====================
+    # Определяем колонки для даты и суммы
+    date_col = None
+    amount_col = None
     
-    # Но для экономии места я не буду дублировать весь код специальных обработок здесь,
-    # поскольку они у вас уже есть. Вместо этого я покажу, как заменить существующую функцию find_header_row
-    # на использование детектора, а остальное оставить как есть.
+    for col in df.columns:
+        col_lower = str(col).lower()
+        if any(kw in col_lower for kw in ['date', 'дата', 'datum', 'booking date', 'value date', 'posting date']):
+            date_col = col
+            break
     
-    # ВАЖНО: В вашем текущем коде есть функция find_header_row, которую нужно удалить,
-    # а в parse_file заменить её вызов на HEADER_DETECTOR.find_header_row(df)
-    # и добавить валидацию.
+    if date_col is None and len(df.columns) > 0:
+        date_col = df.columns[0]
     
-    # Поскольку полный код уже был предоставлен ранее, а сейчас мы его модифицируем,
-    # я дам готовую версию parse_file, которая использует детектор и оставляет остальную логику.
-    # Однако из-за ограничений длины сообщения я не могу вставить весь код полностью.
-    # Вместо этого я предоставлю только ту часть, которая заменяет старый способ поиска заголовков.
+    for col in df.columns:
+        col_lower = str(col).lower()
+        if any(kw in col_lower for kw in ['amount', 'сумма', 'debit', 'credit', 'дебет', 'кредит', 'доход', 'расход']):
+            amount_col = col
+            break
     
-    # Ниже показаны изменения в начале parse_file. Остальной код остается таким же, как в вашей версии.
+    if amount_col is None and len(df.columns) > 1:
+        amount_col = df.columns[1]
     
-    # ==================================================================
-    # Остальной код функции parse_file (спец. обработки и общая обработка) остается без изменений
-    # ==================================================================
+    st.write(f"Столбец даты: {date_col}")
+    st.write(f"Столбец суммы: {amount_col}")
     
-    # Убедитесь, что в вашем коде удалена старая функция find_header_row
-    # и везде, где она вызывалась, заменена на HEADER_DETECTOR.find_header_row(df)
+    # ==================== ОБРАБОТКА ТРАНЗАКЦИЙ ====================
+    transactions = []
     
-    # Я рекомендую полностью заменить ваш текущий файл на финальную версию с интегрированным детектором.
-    # Если нужно, я могу предоставить полный файл, но он будет очень большим.
-    # Для начала давайте убедимся, что вы поняли, как интегрировать детектор.
+    for idx in range(len(df)):
+        try:
+            row = df.iloc[idx]
+            
+            # Получаем дату
+            date = ''
+            if date_col is not None:
+                date_val = row[date_col]
+                if pd.notna(date_val):
+                    date = parse_date(date_val)
+            
+            if not date:
+                continue
+            
+            # Получаем сумму
+            amount = 0
+            if amount_col is not None:
+                amount_val = row[amount_col]
+                if pd.notna(amount_val):
+                    amount = parse_amount(amount_val)
+            
+            if amount == 0:
+                continue
+            
+            # Пропускаем слишком большие суммы (ошибки парсинга)
+            if abs(amount) > 1000000:
+                continue
+            
+            # Собираем описание из всех колонок, кроме даты и суммы
+            description = ''
+            for col in df.columns:
+                if col not in [date_col, amount_col]:
+                    val = row[col]
+                    if pd.notna(val) and str(val).strip() and str(val) != 'nan':
+                        description += str(val) + ' '
+            
+            # Определяем статью
+            article, direction_type, subdir_type = get_article_by_description(description, amount)
+            
+            # Определяем валюту
+            currency = default_currency
+            if 'CZK' in file_lower:
+                currency = 'CZK'
+            elif 'HUF' in file_lower:
+                currency = 'HUF'
+            elif 'RUB' in file_lower:
+                currency = 'RUB'
+            elif 'AED' in file_lower:
+                currency = 'AED'
+            elif 'AZN' in file_lower:
+                currency = 'AZN'
+            
+            transactions.append({
+                'date': date,
+                'amount': amount,
+                'currency': currency,
+                'account_name': account_name,
+                'description': description[:300],
+                'article_name': article,
+                'direction': direction if direction else direction_type,
+                'subdirection': subdirection if subdirection else subdir_type
+            })
+            
+        except Exception as e:
+            st.write(f"⚠️ Ошибка в строке {idx}: {e}")
+            continue
     
-    # Для теста можно сначала заменить только функцию find_header_row на вызов детектора
-    # и посмотреть, станет ли лучше определяться заголовок для файла Industra.
-    
-    # ==================================================================
-    # ВОТ КАК ВЫГЛЯДИТ ИСПРАВЛЕННЫЙ КОД parse_file (начало) 
-    # ==================================================================
-    
-    # ... (код read_file и т.д.) ...
-    
-    # После df = read_file(...) и определения file_type, direction, etc.
-    
-    # Находим строку заголовков
-    header_row = HEADER_DETECTOR.find_header_row(df)
-    if header_row is not None and HEADER_DETECTOR.validate_header_row(df, header_row):
-        headers = list(df.iloc[header_row].values)
-        clean_headers = [str(h).strip() if pd.notna(h) else f'col_{i}' for i, h in enumerate(headers)]
-        # ... (сборка уникальных заголовков и данных)
-        df = pd.DataFrame(data_rows, columns=unique_headers)
-    else:
-        st.warning("⚠️ Не удалось найти строку заголовков, будут использованы стандартные имена колонок")
-    
-    # ... (дальше идёт код специальных обработок)
-    
-    # Для Industra, Revolut и т.д. можно использовать тот же df, но возможно, что теперь
-    # заголовки будут правильно определены, и специальные обработки будут не нужны.
-    # Однако их можно оставить как запасной вариант.
+    st.write(f"=== Найдено транзакций: {len(transactions)} ===")
+    return transactions
+
+
+# ==================== ИНТЕРФЕЙС ПОЛЬЗОВАТЕЛЯ ====================
+tab1, tab2 = st.tabs(["📂 Один файл", "📚 Несколько файлов"])
+
+with tab1:
+    st.markdown("### Загрузите выписку для анализа")
+    uploaded_file = st.file_uploader("Выберите файл", type=['csv', 'xlsx', 'xls'], key="single")
+    if uploaded_file:
+        st.success(f"✅ Файл загружен: {uploaded_file.name}")
+        if st.button("🚀 Запустить анализ", key="single_btn"):
+            with st.spinner("Анализируем..."):
+                content = uploaded_file.read()
+                transactions = parse_file(content, uploaded_file.name)
+                if transactions:
+                    df = pd.DataFrame([{
+                        'Дата': t['date'],
+                        'Сумма': t['amount'],
+                        'Валюта': t['currency'],
+                        'Счет': t['account_name'],
+                        'Статья': t['article_name'],
+                        'Направление': t['direction'],
+                        'Субнаправление': t['subdirection'],
+                        'Описание': t['description'][:100]
+                    } for t in transactions])
+                    st.markdown("---")
+                    col_a, col_b, col_c = st.columns(3)
+                    with col_a:
+                        st.metric("📊 Всего операций", len(transactions))
+                    with col_b:
+                        доход = df[df['Сумма'] > 0]['Сумма'].sum() if len(df[df['Сумма'] > 0]) > 0 else 0
+                        st.metric("📈 Доходы", f"{доход:,.2f}")
+                    with col_c:
+                        расход = abs(df[df['Сумма'] < 0]['Сумма'].sum()) if len(df[df['Сумма'] < 0]) > 0 else 0
+                        st.metric("📉 Расходы", f"{расход:,.2f}")
+                    st.dataframe(df, use_container_width=True)
+                    output = BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        df.to_excel(writer, index=False, sheet_name='Транзакции')
+                    output.seek(0)
+                    st.download_button(
+                        "📥 Скачать Excel", 
+                        data=output, 
+                        file_name=f"анализ_{uploaded_file.name}.xlsx"
+                    )
+                else:
+                    st.warning("⚠️ Не найдено транзакций")
+
+with tab2:
+    st.markdown("### Загрузите несколько файлов")
+    uploaded_files = st.file_uploader("Выберите файлы", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True, key="multiple")
+    if uploaded_files:
+        st.info(f"📄 Выбрано файлов: {len(uploaded_files)}")
+        if st.button("🚀 Запустить анализ всех", key="multi_btn"):
+            all_transactions = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            for i, f in enumerate(uploaded_files):
+                status_text.text(f"🔄 Обработка: {f.name}")
+                content = f.read()
+                trans = parse_file(content, f.name)
+                for t in trans:
+                    t['source_file'] = f.name
+                    all_transactions.append(t)
+                progress_bar.progress((i + 1) / len(uploaded_files))
+            status_text.text("✅ Обработка завершена!")
+            if all_transactions:
+                df = pd.DataFrame([{
+                    'Дата': t['date'],
+                    'Сумма': t['amount'],
+                    'Валюта': t['currency'],
+                    'Счет': t['account_name'],
+                    'Исходный файл': t.get('source_file', ''),
+                    'Статья': t['article_name'],
+                    'Направление': t['direction'],
+                    'Субнаправление': t['subdirection'],
+                    'Описание': t['description'][:100]
+                } for t in all_transactions])
+                st.markdown("---")
+                col_a, col_b, col_c = st.columns(3)
+                with col_a:
+                    st.metric("📊 Всего операций", len(all_transactions))
+                with col_b:
+                    доход = df[df['Сумма'] > 0]['Сумма'].sum() if len(df[df['Сумма'] > 0]) > 0 else 0
+                    st.metric("📈 Доходы", f"{доход:,.2f}")
+                with col_c:
+                    расход = abs(df[df['Сумма'] < 0]['Сумма'].sum()) if len(df[df['Сумма'] < 0]) > 0 else 0
+                    st.metric("📉 Расходы", f"{расход:,.2f}")
+                st.dataframe(df, use_container_width=True)
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False, sheet_name='Все транзакции')
+                output.seek(0)
+                st.download_button(
+                    "📥 Скачать сводный Excel", 
+                    data=output, 
+                    file_name="сводка.xlsx"
+                )
