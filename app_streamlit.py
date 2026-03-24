@@ -599,4 +599,5 @@ def get_article(description, amount, file_name):
 
         # 1.2.37 Возврат гарантийных депозитов
         if any(kw in desc_lower for kw in [
-            'deposit return', 'возврат депозита', 'depozīta atgrie
+            'deposit return', 'возврат депозита', 'depozīta atgriešana',
+            'гарантийный депозит
