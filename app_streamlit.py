@@ -35,13 +35,24 @@ with st.sidebar:
     st.markdown("**Поддерживаемые форматы:** Excel (.xlsx, .xls), CSV")
     st.markdown("**Счет берется из имени файла**")
 
+
 # ==================== КЛАСС УМНОГО ДЕТЕКТОРА ЗАГОЛОВКОВ ====================
 class HeaderDetector:
     def __init__(self):
         self.header_patterns = {
-            'date': ['date', 'дата', 'datum', 'dátum', 'transaction date', 'value date', 'booking date', 'дата транзакции', 'дата операции', 'posting date'],
-            'amount': ['amount', 'сумма', 'összeg', 'betrag', 'debit', 'credit', 'дебет', 'кредит', 'debit(d)', 'credit(c)', 'сумма списания', 'сумма зачисления', 'доход', 'расход'],
-            'description': ['description', 'описание', 'leírás', 'beschreibung', 'details', 'детали', 'transaction details', 'назначение платежа', 'примечание', 'narrative'],
+            'date': [
+                'date', 'дата', 'datum', 'dátum', 'transaction date', 'value date', 'booking date',
+                'дата транзакции', 'дата операции', 'posting date', 'Date started (UTC)'
+            ],
+            'amount': [
+                'amount', 'сумма', 'összeg', 'betrag', 'debit', 'credit', 'дебет', 'кредит',
+                'debit(d)', 'credit(c)', 'сумма списания', 'сумма зачисления', 'доход', 'расход',
+                'orig amount', 'payment amount'
+            ],
+            'description': [
+                'description', 'описание', 'leírás', 'beschreibung', 'details', 'детали',
+                'transaction details', 'назначение платежа', 'примечание', 'narrative', 'information'
+            ],
             'balance': ['balance', 'остаток', 'egyenleg', 'saldo', 'closing balance', 'конечный остаток']
         }
         
@@ -213,11 +224,16 @@ def parse_amount(amount_str):
     if amount_str.startswith('-+'):
         amount_str = '-' + amount_str[2:]
     
+    # Убираем валюту и пробелы
+    amount_str = re.sub(r'[A-Z]{3}$', '', amount_str.strip())
     amount_str = amount_str.replace(',', '.').replace(' ', '')
+    
+    # Определяем знак по наличию минуса или по контексту
     has_minus = amount_str.startswith('-')
     amount_str = re.sub(r'[^0-9\.\-]', '', amount_str)
     if amount_str == '' or amount_str == '-':
         return 0
+    
     try:
         val = float(amount_str)
         if has_minus and val > 0:
@@ -304,9 +320,10 @@ def get_article(description, amount):
     """Определение статьи на основе описания и суммы"""
     desc_lower = description.lower()
     
-    if amount < 0:  # Расходы
+    # ========== РАСХОДЫ (отрицательные суммы) ==========
+    if amount < 0:
         # 1.2.17 РКО — банковские комиссии
-        if any(kw in desc_lower for kw in ['комиссия', 'commission', 'fee', 'charge', 'maintenance', 'rko', 'subscription', 'atm withdrawal', 'плата за обслуживание', 'service package', 'számlakivonat díja', 'netbankár monthly fee', 'conversion fee']):
+        if any(kw in desc_lower for kw in ['комиссия', 'commission', 'fee', 'charge', 'maintenance', 'rko', 'subscription', 'atm withdrawal', 'плата за обслуживание', 'service package', 'számlakivonat díja', 'netbankár monthly fee', 'conversion fee', 'charge for']):
             return '1.2.17 РКО', 'Расходы', 'Банковские комиссии'
         
         # 1.2.15.1 Зарплата
@@ -314,7 +331,7 @@ def get_article(description, amount):
             return '1.2.15.1 Зарплата', 'Расходы', 'Зарплата'
         
         # 1.2.15.2 Налоги на ФОТ
-        if any(kw in desc_lower for kw in ['nodokļu nomaksa', 'vid', 'budžets', 'налог', 'valsts budžets', 'nodokļu', 'darba devēja']):
+        if any(kw in desc_lower for kw in ['nodokļu nomaksa', 'vid', 'budžets', 'налог', 'valsts budžets', 'nodokļu', 'darba devēja', 'nodoku nomaksa']):
             return '1.2.15.2 Налоги на ФОТ', 'Расходы', 'Налоги на ФОТ'
         
         # 1.2.16.3 НДС
@@ -350,7 +367,7 @@ def get_article(description, amount):
             return '1.2.9.1 Связь, интернет, TV', 'Расходы', 'Связь и интернет'
         
         # 1.2.9.3 IT сервисы
-        if any(kw in desc_lower for kw in ['google one', 'lovable', 'openai', 'chatgpt', 'browsec', 'adobe', 'albato', 'slack']):
+        if any(kw in desc_lower for kw in ['google one', 'lovable', 'openai', 'chatgpt', 'browsec', 'adobe', 'albato', 'slack', 'it сервисы']):
             return '1.2.9.3 IT сервисы', 'Расходы', 'IT сервисы'
         
         # 1.2.3 Оплата рекламных систем
@@ -384,7 +401,8 @@ def get_article(description, amount):
         # По умолчанию
         return '1.2.8.1 Обслуживание объектов', 'Расходы', 'Обслуживание объектов'
     
-    else:  # Доходы
+    # ========== ДОХОДЫ (положительные суммы) ==========
+    else:
         # 1.1.1.2 Поступления систем бронирования
         if any(kw in desc_lower for kw in ['airbnb', 'booking.com', 'booking b.v.']):
             return '1.1.1.2 Поступления систем бронирования (Airbnb, Booking и пр.)', 'Доходы', 'Краткосрочная аренда'
@@ -473,26 +491,30 @@ def parse_file(file_content, file_name):
     # Поиск колонок
     date_col = None
     amount_col = None
+    debit_col = None
+    credit_col = None
     desc_col = None
     
     for col in df.columns:
         col_lower = str(col).lower()
-        if any(kw in col_lower for kw in ['date', 'дата', 'datum', 'booking', 'posting', 'value']):
+        if any(kw in col_lower for kw in ['date', 'дата', 'datum', 'booking', 'posting', 'value', 'started']):
             if date_col is None:
                 date_col = col
-        if any(kw in col_lower for kw in ['amount', 'сумма', 'debit', 'credit', 'дебет', 'кредит', 'доход', 'расход']):
+        if any(kw in col_lower for kw in ['amount', 'сумма']):
             if amount_col is None:
                 amount_col = col
-        if any(kw in col_lower for kw in ['description', 'описание', 'details', 'назначение', 'narrative', 'information']):
+        if any(kw in col_lower for kw in ['debit', 'дебет', 'расход']):
+            if debit_col is None:
+                debit_col = col
+        if any(kw in col_lower for kw in ['credit', 'кредит', 'доход']):
+            if credit_col is None:
+                credit_col = col
+        if any(kw in col_lower for kw in ['description', 'описание', 'details', 'назначение', 'narrative', 'information', 'info']):
             if desc_col is None:
                 desc_col = col
     
     if date_col is None and len(df.columns) > 0:
         date_col = df.columns[0]
-    if amount_col is None and len(df.columns) > 1:
-        amount_col = df.columns[1]
-    if desc_col is None and len(df.columns) > 2:
-        desc_col = df.columns[2]
     
     transactions = []
     
@@ -511,10 +533,23 @@ def parse_file(file_content, file_name):
             
             # Сумма
             amount = 0
-            if amount_col in row:
-                amount_val = row[amount_col]
+            
+            # Если есть отдельные колонки для дебета и кредита
+            if debit_col is not None and credit_col is not None:
+                debit_val = row[debit_col] if debit_col in row else None
+                credit_val = row[credit_col] if credit_col in row else None
+                
+                if pd.notna(debit_val) and str(debit_val).strip() and str(debit_val).strip() != '':
+                    amount = -abs(parse_amount(debit_val))
+                elif pd.notna(credit_val) and str(credit_val).strip() and str(credit_val).strip() != '':
+                    amount = abs(parse_amount(credit_val))
+            
+            # Если есть общая колонка суммы
+            elif amount_col is not None:
+                amount_val = row[amount_col] if amount_col in row else None
                 if pd.notna(amount_val):
                     amount = parse_amount(amount_val)
+            
             if amount == 0:
                 continue
             
@@ -526,7 +561,7 @@ def parse_file(file_content, file_name):
                     description = str(desc_val)
             
             for col in df.columns:
-                if col not in [date_col, amount_col, desc_col]:
+                if col not in [date_col, amount_col, debit_col, credit_col, desc_col]:
                     val = row[col]
                     if pd.notna(val) and str(val).strip() and str(val) != 'nan':
                         description += ' ' + str(val)
