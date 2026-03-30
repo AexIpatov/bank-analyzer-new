@@ -36,7 +36,7 @@ with st.sidebar:
     st.markdown("**Поддерживаемые форматы:** Excel (.xlsx, .xls), CSV")
     st.markdown("**Счет берется из имени файла**")
     st.markdown("---")
-    st.markdown("**Версия 3.2** — исправлена обработка расходных операций Revolut")
+    st.markdown("**Версия 4.0** — полная поддержка всех статей, направлений и разбивки аренды")
 
 # ==================== КЛАСС УМНОГО ДЕТЕКТОРА ЗАГОЛОВКОВ ====================
 class HeaderDetector:
@@ -45,19 +45,20 @@ class HeaderDetector:
             'date': [
                 'date', 'дата', 'datum', 'dátum', 'transaction date', 'value date', 'booking date',
                 'дата транзакции', 'дата операции', 'posting date', 'Date started (UTC)', 'Дата',
-                'Date completed (UTC)'
+                'Date completed (UTC)', 'Дата транзакции'
             ],
             'amount': [
                 'amount', 'сумма', 'összeg', 'betrag', 'дебет', 'кредит', 'debit(d)', 'credit(c)',
                 'сумма списания', 'сумма зачисления', 'доход', 'расход', 'orig amount', 'payment amount',
-                'Total amount', 'Payment currency', 'Amount'
+                'Total amount', 'Payment currency', 'Amount', 'Сумма'
             ],
-            'debit': ['debit', 'дебет', 'расход', 'withdrawal', 'списание', 'debet'],
-            'credit': ['credit', 'кредит', 'доход', 'deposit', 'зачисление'],
+            'debit': ['debit', 'дебет', 'расход', 'withdrawal', 'списание', 'debet', 'Расход'],
+            'credit': ['credit', 'кредит', 'доход', 'deposit', 'зачисление', 'Доход'],
             'description': [
                 'description', 'описание', 'leírás', 'beschreibung', 'details', 'детали',
                 'transaction details', 'назначение платежа', 'примечание', 'narrative', 'information',
-                'Transaction Details', 'Purpose of payment', 'particulars', 'beneficiary', 'Description'
+                'Transaction Details', 'Purpose of payment', 'particulars', 'beneficiary', 'Description',
+                'Назначение платежа', 'Информация о транзакции', 'Транзакция', 'Описание'
             ],
             'balance': ['balance', 'остаток', 'egyenleg', 'saldo', 'closing balance', 'конечный остаток']
         }
@@ -73,7 +74,9 @@ class HeaderDetector:
             'koruna': [r'koruna'],
             'garpiz': [r'garpiz'],
             'twohills': [r'twohills'],
-            'mashreq': [r'mashreq']
+            'mashreq': [r'mashreq'],
+            'wio': [r'wio'],
+            'wise': [r'wise']
         }
 
     def detect_file_type(self, filename: str) -> str:
@@ -144,6 +147,7 @@ class HeaderDetector:
                     numeric_count += 1
 
         return numeric_count <= len(header) * 0.3
+
 
 # ==================== ФУНКЦИИ ПАРСИНГА ====================
 def read_file(file_content, file_name):
@@ -226,13 +230,11 @@ def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, descriptio
 
     original_str = amount_str
     
-    # Обработка странных форматов
     if amount_str.startswith('-+'):
         amount_str = '-' + amount_str[2:]
     if amount_str.startswith('+-'):
         amount_str = '-' + amount_str[2:]
 
-    # Если это колонка дебета (расхода) — сумма всегда отрицательная
     if is_debit_col:
         amount_str = re.sub(r'[^0-9\.,\-]', '', amount_str)
         amount_str = amount_str.replace(',', '.')
@@ -242,7 +244,6 @@ def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, descriptio
         except:
             return 0
 
-    # Если это колонка кредита (дохода) — сумма всегда положительная
     if is_credit_col:
         amount_str = re.sub(r'[^0-9\.,]', '', amount_str)
         amount_str = amount_str.replace(',', '.')
@@ -252,18 +253,14 @@ def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, descriptio
         except:
             return 0
 
-    # Общая колонка суммы — определяем знак по наличию минуса в исходной строке
-    # Убираем валюту и пробелы
     amount_str = re.sub(r'[A-Z]{3}$', '', amount_str.strip())
     amount_str = amount_str.replace(',', '.').replace(' ', '')
     
-    # Определяем знак по наличию минуса в исходной строке
-    has_minus = '-' in original_str
+    has_minus = amount_str.startswith('-')
     
-    # Дополнительная проверка: если в описании есть "To", "Fee" или это TRANSFER с получателем — это расход
     desc_lower = description.lower()
     if not has_minus:
-        if 'to ' in desc_lower or 'fee' in desc_lower or 'transfer' in desc_lower:
+        if any(x in desc_lower for x in ['fee', 'charge', 'комиссия', 'tax', 'налог', 'to ', 'transfer to']):
             has_minus = True
     
     amount_str = re.sub(r'[^0-9\.\-]', '', amount_str)
@@ -279,36 +276,405 @@ def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, descriptio
     except:
         return 0
 
+
+# ==================== ОПРЕДЕЛЕНИЕ СУБНАПРАВЛЕНИЯ ====================
+def get_direction_and_subdirection(file_name, description, payer=""):
+    file_lower = file_name.lower()
+    desc_lower = description.lower()
+    payer_lower = payer.lower()
+
+    # LATVIA
+    if any(x in desc_lower for x in ['antonijas', 'an14']):
+        return 'Latvia', 'AN14 Антониас 14 (дом + парковка)'
+    if any(x in desc_lower for x in ['caka', 'ac89', 'čaka']):
+        return 'Latvia', 'AC89 Чака 89 (дом + парковка)'
+    if any(x in desc_lower for x in ['matisa', 'm81']):
+        return 'Latvia', 'M81 - Matisa 81'
+    if any(x in desc_lower for x in ['brīvības 117', 'b117']):
+        return 'Latvia', 'B117 Бривибас, 117'
+    if any(x in desc_lower for x in ['brīvības 78', 'b78']):
+        return 'Latvia', 'B78 Бривибас, 78'
+    if any(x in desc_lower for x in ['gertrudes', 'g77']):
+        return 'Latvia', 'G77 Гертрудес, 77'
+    if any(x in desc_lower for x in ['valdemara', 'v22']):
+        return 'Latvia', 'V22 К. Валдемара 22'
+    if any(x in desc_lower for x in ['mucenieku', 'mu3']):
+        return 'Latvia', 'MU3 - Mucenieku 3 - 4'
+    if any(x in desc_lower for x in ['dzirnavu', 'ds1']):
+        return 'Latvia', 'DS1 Дзирнаву, 1'
+    if any(x in desc_lower for x in ['cesu', 'c23']):
+        return 'Latvia', 'C23 Цесу, 23'
+    if any(x in desc_lower for x in ['skunu', 'sk3']):
+        return 'Latvia', 'SK3-Skunju 3'
+    if any(x in desc_lower for x in ['deglava', 'd4']):
+        return 'Latvia', 'D4 Парковка-Deglava4'
+    if any(x in desc_lower for x in ['hospitalu', 'h5']):
+        return 'Latvia', 'H5 Хоспиталю'
+    if any(x in desc_lower for x in ['bruninieku', 'brn']):
+        return 'Latvia', 'BRN_Brunieku'
+    if any(x in desc_lower for x in ['ac87', 'caka 87']):
+        return 'Latvia', 'AC87 Гараж Чака'
+
+    # EUROPE
+    if any(x in file_lower for x in ['budapest', 'f6']) or 'yulia galvin' in desc_lower:
+        return 'Europe', 'F6 Помещение в доме Будапешт'
+    if any(x in file_lower for x in ['dzibik', 'dz1']) or 'bilych nadiia' in desc_lower:
+        return 'Europe', 'DZ1_Dzibik1'
+    if 'bastet' in desc_lower or 'j91' in desc_lower:
+        return 'Europe', 'J91 Ялтская - Помещение маленькое'
+    if any(x in desc_lower for x in ['masaryka', 'tgm45', 'bagel lounge']):
+        return 'Europe', 'TGM45 Масарика - Bagel Lounge'
+    if any(x in desc_lower for x in ['otovice', 'komplekt', 'ot1']):
+        return 'Europe', 'OT1_Otovice Участок Свалка'
+    if any(x in file_lower for x in ['twohills', 'molly']) or 'mol' in desc_lower:
+        return 'Europe', 'MOL - Офис Molly'
+    if any(x in file_lower for x in ['sveciy', 'vilnus']):
+        return 'Europe', 'LT_Vilnus'
+    if 'garpiz' in file_lower or 'tgm20' in desc_lower:
+        return 'Europe', 'TGM20-Masaryka20'
+
+    # EAST
+    if any(x in file_lower for x in ['pasha', 'kapital', 'bunda']):
+        if any(x in desc_lower for x in ['nomiqa', 'bnq', 'dnq']):
+            return 'Nomiqa', 'BNQ_BAKU-Nomiqa'
+        if any(x in desc_lower for x in ['icheri', 'bis', 'baku']):
+            return 'East-Восток', 'BIS - Baku, Icheri Sheher 1,2'
+        return 'East-Восток', 'UKA - UK_AZ-Аренда'
+
+    # NOMIQA
+    if 'mashreq' in file_lower or 'wio' in file_lower or 'nomiqa' in desc_lower:
+        if any(x in desc_lower for x in ['dubai', 'uae', 'dnq']):
+            return 'Nomiqa', 'DNQ_Dubai-Nomiqa'
+        return 'Nomiqa', 'BNQ_BAKU-Nomiqa'
+
+    # UNELMA
+    if 'unelma' in file_lower:
+        return 'Unelma', 'UK_Unelma'
+
+    # ОТДЕЛЬНЫЙ БИЗНЕС
+    if any(x in desc_lower for x in ['jl/nf', 'jl/zp', 'отдельный бизнес', 'в ожидании возмещения']):
+        return 'Отдельный бизнес', ''
+
+    return 'UK Estate', ''
+
+
+# ==================== ОПРЕДЕЛЕНИЕ СТАТЬИ ====================
+def get_article(description, amount, file_name):
+    desc_lower = description.lower()
+    file_lower = file_name.lower()
+
+    # ========== РАСХОДЫ ==========
+    if amount < 0:
+        # 1.2.17 РКО
+        if any(kw in desc_lower for kw in [
+            'комиссия', 'commission', 'fee', 'charge', 'maintenance', 'rko', 'subscription',
+            'atm withdrawal', 'плата за обслуживание', 'service package', 'számlakivonat díja',
+            'netbankár monthly fee', 'conversion fee', 'charge for', 'bank charge',
+            'pasha bank charge', 'monthly fee', 'account maintenance', 'card fee',
+            'banking fee', 'transaction fee', 'service charge', 'tariff', 'тариф',
+            'revolut business fee', 'grow plan fee', 'expenses app charge',
+            'conversion fee', 'foreign exchange transaction fee', 'fee for'
+        ]):
+            return '1.2.17 РКО'
+
+        # 1.2.15.1 Зарплата
+        if any(kw in desc_lower for kw in [
+            'зарплат', 'salary', 'darba alga', 'algas izmaksa', 'darba algas izmaksa',
+            'wage', 'payroll', 'alga', 'зарплата', 'зарплату', 'algas', 'salary amount'
+        ]):
+            return '1.2.15.1 Зарплата'
+
+        # 1.2.15.2 Налоги на ФОТ
+        if any(kw in desc_lower for kw in [
+            'nodokļu nomaksa', 'vid', 'budžets', 'налог', 'valsts budžets',
+            'nodokļu', 'darba devēja', 'nodoku nomaksa', 'state revenue service',
+            'social tax', 'социальный налог', 'подоходный налог', 'income tax',
+            'dsmf', 'государственные сборы'
+        ]):
+            return '1.2.15.2 Налоги на ФОТ'
+
+        # 1.2.16.3 НДС
+        if any(kw in desc_lower for kw in [
+            'value added tax', 'vat', 'ндс', 'pvn', 'output tax', 'pvn nodoklis',
+            'pvns', 'н.д.с.', 'добавленная стоимость'
+        ]):
+            return '1.2.16.3 НДС'
+
+        # 1.2.16.1 Налог на недвижимость
+        if any(kw in desc_lower for kw in [
+            'nekustamā īpašuma nodoklis', 'налог на недвижимость', 'pašvaldība',
+            'property tax', 'real estate tax', 'имущественный налог'
+        ]):
+            return '1.2.16.1 Налог на недвижимость'
+
+        # 1.2.10.5 Электричество
+        if any(kw in desc_lower for kw in [
+            'latvenergo', 'elektri', 'электричеств', 'electricity', 'power',
+            'elektrība', 'электроэнергия', 'light', 'освещение'
+        ]):
+            return '1.2.10.5 Электричество'
+
+        # 1.2.10.3 Вода
+        if any(kw in desc_lower for kw in [
+            'rigas udens', 'ūdens', 'вода', 'water', 'woda', 'víz',
+            'водоснабжение', 'водопровод'
+        ]):
+            return '1.2.10.3 Вода'
+
+        # 1.2.10.2 Газ
+        if any(kw in desc_lower for kw in [
+            'gāze', 'газ', 'gas', 'heating', 'отопление', 'тепло',
+            'gáz', 'газовое', 'газоснабжение'
+        ]):
+            return '1.2.10.2 Газ'
+
+        # 1.2.10.1 Мусор
+        if any(kw in desc_lower for kw in [
+            'atkritumi', 'мусор', 'eco baltia', 'clean r', 'waste', 'garbage',
+            'вывоз мусора', 'утилизация', 'trash', 'rubbish'
+        ]):
+            return '1.2.10.1 Мусор'
+
+        # 1.2.10.6 Коммунальные УК дома
+        if any(kw in desc_lower for kw in [
+            'rigas namu pārvaldnieks', 'latvijas namsaimnieks', 'biedrība',
+            'dzīvokļu īpašnieku', 'apartment owners', 'management fee',
+            'управляющая компания', 'ук', 'house management', 'condominium'
+        ]):
+            return '1.2.10.6 Коммунальные УК дома'
+
+        # 1.2.9.1 Связь, интернет, TV
+        if any(kw in desc_lower for kw in [
+            'tele2', 'bite', 'tet', 'internet', 'связь', 'telenet', 'wifi', 'broadband',
+            'телефон', 'phone', 'мобильная связь', 'mobile', 'телевидение', 'tv',
+            'телеком', 'telecom', 'связь и интернет'
+        ]):
+            return '1.2.9.1 Связь, интернет, TV'
+
+        # 1.2.9.3 IT сервисы
+        if any(kw in desc_lower for kw in [
+            'google one', 'lovable', 'openai', 'chatgpt', 'browsec', 'adobe',
+            'albato', 'slack', 'it сервисы', 'software', 'subscription',
+            'microsoft', 'office 365', 'cloud', 'хостинг', 'hosting', 'domain',
+            'домен', 'сервер', 'server', 'vps', 'vpn', 'антивирус', 'antivirus',
+            'asana', 'zapier'
+        ]):
+            return '1.2.9.3 IT сервисы'
+
+        # 1.2.3 Оплата рекламных систем
+        if any(kw in desc_lower for kw in [
+            'facebook', 'facbk', 'tiktok', 'ads', 'marketing', 'реклам', 'advertising',
+            'instagram', 'google ads', 'fb ads', 'яндекс директ', 'yandex direct',
+            'контекстная реклама', 'contextual advertising', 'promotion', 'продвижение',
+            'propertyfinder'
+        ]):
+            return '1.2.3 Оплата рекламных систем (бюджет)'
+
+        # 1.2.2 Командировочные расходы
+        if any(kw in desc_lower for kw in [
+            'flydubai', 'taxi', 'flixbus', 'bolt', 'uber', 'flix', 'careem',
+            'travel', 'transport', 'hotel', 'accommodation', 'авиабилеты',
+            'билеты', 'tickets', 'проживание', 'питание', 'meal', 'food',
+            'командировка', 'business trip', 'транспортные расходы', 'dubai taxi',
+            'cars taxi', 'enoc', 'emarat'
+        ]):
+            return '1.2.2 Командировочные расходы'
+
+        # 1.2.8.1 Обслуживание объектов
+        if any(kw in desc_lower for kw in [
+            'apmaksa par rēķinu', 'обслуживание', 'ремонт', 'lifti', 'taipans',
+            'sidorans', 'komval', 'rīgas lifti', 'maintenance', 'repair',
+            'уборка', 'cleaning', 'клининг', 'сантехник', 'электрик',
+            'plumber', 'electrician', 'техническое обслуживание'
+        ]):
+            return '1.2.8.1 Обслуживание объектов (бытовые вопросы, без ремонта)'
+
+        # 1.2.8.2 Страхование
+        if any(kw in desc_lower for kw in [
+            'balta', 'страхование', 'insurance', 'insure', 'страховка',
+            'страховой взнос', 'insurance premium'
+        ]):
+            return '1.2.8.2 Страхование'
+
+        # 1.2.12 Бухгалтер
+        if any(kw in desc_lower for kw in [
+            'lubova loseva', 'loseva', 'бухгалтер', 'accounting', 'bookkeeping',
+            'бухгалтерские услуги', 'бухгалтерия', 'accountant', 'audit', 'аудит'
+        ]):
+            return '1.2.12 Бухгалтер'
+
+        # 2.2.7 Расходы по приобретению недвижимости
+        if any(kw in desc_lower for kw in [
+            'pirkuma liguma', 'приобретение недвижимости', 'аванс покупной стоимости',
+            'property purchase', 'real estate purchase', 'покупка недвижимости',
+            'advance payment', 'авансовый платеж', 'rezervacni smlouva'
+        ]):
+            return '2.2.7 Расходы по приобретению недвижимости'
+
+        # 1.2.27 Расходы в ожидании возмещения
+        if any(kw in desc_lower for kw in [
+            'jl/nf', 'jl/zp', 'расходы в ожидании', 'other business',
+            'временные расходы', 'temporary expenses'
+        ]):
+            return '1.2.27 Расходы в ожидании возмещения ЗП по другим бизнесам'
+
+        # 1.2.37 Возврат гарантийных депозитов
+        if any(kw in desc_lower for kw in [
+            'deposit return', 'возврат депозита', 'depozīta atgriešana',
+            'гарантийный депозит', 'security deposit refund'
+        ]):
+            return '1.2.37 Возврат гарантийных депозитов'
+
+        # 1.2.21.1 Аренда офиса
+        if any(kw in desc_lower for kw in [
+            'office rent', 'аренда офиса', 'icare odәnisi', 'rent payment'
+        ]) and 'baku' in desc_lower:
+            return '1.2.21.1 Аренда офиса'
+
+        # 1.2.21.2 Административные офисные расходы
+        if any(kw in desc_lower for kw in [
+            'office', 'офис', 'stationery', 'канцелярия', 'post office', 'ceska posta'
+        ]):
+            return '1.2.21.2 Административные офисные расходы'
+
+        # 1.2.24 Расходы по отдельному бизнесу
+        if any(kw in desc_lower for kw in [
+            'vzr div', 'nav', 'personal income', 'social security', 'social contribution',
+            'giro payment', 'transaction fee part'
+        ]):
+            return '1.2.24 Расходы по отдельному бизнесу'
+
+        # 1.2.28 Расходы, произведённые за другие компании группы
+        if any(kw in desc_lower for kw in [
+            'относится к александру', 'за другие компании', 'revelton'
+        ]):
+            return '1.2.28 Расходы, произведённые за другие компании группы (к возмещению)'
+
+        # 1.2.33 Непредвиденные расходы
+        if 'kompensācija' in desc_lower:
+            return '1.2.33 Непредвиденные расходы'
+
+        # 1.2.34 Вознаграждение инвестора
+        if any(kw in desc_lower for kw in ['вознаграждение инвестора', 'investor reward']):
+            return '1.2.34 Вознаграждение инвестора'
+
+        # 1.2.38 НДС в составе комиссий банка
+        if any(kw in desc_lower for kw in ['value added tax', 'vat', 'ндс']) and 'commission' in desc_lower:
+            return '1.2.38 НДС в составе комиссий банка'
+
+        # Перевод между счетами
+        if any(kw in desc_lower for kw in [
+            'currency exchange', 'конвертация', 'internal payment',
+            'transfer to own account', 'между своими счетами', 'own transfer',
+            'внутренний перевод', 'межбанковский перевод', 'bank transfer',
+            'перевод между счетами'
+        ]):
+            return 'Перевод между счетами'
+
+        return '1.2.8.1 Обслуживание объектов (бытовые вопросы, без ремонта)'
+
+    # ========== ДОХОДЫ ==========
+    else:
+        # 1.1.1.2 Поступления систем бронирования
+        if any(kw in desc_lower for kw in ['airbnb', 'booking.com', 'booking b.v.']):
+            return '1.1.1.2 Поступления систем бронирования (Airbnb, Booking и пр.)'
+
+        # 1.1.1.4 Получение гарантийного депозита
+        if any(kw in desc_lower for kw in ['depozits', 'депозит', 'deposit', 'guarantee']):
+            return '1.1.1.4 Получение гарантийного депозита'
+
+        # 1.1.1.5 Возмещения
+        if any(kw in desc_lower for kw in ['atlıdzība', 'возмещение', 'compensation']):
+            return '1.1.1.5 Возмещения'
+
+        # 1.1.4.1 Комиссия за продажу недвижимости
+        if any(kw in desc_lower for kw in [
+            'commission', 'agency commissions', 'incoming swift payment',
+            'marketing and advertisement', 'consultancy fees', 'real estate commission',
+            'agent commission', 'комиссия за продажу'
+        ]):
+            return '1.1.4.1 Комиссия за продажу недвижимости'
+
+        # 3.1.3 Получение внутригруппового займа
+        if any(kw in desc_lower for kw in [
+            'loan', 'займ', 'baltic solutions', 'payment acc loan agreement',
+            'loan payment', 'loan repayment'
+        ]):
+            return '3.1.3 Получение внутригруппового займа'
+
+        # 3.1.4 Возврат выданного внутригруппового займа
+        if any(kw in desc_lower for kw in [
+            'loan return', 'возврат займа', 'partial repayment', 'repayment',
+            'partial repayment of the loan'
+        ]):
+            return '3.1.4 Возврат выданного внутригруппового займа'
+
+        # 3.1.1 Ввод средств
+        if any(kw in desc_lower for kw in [
+            'transfer to own account', 'между своими счетами', 'own transfer', 'ввод средств'
+        ]):
+            return '3.1.1 Ввод средств'
+
+        # 1.1.2.3 Компенсация по коммунальным расходам
+        if any(kw in desc_lower for kw in [
+            'komunālie', 'utilities', 'компенсац', 'возмещени', 'utility',
+            'communal', 'heating cost', 'water cost'
+        ]):
+            return '1.1.2.3 Компенсация по коммунальным расходам'
+
+        # 1.1.2.4 Прочие мелкие поступления
+        if any(kw in desc_lower for kw in [
+            'кэшбэк', 'cashback', 'u rok do', 'interest', 'проценты', 'урок'
+        ]):
+            return '1.1.2.4 Прочие мелкие поступления'
+
+        # 1.1.2.2 Возвраты от поставщиков
+        if any(kw in desc_lower for kw in [
+            'return on request', 'возврат', 'refund', 'reversal', 'vat reversal'
+        ]):
+            return '1.1.2.2 Возвраты от поставщиков'
+
+        # 1.1.1.1 Арендная плата (наличные)
+        if any(kw in desc_lower for kw in ['наличные', 'cash']) and any(x in desc_lower for x in ['rent', 'аренд']):
+            return '1.1.1.1 Арендная плата (наличные)'
+
+        # 1.1.1.3 Арендная плата (счёт)
+        if any(kw in desc_lower for kw in [
+            'арендн', 'rent', 'money added', 'ire', 'dzivoklis', 'from',
+            'credit of sepa', 'topup', 'received', 'incoming payment',
+            'partial repayment', 'payment acc loan agreement'
+        ]):
+            return '1.1.1.3 Арендная плата (счёт)'
+
+        return '1.1.1.3 Арендная плата (счёт)'
+
+
+# ==================== РАЗБИВКА АРЕНДНЫХ ПЛАТЕЖЕЙ ====================
 def should_split_rental_payment(description, amount, file_name):
-    """Определяет, нужно ли разбивать платёж на аренду и компенсацию КУ"""
-    # Только положительные суммы могут быть арендными платежами
     if amount <= 0:
         return False
     
     desc_lower = description.lower()
     file_lower = file_name.lower()
 
-    # Только для Paysera, Revolut и Industra
     if not any(x in file_lower for x in ['paysera', 'revolut', 'industra']):
         return False
 
-    # Исключаем явно не арендные платежи
     exclude_keywords = [
         'booking.com', 'airbnb', 'loan', 'deposit', 'депозит', 
         'commission', 'комиссия', 'fee', 'charge', 'tax', 'налог',
         'salary', 'зарплата', 'refund', 'возврат', 'interest', 'проценты',
         'valsts budžets', 'budžets', 'vid', 'rigas valstpilsētas pašvaldība',
         'latvenergo', 'rigas udens', 'eco baltia', 'bite', 'tele2', 'tet',
-        'rīgas lifti', 'taipans', 'sidorans', 'komval'
+        'rīgas lifti', 'taipans', 'sidorans', 'komval', 'apmaksa par'
     ]
     for kw in exclude_keywords:
         if kw in desc_lower:
             return False
 
-    # Ключевые слова для арендных платежей
     rent_keywords = [
         'rent', 'аренд', 'caka', 'antonijas', 'matisa', 'valdemara', 
-        'for rent', 'dzivoklis', 'apartment', 'flat',
+        'for rent', 'dzivoklis', 'apartment', 'flat', 'ire',
         'money added', 'topup', 'from', 'received', 'incoming',
         'brīvības', 'gertrudes', 'mucenieku', 'dzirnavu', 'cesu',
         'skunu', 'deglava', 'hospitalu', 'bruninieku'
@@ -323,339 +689,30 @@ def should_split_rental_payment(description, amount, file_name):
     return has_rent_keyword or has_object_code
 
 def calculate_split(amount, file_name, description):
-    """Рассчитывает разбивку на аренду и компенсацию КУ"""
     desc_lower = description.lower()
     
-    if 'caka' in desc_lower or 'ac89' in desc_lower or 'čaka' in desc_lower:
+    if any(x in desc_lower for x in ['caka', 'ac89', 'čaka']):
         return round(amount * 0.836, 2), round(amount * 0.164, 2)
     
-    if 'antonijas' in desc_lower or 'an14' in desc_lower:
+    if any(x in desc_lower for x in ['antonijas', 'an14']):
         return round(amount * 0.8, 2), round(amount * 0.2, 2)
     
-    if 'matisa' in desc_lower or 'm81' in desc_lower:
+    if any(x in desc_lower for x in ['matisa', 'm81']):
         return round(amount * 0.7, 2), round(amount * 0.3, 2)
     
-    if 'brīvības 117' in desc_lower or 'b117' in desc_lower:
+    if any(x in desc_lower for x in ['brīvības 117', 'b117']):
         return round(amount * 0.85, 2), round(amount * 0.15, 2)
     
-    if 'valdemara' in desc_lower or 'v22' in desc_lower:
-        return round(amount * 0.8, 2), round(amount * 0.2, 2)
+    if any(x in desc_lower for x in ['valdemara', 'v22']):
+        return round(amount * 0.55, 2), round(amount * 0.45, 2)
+    
+    if any(x in desc_lower for x in ['gertrudes', 'g77']):
+        return round(amount * 0.85, 2), round(amount * 0.15, 2)
     
     return round(amount * 0.85, 2), round(amount * 0.15, 2)
 
-def get_direction_and_subdirection(file_name, description):
-    """Определяет направление и субнаправление"""
-    file_lower = file_name.lower()
-    desc_lower = description.lower()
 
-    # LATVIA
-    if 'antonijas' in desc_lower or 'an14' in desc_lower:
-        return 'Latvia', 'AN14 Антониас 14 (дом + парковка)'
-    if 'caka' in desc_lower or 'ac89' in desc_lower or 'čaka' in desc_lower:
-        return 'Latvia', 'AC89 Чака 89 (дом + парковка)'
-    if 'matisa' in desc_lower or 'm81' in desc_lower:
-        return 'Latvia', 'M81 - Matisa 81'
-    if 'brīvības 117' in desc_lower or 'b117' in desc_lower:
-        return 'Latvia', 'B117 Бривибас, 117'
-    if 'brīvības 78' in desc_lower or 'b78' in desc_lower:
-        return 'Latvia', 'B78 Бривибас, 78'
-    if 'gertrudes' in desc_lower or 'g77' in desc_lower:
-        return 'Latvia', 'G77 Гертрудес, 77'
-    if 'valdemara' in desc_lower or 'v22' in desc_lower:
-        return 'Latvia', 'V22 К. Валдемара 22'
-    if 'mucenieku' in desc_lower or 'mu3' in desc_lower:
-        return 'Latvia', 'MU3 - Mucenieku 3 - 4'
-    if 'dzirnavu' in desc_lower or 'ds1' in desc_lower:
-        return 'Latvia', 'DS1 Дзирнаву, 1'
-    if 'cesu' in desc_lower or 'c23' in desc_lower:
-        return 'Latvia', 'C23 Цесу, 23'
-    if 'skunu' in desc_lower or 'sk3' in desc_lower:
-        return 'Latvia', 'SK3-Skunju 3'
-    if 'deglava' in desc_lower or 'd4' in desc_lower:
-        return 'Latvia', 'D4 Парковка-Deglava4'
-    if 'hospitalu' in desc_lower or 'h5' in desc_lower:
-        return 'Latvia', 'H5 Хоспиталю'
-    if 'bruninieku' in desc_lower or 'brn' in desc_lower:
-        return 'Latvia', 'BRN_Brunieku'
-    if 'ac87' in desc_lower or 'caka 87' in desc_lower:
-        return 'Latvia', 'AC87 Гараж Чака'
-
-    # EUROPE
-    if 'budapest' in file_lower or 'yulia galvin' in desc_lower or 'f6' in desc_lower:
-        return 'Europe', 'F6 Помещение в доме Будапешт'
-    if 'dzibik' in file_lower or 'bilych nadiia' in desc_lower or 'dz1' in desc_lower:
-        return 'Europe', 'DZ1_Dzibik1'
-    if 'bastet' in desc_lower or 'j91' in desc_lower:
-        return 'Europe', 'J91 Ялтская - Помещение маленькое'
-    if 'masaryka' in desc_lower or 'tgm45' in desc_lower or 'bagel lounge' in desc_lower:
-        return 'Europe', 'TGM45 Масарика - Bagel Lounge'
-    if 'otovice' in desc_lower or 'komplekt' in desc_lower or 'ot1' in desc_lower:
-        return 'Europe', 'OT1_Otovice Участок Свалка'
-    if 'twohills' in file_lower or 'molly' in desc_lower or 'mol' in desc_lower:
-        return 'Europe', 'MOL - Офис Molly'
-    if 'sveciy' in file_lower or 'vilnus' in desc_lower or 'lt' in desc_lower:
-        return 'Europe', 'LT_Vilnus'
-    if 'garpiz' in file_lower or 'tgm20' in desc_lower:
-        return 'Europe', 'TGM20-Masaryka20'
-
-    # EAST
-    if 'pasha' in file_lower or 'kapital' in file_lower or 'bunda' in file_lower:
-        if 'nomiqa' in desc_lower or 'bnq' in desc_lower or 'dnq' in desc_lower:
-            return 'Nomiqa', 'BNQ_BAKU-Nomiqa'
-        elif 'icheri' in desc_lower or 'bis' in desc_lower or 'baku' in desc_lower:
-            return 'East-Восток', 'BIS - Baku, Icheri Sheher 1,2'
-        else:
-            return 'East-Восток', 'UKA - UK_AZ-Аренда'
-
-    # NOMIQA
-    if 'mashreq' in file_lower or 'nomiqa' in file_lower:
-        if 'dubai' in desc_lower or 'uae' in desc_lower or 'dnq' in desc_lower:
-            return 'Nomiqa', 'DNQ_Dubai-Nomiqa'
-        return 'Nomiqa', 'BNQ_BAKU-Nomiqa'
-
-    if 'unelma' in file_lower:
-        return 'Unelma', 'UK_Unelma'
-
-    return 'UK Estate', ''
-
-def get_article(description, amount, file_name):
-    """Определение статьи на основе описания и суммы"""
-    desc_lower = description.lower()
-    file_lower = file_name.lower()
-
-    # Если это перевод между счетами (внутренний)
-    if any(kw in desc_lower for kw in [
-        'currency exchange', 'конвертация', 'internal payment',
-        'transfer to own account', 'между своими счетами', 'own transfer',
-        'внутренний перевод', 'межбанковский перевод', 'bank transfer'
-    ]):
-        if amount < 0:
-            return 'Перевод между счетами', 'Расходы', 'Внутренний перевод'
-        else:
-            return 'Перевод между счетами', 'Доходы', 'Внутренний перевод'
-
-    if amount < 0:
-        # 1.2.17 РКО — банковские комиссии
-        if any(kw in desc_lower for kw in [
-            'комиссия', 'commission', 'fee', 'charge', 'maintenance', 'rko', 'subscription',
-            'atm withdrawal', 'плата за обслуживание', 'service package', 'számlakivonat díja',
-            'netbankár monthly fee', 'conversion fee', 'charge for', 'bank charge',
-            'pasha bank charge', 'fee for', 'monthly fee', 'account maintenance', 'card fee',
-            'banking fee', 'transaction fee', 'service charge', 'tariff', 'тариф',
-            'revolut business fee', 'grow plan fee', 'expenses app charge'
-        ]):
-            return '1.2.17 РКО', 'Расходы', 'Банковские комиссии'
-
-        # 1.2.15.1 Зарплата
-        if any(kw in desc_lower for kw in [
-            'зарплат', 'salary', 'darba alga', 'algas izmaksa', 'darba algas izmaksa',
-            'wage', 'payroll', 'alga', 'зарплата', 'зарплату', 'algas'
-        ]):
-            return '1.2.15.1 Зарплата', 'Расходы', 'Зарплата'
-
-        # 1.2.15.2 Налоги на ФОТ
-        if any(kw in desc_lower for kw in [
-            'nodokļu nomaksa', 'vid', 'budžets', 'налог', 'valsts budžets',
-            'nodokļu', 'darba devēja', 'nodoku nomaksa', 'state revenue service',
-            'social tax', 'социальный налог', 'подоходный налог', 'income tax'
-        ]):
-            return '1.2.15.2 Налоги на ФОТ', 'Расходы', 'Налоги на ФОТ'
-
-        # 1.2.16.3 НДС
-        if any(kw in desc_lower for kw in [
-            'value added tax', 'vat', 'ндс', 'pvn', 'output tax', 'pvn nodoklis',
-            'pvns', 'н.д.с.', 'добавленная стоимость'
-        ]):
-            return '1.2.16.3 НДС', 'Расходы', 'НДС'
-
-        # 1.2.16.1 Налог на недвижимость
-        if any(kw in desc_lower for kw in [
-            'nekustamā īpašuma nodoklis', 'налог на недвижимость', 'pašvaldība',
-            'property tax', 'real estate tax', 'имущественный налог'
-        ]):
-            return '1.2.16.1 Налог на недвижимость', 'Расходы', 'Налог на недвижимость'
-
-        # 1.2.10.5 Электричество
-        if any(kw in desc_lower for kw in [
-            'latvenergo', 'elektri', 'электричеств', 'electricity', 'power',
-            'elektrība', 'электроэнергия', 'light', 'освещение'
-        ]):
-            return '1.2.10.5 Электричество', 'Расходы', 'Электричество'
-
-        # 1.2.10.3 Вода
-        if any(kw in desc_lower for kw in [
-            'rigas udens', 'ūdens', 'вода', 'water', 'woda', 'víz',
-            'водоснабжение', 'водопровод'
-        ]):
-            return '1.2.10.3 Вода', 'Расходы', 'Вода'
-
-        # 1.2.10.2 Газ
-        if any(kw in desc_lower for kw in [
-            'gāze', 'газ', 'gas', 'heating', 'отопление', 'тепло',
-            'gáz', 'газовое', 'газоснабжение'
-        ]):
-            return '1.2.10.2 Газ', 'Расходы', 'Газ'
-
-        # 1.2.10.1 Мусор
-        if any(kw in desc_lower for kw in [
-            'atkritumi', 'мусор', 'eco baltia', 'clean r', 'waste', 'garbage',
-            'вывоз мусора', 'утилизация', 'trash', 'rubbish'
-        ]):
-            return '1.2.10.1 Мусор', 'Расходы', 'Вывоз мусора'
-
-        # 1.2.10.6 Коммунальные УК дома
-        if any(kw in desc_lower for kw in [
-            'rigas namu pārvaldnieks', 'latvijas namsaimnieks', 'biedrība',
-            'dzīvokļu īpašnieku', 'apartment owners', 'management fee',
-            'управляющая компания', 'ук', 'house management', 'condominium'
-        ]):
-            return '1.2.10.6 Коммунальные УК дома', 'Расходы', 'Управляющая компания'
-
-        # 1.2.9.1 Связь, интернет, TV
-        if any(kw in desc_lower for kw in [
-            'tele2', 'bite', 'tet', 'internet', 'связь', 'telenet', 'wifi', 'broadband',
-            'телефон', 'phone', 'мобильная связь', 'mobile', 'телевидение', 'tv',
-            'телеком', 'telecom', 'связь и интернет'
-        ]):
-            return '1.2.9.1 Связь, интернет, TV', 'Расходы', 'Связь и интернет'
-
-        # 1.2.9.3 IT сервисы
-        if any(kw in desc_lower for kw in [
-            'google one', 'lovable', 'openai', 'chatgpt', 'browsec', 'adobe',
-            'albato', 'slack', 'it сервисы', 'software', 'subscription',
-            'microsoft', 'office 365', 'cloud', 'хостинг', 'hosting', 'domain',
-            'домен', 'сервер', 'server', 'vps', 'vpn', 'антивирус', 'antivirus'
-        ]):
-            return '1.2.9.3 IT сервисы', 'Расходы', 'IT сервисы'
-
-        # 1.2.3 Оплата рекламных систем
-        if any(kw in desc_lower for kw in [
-            'facebook', 'facbk', 'tiktok', 'ads', 'marketing', 'реклам', 'advertising',
-            'instagram', 'google ads', 'fb ads', 'яндекс директ', 'yandex direct',
-            'контекстная реклама', 'contextual advertising', 'promotion', 'продвижение'
-        ]):
-            return '1.2.3 Оплата рекламных систем (бюджет)', 'Расходы', 'Маркетинг'
-
-        # 1.2.2 Командировочные расходы
-        if any(kw in desc_lower for kw in [
-            'flydubai', 'taxi', 'flixbus', 'bolt', 'uber', 'flix', 'careem',
-            'travel', 'transport', 'hotel', 'accommodation', 'авиабилеты',
-            'билеты', 'tickets', 'проживание', 'питание', 'meal', 'food',
-            'командировка', 'business trip', 'транспортные расходы'
-        ]):
-            return '1.2.2 Командировочные расходы', 'Расходы', 'Командировки'
-
-        # 1.2.8.1 Обслуживание объектов
-        if any(kw in desc_lower for kw in [
-            'apmaksa par rēķinu', 'обслуживание', 'ремонт', 'lifti', 'taipans',
-            'sidorans', 'komval', 'rīgas lifti', 'maintenance', 'repair',
-            'уборка', 'cleaning', 'клининг', 'сантехник', 'электрик',
-            'plumber', 'electrician', 'техническое обслуживание'
-        ]):
-            return '1.2.8.1 Обслуживание объектов (бытовые вопросы, без ремонта)', 'Расходы', 'Обслуживание объектов'
-
-        # 1.2.8.2 Страхование
-        if any(kw in desc_lower for kw in [
-            'balta', 'страхование', 'insurance', 'insure', 'страховка',
-            'страховой взнос', 'insurance premium'
-        ]):
-            return '1.2.8.2 Страхование', 'Расходы', 'Страхование'
-
-        # 1.2.12 Бухгалтер
-        if any(kw in desc_lower for kw in [
-            'lubova loseva', 'loseva', 'бухгалтер', 'accounting', 'bookkeeping',
-            'бухгалтерские услуги', 'бухгалтерия', 'accountant', 'audit', 'аудит'
-        ]):
-            return '1.2.12 Бухгалтер', 'Расходы', 'Бухгалтерские услуги'
-
-        # 2.2.7 Расходы по приобретению недвижимости
-        if any(kw in desc_lower for kw in [
-            'pirkuma liguma', 'приобретение недвижимости', 'аванс покупной стоимости',
-            'property purchase', 'real estate purchase', 'покупка недвижимости',
-            'advance payment', 'авансовый платеж'
-        ]):
-            return '2.2.7 Расходы по приобретению недвижимости', 'Расходы', 'Покупка недвижимости'
-
-        # 1.2.27 Расходы в ожидании возмещения
-        if any(kw in desc_lower for kw in [
-            'jl/nf', 'jl/zp', 'расходы в ожидании', 'other business',
-            'временные расходы', 'temporary expenses'
-        ]):
-            return '1.2.27 Расходы в ожидании возмещения ЗП по другим бизнесам', 'Расходы', 'Прочие расходы'
-
-        # 1.2.37 Возврат гарантийных депозитов
-        if any(kw in desc_lower for kw in [
-            'deposit return', 'возврат депозита', 'depozīta atgriešana',
-            'гарантийный депозит', 'security deposit refund'
-        ]):
-            return '1.2.37 Возврат гарантийных депозитов', 'Расходы', 'Возврат депозитов'
-
-        # По умолчанию для расходов
-        return '1.2.8.1 Обслуживание объектов (бытовые вопросы, без ремонта)', 'Расходы', 'Обслуживание объектов'
-
-    else:
-        # Доходы
-        # 1.1.1.2 Поступления систем бронирования
-        if any(kw in desc_lower for kw in ['airbnb', 'booking.com', 'booking b.v.']):
-            return '1.1.1.2 Поступления систем бронирования (Airbnb, Booking и пр.)', 'Доходы', 'Краткосрочная аренда'
-
-        # 1.1.1.4 Получение гарантийного депозита
-        if any(kw in desc_lower for kw in ['depozits', 'депозит', 'deposit', 'guarantee']):
-            return '1.1.1.4 Получение гарантийного депозита', 'Доходы', 'Гарантийный депозит'
-
-        # 1.1.4.1 Комиссия за продажу недвижимости
-        if any(kw in desc_lower for kw in [
-            'commission', 'agency commissions', 'incoming swift payment',
-            'marketing and advertisement', 'consultancy fees', 'real estate commission'
-        ]):
-            return '1.1.4.1 Комиссия за продажу недвижимости', 'Доходы', 'Комиссия за продажу'
-
-        # 3.1.3 Получение внутригруппового займа
-        if any(kw in desc_lower for kw in [
-            'loan', 'займ', 'baltic solutions', 'payment acc loan agreement',
-            'loan payment', 'loan repayment'
-        ]):
-            return '3.1.3 Получение внутригруппового займа', 'Доходы', 'Внутригрупповой займ'
-
-        # 3.1.4 Возврат выданного внутригруппового займа
-        if any(kw in desc_lower for kw in [
-            'loan return', 'возврат займа', 'partial repayment', 'repayment'
-        ]):
-            return '3.1.4 Возврат выданного внутригруппового займа', 'Доходы', 'Возврат займа'
-
-        # 3.1.1 Ввод средств
-        if any(kw in desc_lower for kw in [
-            'transfer to own account', 'между своими счетами', 'own transfer'
-        ]):
-            return '3.1.1 Ввод средств', 'Доходы', 'Ввод средств'
-
-        # 1.1.2.3 Компенсация по коммунальным расходам
-        if any(kw in desc_lower for kw in [
-            'komunālie', 'utilities', 'компенсац', 'возмещени', 'utility',
-            'communal', 'heating cost', 'water cost'
-        ]):
-            return '1.1.2.3 Компенсация по коммунальным расходам', 'Доходы', 'Компенсация коммунальных'
-
-        # 1.1.2.4 Прочие мелкие поступления
-        if any(kw in desc_lower for kw in [
-            'кэшбэк', 'cashback', 'u rok do', 'interest', 'проценты'
-        ]):
-            return '1.1.2.4 Прочие мелкие поступления', 'Доходы', 'Прочие доходы'
-
-        # 1.1.2.2 Возвраты от поставщиков
-        if any(kw in desc_lower for kw in [
-            'return on request', 'возврат', 'refund', 'reversal', 'vat reversal'
-        ]):
-            return '1.1.2.2 Возвраты от поставщиков', 'Доходы', 'Возвраты от поставщиков'
-
-        # 1.1.1.1 Арендная плата (наличные)
-        if any(kw in desc_lower for kw in ['наличные', 'cash']) and 'rent' in desc_lower:
-            return '1.1.1.1 Арендная плата (наличные)', 'Доходы', 'Арендная плата наличные'
-
-        # 1.1.1.3 Арендная плата (счёт) — по умолчанию для доходов
-        return '1.1.1.3 Арендная плата (счёт)', 'Доходы', 'Арендная плата'
-
-
+# ==================== ОСНОВНАЯ ФУНКЦИЯ ПАРСИНГА ====================
 def parse_file(file_content, file_name):
     df = read_file(file_content, file_name)
     if df is None or df.empty:
@@ -697,27 +754,31 @@ def parse_file(file_content, file_name):
     credit_col = None
     desc_col = None
     type_col = None
+    payer_col = None
     
     for col in df.columns:
         col_lower = str(col).lower()
-        if any(kw in col_lower for kw in ['date', 'дата', 'datum', 'booking', 'posting', 'value', 'started', 'value date', 'date completed']):
+        if any(kw in col_lower for kw in ['date', 'дата', 'datum', 'booking', 'posting', 'value', 'started', 'value date', 'date completed', 'дата транзакции']):
             if date_col is None:
                 date_col = col
-        if any(kw in col_lower for kw in ['amount', 'сумма', 'total amount', 'orig amount', 'amount']):
+        if any(kw in col_lower for kw in ['amount', 'сумма', 'total amount', 'orig amount', 'payment amount']):
             if amount_col is None:
                 amount_col = col
-        if any(kw in col_lower for kw in ['debit', 'дебет', 'расход', 'withdrawal', 'debet']):
+        if any(kw in col_lower for kw in ['debit', 'дебет', 'расход', 'withdrawal', 'debet', 'расход']):
             if debit_col is None:
                 debit_col = col
-        if any(kw in col_lower for kw in ['credit', 'кредит', 'доход', 'deposit']):
+        if any(kw in col_lower for kw in ['credit', 'кредит', 'доход', 'deposit', 'доход']):
             if credit_col is None:
                 credit_col = col
-        if any(kw in col_lower for kw in ['description', 'описание', 'details', 'назначение', 'narrative', 'information', 'info', 'transaction details', 'purpose of payment', 'description']):
+        if any(kw in col_lower for kw in ['description', 'описание', 'details', 'назначение', 'narrative', 'information', 'info', 'transaction details', 'purpose of payment', 'description', 'назначение платежа', 'информация']):
             if desc_col is None:
                 desc_col = col
         if any(kw in col_lower for kw in ['type', 'тип', 'transaction type']):
             if type_col is None:
                 type_col = col
+        if any(kw in col_lower for kw in ['payer', 'плательщик', 'получатель', 'beneficiary', 'recipient']):
+            if payer_col is None:
+                payer_col = col
     
     if date_col is None and len(df.columns) > 0:
         date_col = df.columns[0]
@@ -728,29 +789,32 @@ def parse_file(file_content, file_name):
         try:
             row = df.iloc[idx]
             
-            # Сначала собираем описание, чтобы использовать его для определения знака суммы
             description = ''
             if desc_col in row:
                 desc_val = row[desc_col]
                 if pd.notna(desc_val):
                     description = str(desc_val)
             
-            # Добавляем тип операции в описание для контекста
             if type_col in row:
                 type_val = row[type_col]
                 if pd.notna(type_val) and str(type_val).strip():
                     description = f"{str(type_val)} {description}"
             
-            # Добавляем другие колонки в описание
+            payer = ''
+            if payer_col in row:
+                payer_val = row[payer_col]
+                if pd.notna(payer_val) and str(payer_val).strip():
+                    payer = str(payer_val)
+                    description = f"{description} {payer}"
+            
             for col in df.columns:
-                if col not in [date_col, amount_col, debit_col, credit_col, desc_col, type_col]:
+                if col not in [date_col, amount_col, debit_col, credit_col, desc_col, type_col, payer_col]:
                     val = row[col]
                     if pd.notna(val) and str(val).strip() and str(val) != 'nan':
                         description += ' ' + str(val)
             
             description = description.strip()
             
-            # Дата
             date = ''
             if date_col in row:
                 date_val = row[date_col]
@@ -759,16 +823,13 @@ def parse_file(file_content, file_name):
             if not date:
                 continue
             
-            # Сумма — теперь передаём описание для контекста
             amount = 0
             
-            # Сначала пробуем колонку Amount (она есть в Revolut)
             if amount_col is not None:
                 amount_val = row[amount_col] if amount_col in row else None
                 if pd.notna(amount_val) and str(amount_val).strip() and str(amount_val).strip() != '':
                     amount = parse_amount(amount_val, description=description)
             
-            # Если не нашли через Amount, пробуем Debit/Credit
             if amount == 0 and debit_col is not None and credit_col is not None:
                 debit_val = row[debit_col] if debit_col in row else None
                 credit_val = row[credit_col] if credit_col in row else None
@@ -782,15 +843,15 @@ def parse_file(file_content, file_name):
                 continue
             
             currency = 'EUR'
-            if 'CZK' in file_lower or 'czk' in str(df.columns).lower() or 'czk' in description.lower():
+            if any(x in file_lower for x in ['czk', 'czech']) or 'CZK' in description:
                 currency = 'CZK'
             elif 'HUF' in file_lower:
                 currency = 'HUF'
             elif 'RUB' in file_lower:
                 currency = 'RUB'
-            elif 'AED' in file_lower:
+            elif any(x in file_lower for x in ['aed', 'dirham']):
                 currency = 'AED'
-            elif 'AZN' in file_lower:
+            elif any(x in file_lower for x in ['azn', 'manat']):
                 currency = 'AZN'
             
             account_name = file_name.replace('.csv', '').replace('.xlsx', '').replace('.xls', '')
@@ -799,8 +860,8 @@ def parse_file(file_content, file_name):
                 rent_share, utility_share = calculate_split(amount, file_name, description)
                 
                 if rent_share > 0:
-                    article, direction_type, subdir_type = get_article(description, rent_share, file_name)
-                    direction, subdirection = get_direction_and_subdirection(file_name, description)
+                    article = get_article(description, rent_share, file_name)
+                    direction, subdirection = get_direction_and_subdirection(file_name, description, payer)
                     transactions.append({
                         'date': date,
                         'amount': rent_share,
@@ -808,14 +869,12 @@ def parse_file(file_content, file_name):
                         'account_name': account_name,
                         'description': f"{description[:400]} (аренда)",
                         'article_name': article,
-                        'direction': direction if direction else direction_type,
-                        'subdirection': subdirection if subdirection else subdir_type,
-                        'original_amount': amount
+                        'direction': direction,
+                        'subdirection': subdirection
                     })
                 
                 if utility_share > 0:
-                    article, direction_type, subdir_type = get_article(description, utility_share, file_name)
-                    direction, subdirection = get_direction_and_subdirection(file_name, description)
+                    direction, subdirection = get_direction_and_subdirection(file_name, description, payer)
                     transactions.append({
                         'date': date,
                         'amount': utility_share,
@@ -823,13 +882,12 @@ def parse_file(file_content, file_name):
                         'account_name': account_name,
                         'description': f"{description[:400]} (компенсация КУ)",
                         'article_name': '1.1.2.3 Компенсация по коммунальным расходам',
-                        'direction': direction if direction else direction_type,
-                        'subdirection': subdirection if subdirection else subdir_type,
-                        'original_amount': amount
+                        'direction': direction,
+                        'subdirection': subdirection
                     })
             else:
-                article, direction_type, subdir_type = get_article(description, amount, file_name)
-                direction, subdirection = get_direction_and_subdirection(file_name, description)
+                article = get_article(description, amount, file_name)
+                direction, subdirection = get_direction_and_subdirection(file_name, description, payer)
                 
                 transactions.append({
                     'date': date,
@@ -838,9 +896,8 @@ def parse_file(file_content, file_name):
                     'account_name': account_name,
                     'description': description[:500],
                     'article_name': article,
-                    'direction': direction if direction else direction_type,
-                    'subdirection': subdirection if subdirection else subdir_type,
-                    'original_amount': amount
+                    'direction': direction,
+                    'subdirection': subdirection
                 })
                 
         except Exception as e:
