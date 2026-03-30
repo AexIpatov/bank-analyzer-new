@@ -37,15 +37,75 @@ st.markdown("""
         font-weight: bold;
         transition: all 0.3s ease;
     }
-    .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(102,126,234,0.4);
+    .debug-info {
+        background: #f0f2f6;
+        padding: 10px;
+        border-radius: 5px;
+        font-family: monospace;
+        font-size: 12px;
+        margin: 10px 0;
     }
 </style>
 """, unsafe_allow_html=True)
 
-def parse_dates(date_val) -> str:
-    """Парсинг даты из различных форматов"""
+def clean_numeric_string(value) -> str:
+    """Очистка строки для преобразования в число"""
+    if pd.isna(value):
+        return ''
+    
+    str_val = str(value).strip()
+    
+    # Если это уже число
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    
+    # Удаляем валюту
+    str_val = re.sub(r'\s*[A-Z]{3}\s*$', '', str_val)
+    str_val = re.sub(r'^\s*[A-Z]{3}\s*', '', str_val)
+    
+    # Удаляем пробелы
+    str_val = str_val.replace(' ', '').replace('\xa0', '').replace('\u202f', '')
+    
+    # Заменяем запятую на точку для десятичных
+    if ',' in str_val:
+        # Проверяем, является ли запятая десятичным разделителем
+        parts = str_val.split(',')
+        if len(parts) == 2 and len(parts[1]) <= 2:
+            str_val = str_val.replace(',', '.')
+    
+    # Удаляем все кроме цифр, минуса и точки
+    str_val = re.sub(r'[^\d.-]', '', str_val)
+    
+    return str_val
+
+def parse_amount_safe(amount_val) -> float:
+    """Безопасный парсинг суммы"""
+    if pd.isna(amount_val):
+        return 0.0
+    
+    # Если это уже число
+    if isinstance(amount_val, (int, float)):
+        # Проверяем, не является ли это ID или другим большим числом
+        if abs(amount_val) > 1e12:  # Слишком большая сумма (больше триллиона)
+            return 0.0
+        return float(amount_val)
+    
+    str_val = clean_numeric_string(amount_val)
+    
+    if not str_val or str_val == '-':
+        return 0.0
+    
+    try:
+        amount = float(str_val)
+        # Проверяем на реалистичность суммы
+        if abs(amount) > 1e9:  # Больше миллиарда - вероятно, не сумма
+            return 0.0
+        return amount
+    except:
+        return 0.0
+
+def parse_dates_safe(date_val) -> str:
+    """Безопасный парсинг даты"""
     if pd.isna(date_val):
         return ''
     
@@ -54,12 +114,16 @@ def parse_dates(date_val) -> str:
     
     date_str = str(date_val).strip()
     
+    # Очистка
     if ' ' in date_str:
         date_str = date_str.split(' ')[0]
     if 'T' in date_str:
         date_str = date_str.split('T')[0]
     
-    # Пробуем разные форматы
+    # Проверяем, похоже ли на дату
+    if not re.search(r'\d{4}-\d{2}-\d{2}|\d{2}[./-]\d{2}[./-]\d{2,4}', date_str):
+        return ''
+    
     formats = [
         "%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%Y.%m.%d",
         "%d-%m-%Y", "%m/%d/%Y", "%Y/%m/%d", "%d.%m.%y"
@@ -71,102 +135,57 @@ def parse_dates(date_val) -> str:
         except:
             continue
     
-    return date_str
+    # Ручной парсинг
+    if '.' in date_str:
+        parts = date_str.split('.')
+        if len(parts) == 3 and all(p.isdigit() for p in parts):
+            day, month, year = parts
+            if len(year) == 2:
+                year = f"20{year}"
+            return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+    
+    return ''
 
-def parse_amount(amount_val) -> float:
-    """Парсинг суммы"""
-    if pd.isna(amount_val):
-        return 0.0
+def is_valid_transaction(row, date_col, amount_col) -> bool:
+    """Проверка, является ли строка валидной транзакцией"""
+    # Проверяем дату
+    if date_col is None or date_col not in row.index:
+        return False
     
-    if isinstance(amount_val, (int, float)):
-        return float(amount_val)
+    date_val = row[date_col]
+    if pd.isna(date_val):
+        return False
     
-    amount_str = str(amount_val).strip()
-    if amount_str in ['', 'nan', 'NaN', 'None', '-']:
-        return 0.0
+    date_str = parse_dates_safe(date_val)
+    if not date_str:
+        return False
     
-    # Сохраняем знак
-    is_negative = amount_str.startswith('-')
-    if is_negative:
-        amount_str = amount_str[1:]
+    # Проверяем сумму
+    if amount_col is None or amount_col not in row.index:
+        return False
     
-    # Удаляем валюту и пробелы
-    amount_str = re.sub(r'\s*[A-Z]{3}\s*$', '', amount_str)
-    amount_str = amount_str.replace(' ', '').replace('\xa0', '').replace('\u202f', '')
+    amount_val = row[amount_col]
+    amount = parse_amount_safe(amount_val)
     
-    # Заменяем запятую на точку (европейский формат)
-    if ',' in amount_str:
-        amount_str = amount_str.replace(',', '.')
+    if amount == 0:
+        return False
     
-    # Очищаем от всего кроме цифр, минуса и точки
-    amount_str = re.sub(r'[^\d.-]', '', amount_str)
-    
-    if not amount_str:
-        return 0.0
-    
-    try:
-        amount = float(amount_str)
-        return -amount if is_negative else amount
-    except:
-        return 0.0
-
-def get_article(description: str, amount: float) -> str:
-    """Определение статьи"""
-    desc_lower = description.lower()
-    
-    if amount < 0:
-        if any(kw in desc_lower for kw in ['fee', 'charge', 'service', 'díja', 'komis']):
-            return '1.2.17 РКО'
-        if any(kw in desc_lower for kw in ['tax', 'налог', 'vid', 'budžets']):
-            return '1.2.15.2 Налоги'
-        if any(kw in desc_lower for kw in ['газ', 'gas', 'gāze']):
-            return '1.2.10.2 Газ'
-        if any(kw in desc_lower for kw in ['электричество', 'electricity', 'elektri']):
-            return '1.2.10.5 Электричество'
-        if any(kw in desc_lower for kw in ['вода', 'water', 'ūdens']):
-            return '1.2.10.3 Вода'
-        return '1.2.8.1 Обслуживание объектов'
-    else:
-        if any(kw in desc_lower for kw in ['rent', 'аренд', 'money added', 'from']):
-            return '1.1.1.3 Арендная плата'
-        return '1.1.1.3 Арендная плата'
-
-def get_direction(description: str, file_name: str) -> Tuple[str, str]:
-    """Определение направления"""
-    file_lower = file_name.lower()
-    
-    if 'budapest' in file_lower or 'mkb' in file_lower:
-        return 'Europe', 'F6 Будапешт'
-    if 'antonijas' in file_lower:
-        return 'Latvia', 'AN14 Антониас 14'
-    if 'caka' in file_lower:
-        return 'Latvia', 'AC89 Чака 89'
-    if 'pasha' in file_lower:
-        return 'East', 'Pasha Bank'
-    if 'kapital' in file_lower:
-        return 'East', 'Kapital Bank'
-    if 'mashreq' in file_lower:
-        return 'Dubai', 'Mashreq Bank'
-    if 'wise' in file_lower:
-        return 'Europe', 'Wise'
-    
-    return 'Other', 'Прочее'
+    return True
 
 def parse_mkb_budapest(file_content: bytes, file_name: str) -> List[Dict]:
     """Специальный парсер для MKB Budapest выписок"""
     transactions = []
     
     try:
-        # Читаем Excel файл без заголовков
+        # Читаем Excel файл
         df = pd.read_excel(io.BytesIO(file_content), header=None)
         
         if df.empty:
             return []
         
-        # Ищем строку с данными (не заголовки)
-        # В MKB файле данные начинаются после строки с "Serial number"
+        # Ищем строку с данными (ищем числовые значения)
         data_start_row = -1
-        for idx in range(min(20, len(df))):
+        for idx in range(min(30, len(df))):
             row = df.iloc[idx]
             # Ищем строку с Serial number
             first_cell = str(row[0]).lower() if len(row) > 0 else ''
@@ -175,50 +194,27 @@ def parse_mkb_budapest(file_content: bytes, file_name: str) -> List[Dict]:
                 break
         
         if data_start_row == -1:
-            # Если не нашли, пробуем искать по первому числовому значению
-            for idx in range(min(20, len(df))):
+            # Ищем по наличию дат
+            for idx in range(min(30, len(df))):
                 row = df.iloc[idx]
-                if len(row) > 0 and not pd.isna(row[0]):
-                    try:
-                        # Пробуем преобразовать в число
-                        float(str(row[0]).strip())
-                        data_start_row = idx
-                        break
-                    except:
-                        continue
+                if len(row) > 1:
+                    cell = row[1]
+                    if not pd.isna(cell):
+                        date_str = parse_dates_safe(cell)
+                        if date_str:
+                            data_start_row = idx
+                            break
         
         if data_start_row == -1:
             return []
         
-        # Определяем индексы колонок по первой строке данных
-        sample_row = df.iloc[data_start_row]
-        
-        date_idx = None
-        amount_idx = None
-        desc_idx = None
-        
+        # Определяем колонки
         # В MKB файле:
-        # Колонка 1 - Serial number (дата в формате YYYY-MM-DD)
-        # Колонка 2 - Value date
-        # Колонка 11 - Transaction type (описание)
-        # Колонка 9 - Amount (сумма)
+        # Колонка 1 - Serial number (дата)
+        # Колонка 9 - Amount
+        # Колонка 11 - Transaction type
+        # Колонка 12 - Narrative
         
-        date_idx = 1  # Value date
-        amount_idx = 9  # Amount
-        desc_idx = 11  # Transaction type
-        
-        # Проверяем, что индексы существуют
-        if amount_idx >= len(sample_row):
-            # Пробуем найти Amount по содержимому
-            for idx in range(len(sample_row)):
-                val = sample_row[idx]
-                if not pd.isna(val):
-                    val_str = str(val)
-                    if re.search(r'-?\d+', val_str) and 'HUF' in val_str:
-                        amount_idx = idx
-                        break
-        
-        # Обрабатываем строки
         for idx in range(data_start_row, len(df)):
             try:
                 row = df.iloc[idx]
@@ -227,43 +223,55 @@ def parse_mkb_budapest(file_content: bytes, file_name: str) -> List[Dict]:
                 if all(pd.isna(cell) or str(cell).strip() == '' for cell in row):
                     continue
                 
-                # Получаем дату
-                if date_idx is None or date_idx >= len(row):
+                # Получаем дату (колонка 1 - Value date)
+                if len(row) <= 1:
                     continue
-                    
-                date_val = row[date_idx]
-                date = parse_dates(date_val)
+                
+                date_val = row[1]
+                date = parse_dates_safe(date_val)
                 if not date:
                     continue
                 
-                # Получаем сумму
-                if amount_idx is None or amount_idx >= len(row):
+                # Получаем сумму (колонка 9)
+                if len(row) <= 9:
                     continue
-                    
-                amount_val = row[amount_idx]
-                amount = parse_amount(amount_val)
+                
+                amount_val = row[9]
+                amount = parse_amount_safe(amount_val)
                 
                 if amount == 0:
                     continue
                 
                 # Получаем описание
                 description = ''
-                if desc_idx and desc_idx < len(row) and not pd.isna(row[desc_idx]):
-                    description = str(row[desc_idx])
-                
-                # Добавляем Narrative если есть
+                if len(row) > 11 and not pd.isna(row[11]):
+                    description = str(row[11])
                 if len(row) > 12 and not pd.isna(row[12]):
-                    description += ' - ' + str(row[12])
+                    if description:
+                        description += ' - '
+                    description += str(row[12])
                 
-                # Определяем статью и направление
-                article = get_article(description, amount)
-                direction, subdirection = get_direction(description, file_name)
+                if not description:
+                    continue
+                
+                # Определяем валюту
+                currency = 'HUF' if 'huf' in file_name.lower() else 'EUR'
+                
+                # Определяем статью
+                if any(kw in description.lower() for kw in ['service package', 'számlakivonat', 'díja']):
+                    article = '1.2.17 РКО'
+                elif amount < 0:
+                    article = '1.2.8.1 Обслуживание объектов'
+                else:
+                    article = '1.1.1.3 Арендная плата'
+                
+                direction, subdirection = 'Europe', 'F6 Будапешт'
                 
                 transactions.append({
                     'Дата': date,
                     'Сумма': amount,
-                    'Валюта': 'HUF',
-                    'Описание': description[:500],
+                    'Валюта': currency,
+                    'Описание': description[:300],
                     'Статья': article,
                     'Направление': direction,
                     'Субнаправление': subdirection,
@@ -280,7 +288,7 @@ def parse_mkb_budapest(file_content: bytes, file_name: str) -> List[Dict]:
         return []
 
 def parse_csv_safe(file_content: bytes, file_name: str) -> pd.DataFrame:
-    """Безопасный парсинг CSV с автоматическим определением разделителя"""
+    """Безопасный парсинг CSV"""
     try:
         # Определяем кодировку
         detected = chardet.detect(file_content[:10000])
@@ -292,45 +300,57 @@ def parse_csv_safe(file_content: bytes, file_name: str) -> pd.DataFrame:
         except:
             content = file_content.decode('utf-8', errors='ignore')
         
+        # Разделяем на строки
+        lines = content.split('\n')
+        
+        # Фильтруем пустые строки и строки с метаданными
+        clean_lines = []
+        skip_keywords = ['IBAN:', 'Müddət:', 'Account', 'Customer', 'Commission', 'BEZNY']
+        
+        for line in lines:
+            if not line.strip():
+                continue
+            
+            line_upper = line.upper()
+            if any(kw in line_upper for kw in skip_keywords):
+                continue
+            
+            clean_lines.append(line)
+        
+        if not clean_lines:
+            return pd.DataFrame()
+        
         # Пробуем разные разделители
-        for delimiter in [';', ',', '\t', '|']:
+        for delimiter in [';', ',', '\t']:
             try:
-                # Пробуем прочитать с этим разделителем
+                # Пробуем с заголовками
                 df = pd.read_csv(
-                    io.StringIO(content), 
+                    io.StringIO('\n'.join(clean_lines)), 
                     sep=delimiter,
                     encoding='utf-8',
                     engine='python',
-                    on_bad_lines='skip',
-                    header=0
+                    on_bad_lines='skip'
                 )
                 
-                # Проверяем, что получили разумное количество колонок
-                if len(df.columns) > 1 and len(df) > 0:
-                    return df
-            except:
-                continue
-        
-        # Если ничего не помогло, читаем без заголовков
-        for delimiter in [';', ',', '\t', '|']:
-            try:
-                df = pd.read_csv(
-                    io.StringIO(content), 
-                    sep=delimiter,
-                    encoding='utf-8',
-                    engine='python',
-                    on_bad_lines='skip',
-                    header=None
-                )
-                if len(df.columns) > 1 and len(df) > 0:
-                    return df
+                # Проверяем, есть ли разумные данные
+                if len(df) > 0 and len(df.columns) > 1:
+                    # Проверяем, не все ли значения - огромные числа
+                    for col in df.columns[:min(3, len(df.columns))]:
+                        sample = df[col].head(5).astype(str)
+                        if any(re.search(r'\d{4}-\d{2}-\d{2}', str(v)) for v in sample):
+                            return df
+                    
+                    # Если есть колонка с датами
+                    for col in df.columns:
+                        sample = df[col].head(5).astype(str)
+                        if any(re.search(r'\d{4}-\d{2}-\d{2}', str(v)) for v in sample):
+                            return df
             except:
                 continue
         
         return pd.DataFrame()
         
     except Exception as e:
-        st.error(f"Ошибка при парсинге CSV {file_name}: {str(e)}")
         return pd.DataFrame()
 
 def parse_bank_file(file_content: bytes, file_name: str) -> List[Dict]:
@@ -347,8 +367,11 @@ def parse_bank_file(file_content: bytes, file_name: str) -> List[Dict]:
         # Определяем тип файла
         if file_name.endswith(('.xlsx', '.xls')):
             # Excel файл
-            df = pd.read_excel(io.BytesIO(file_content), header=0)
-            if df.empty:
+            try:
+                df = pd.read_excel(io.BytesIO(file_content), header=0)
+                if df.empty or len(df.columns) < 2:
+                    df = pd.read_excel(io.BytesIO(file_content), header=None)
+            except:
                 df = pd.read_excel(io.BytesIO(file_content), header=None)
         else:
             # CSV/TXT файл
@@ -357,54 +380,50 @@ def parse_bank_file(file_content: bytes, file_name: str) -> List[Dict]:
         if df.empty:
             return []
         
-        # Поиск колонок
+        # Поиск колонок с данными
         date_col = None
         amount_col = None
         desc_col = None
         
+        # Ищем колонку с датами
         for col in df.columns:
-            col_str = str(col).lower()
-            
-            if 'date' in col_str or 'дата' in col_str or 'value date' in col_str:
-                date_col = col
-            elif 'amount' in col_str or 'сумма' in col_str or 'total' in col_str:
-                amount_col = col
-            elif 'description' in col_str or 'описание' in col_str or 'narrative' in col_str or 'purpose' in col_str:
-                desc_col = col
+            sample = df[col].dropna().head(10)
+            if len(sample) > 0:
+                sample_str = sample.astype(str)
+                if any(re.search(r'\d{4}-\d{2}-\d{2}', str(v)) for v in sample_str):
+                    date_col = col
+                    break
         
-        # Если не нашли по имени, ищем по содержимому
-        if date_col is None:
-            for col in df.columns:
-                sample = df[col].dropna().head(5)
-                if len(sample) > 0:
-                    sample_str = sample.astype(str)
-                    if any(re.search(r'\d{4}-\d{2}-\d{2}', str(v)) for v in sample_str):
-                        date_col = col
-                        break
+        # Ищем колонку с суммами
+        for col in df.columns:
+            if col == date_col:
+                continue
+            sample = df[col].dropna().head(10)
+            if len(sample) > 0:
+                # Проверяем, есть ли числа
+                numeric_count = 0
+                for val in sample:
+                    num = parse_amount_safe(val)
+                    if num != 0 and abs(num) < 1e6:  # Реалистичная сумма
+                        numeric_count += 1
+                if numeric_count >= 3:  # Хотя бы 3 числа в колонке
+                    amount_col = col
+                    break
         
-        if amount_col is None:
-            for col in df.columns:
-                sample = df[col].dropna().head(5)
-                if len(sample) > 0:
-                    sample_str = sample.astype(str)
-                    if any(re.search(r'-?\d+[.,]?\d*', str(v)) for v in sample_str):
-                        amount_col = col
-                        break
-        
-        if desc_col is None and len(df.columns) > 2:
-            # Используем колонку с самым длинным текстом
+        # Ищем колонку с описанием (самая длинная)
+        if desc_col is None:
             max_len = 0
             for col in df.columns:
                 if col not in [date_col, amount_col]:
                     try:
                         avg_len = df[col].astype(str).str.len().mean()
-                        if avg_len > max_len:
+                        if avg_len > max_len and avg_len > 20:
                             max_len = avg_len
                             desc_col = col
                     except:
                         pass
         
-        # Если все еще не нашли, используем первые колонки
+        # Если не нашли колонки, используем первые
         if date_col is None and len(df.columns) > 0:
             date_col = df.columns[0]
         if amount_col is None and len(df.columns) > 1:
@@ -417,29 +436,19 @@ def parse_bank_file(file_content: bytes, file_name: str) -> List[Dict]:
             try:
                 row = df.iloc[idx]
                 
-                # Пропускаем строки с метаданными
-                first_cell = str(row.iloc[0]).lower() if len(row) > 0 else ''
-                if first_cell in ['iban:', 'müddət:', 'account', 'customer', 'commission']:
+                # Проверяем валидность строки
+                if not is_valid_transaction(row, date_col, amount_col):
                     continue
                 
                 # Получаем дату
-                if date_col not in df.columns:
-                    continue
-                    
                 date_val = row[date_col]
-                if pd.isna(date_val):
-                    continue
-                
-                date = parse_dates(date_val)
+                date = parse_dates_safe(date_val)
                 if not date:
                     continue
                 
                 # Получаем сумму
-                if amount_col not in df.columns:
-                    continue
-                    
                 amount_val = row[amount_col]
-                amount = parse_amount(amount_val)
+                amount = parse_amount_safe(amount_val)
                 
                 if amount == 0:
                     continue
@@ -448,15 +457,6 @@ def parse_bank_file(file_content: bytes, file_name: str) -> List[Dict]:
                 description = ''
                 if desc_col and desc_col in df.columns and not pd.isna(row[desc_col]):
                     description = str(row[desc_col])
-                
-                # Добавляем другие колонки в описание
-                for col in df.columns:
-                    if col not in [date_col, amount_col, desc_col]:
-                        val = row[col]
-                        if not pd.isna(val) and str(val).strip() and str(val) != 'nan':
-                            description += f" {val}"
-                
-                description = description.strip()
                 
                 # Определяем валюту
                 currency = 'EUR'
@@ -469,15 +469,46 @@ def parse_bank_file(file_content: bytes, file_name: str) -> List[Dict]:
                 elif 'aed' in file_lower:
                     currency = 'AED'
                 
-                # Статья и направление
-                article = get_article(description, amount)
-                direction, subdirection = get_direction(description, file_name)
+                # Определяем статью
+                desc_lower = description.lower()
+                
+                if amount < 0:
+                    if any(kw in desc_lower for kw in ['fee', 'charge', 'комиссия', 'díja']):
+                        article = '1.2.17 РКО'
+                    elif any(kw in desc_lower for kw in ['tax', 'налог', 'vid', 'budžets']):
+                        article = '1.2.15.2 Налоги'
+                    elif any(kw in desc_lower for kw in ['газ', 'gas', 'gāze']):
+                        article = '1.2.10.2 Газ'
+                    elif any(kw in desc_lower for kw in ['электричество', 'electricity']):
+                        article = '1.2.10.5 Электричество'
+                    else:
+                        article = '1.2.8.1 Обслуживание объектов'
+                else:
+                    article = '1.1.1.3 Арендная плата'
+                
+                # Определяем направление
+                direction, subdirection = 'Other', 'Прочее'
+                
+                if 'antonijas' in file_lower:
+                    direction, subdirection = 'Latvia', 'AN14 Антониас 14'
+                elif 'caka' in file_lower:
+                    direction, subdirection = 'Latvia', 'AC89 Чака 89'
+                elif 'pasha' in file_lower:
+                    direction, subdirection = 'East', 'Pasha Bank'
+                elif 'kapital' in file_lower:
+                    direction, subdirection = 'East', 'Kapital Bank'
+                elif 'mashreq' in file_lower:
+                    direction, subdirection = 'Dubai', 'Mashreq Bank'
+                elif 'wise' in file_lower:
+                    direction, subdirection = 'Europe', 'Wise'
+                elif 'paysera' in file_lower:
+                    direction, subdirection = 'Other', 'Paysera'
                 
                 transactions.append({
                     'Дата': date,
                     'Сумма': amount,
                     'Валюта': currency,
-                    'Описание': description[:500],
+                    'Описание': description[:300],
                     'Статья': article,
                     'Направление': direction,
                     'Субнаправление': subdirection,
@@ -488,7 +519,7 @@ def parse_bank_file(file_content: bytes, file_name: str) -> List[Dict]:
                 continue
                 
     except Exception as e:
-        st.error(f"Ошибка при парсинге файла {file_name}: {str(e)}")
+        st.error(f"Ошибка при парсинге {file_name}: {str(e)}")
         return []
     
     return transactions
@@ -498,7 +529,7 @@ def main():
     st.markdown("""
     <div class="main-header">
         <h1>📊 Финансовый аналитик выписок</h1>
-        <p style="margin:0; opacity:0.9;">Автоматическая обработка банковских выписок</p>
+        <p>Автоматическая обработка банковских выписок v7.0</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -510,21 +541,21 @@ def main():
         - CSV, TXT
         
         **Поддерживаемые банки:**
-        - MKB Budapest (специальный парсер)
+        - MKB Budapest
         - Revolut, Paysera
         - Pasha Bank, Kapital Bank
         - Mashreq Bank, Wise
-        - CSOB, UniCredit, Industra
+        - CSOB, UniCredit
         """)
         
         st.markdown("---")
-        st.markdown("### 🔧 Особенности")
+        st.markdown("### 🎯 Особенности")
         st.markdown("""
-        - ✅ Автоматическое определение кодировки
-        - ✅ Умный поиск колонок
+        - ✅ Автоматическое определение колонок
+        - ✅ Фильтрация служебных строк
+        - ✅ Проверка реалистичности сумм
         - ✅ Поддержка нескольких валют
         - ✅ Автоматическая категоризация
-        - ✅ Обработка ошибок CSV
         """)
     
     tab1, tab2 = st.tabs(["📄 Один файл", "📚 Несколько файлов"])
@@ -539,10 +570,10 @@ def main():
         )
         
         if uploaded_file:
-            st.success(f"✅ Загружен файл: {uploaded_file.name}")
+            st.success(f"✅ Загружен: {uploaded_file.name}")
             
-            if st.button("🚀 Анализировать", key="analyze_single", use_container_width=True):
-                with st.spinner("Анализируем выписку..."):
+            if st.button("🚀 Анализировать", key="analyze_single"):
+                with st.spinner("Анализируем..."):
                     file_content = uploaded_file.read()
                     transactions = parse_bank_file(file_content, uploaded_file.name)
                     
@@ -550,9 +581,8 @@ def main():
                         df = pd.DataFrame(transactions)
                         
                         st.markdown("---")
-                        st.markdown("### 📊 Сводная статистика")
-                        
                         col1, col2, col3, col4 = st.columns(4)
+                        
                         with col1:
                             income = df[df['Сумма'] > 0]['Сумма'].sum()
                             st.metric("💰 Доходы", f"{income:,.2f}")
@@ -565,12 +595,8 @@ def main():
                         with col4:
                             st.metric("📝 Операций", len(df))
                         
-                        st.markdown("### 📋 Детализация операций")
-                        
-                        display_df = df.copy()
-                        display_df['Сумма'] = display_df['Сумма'].apply(lambda x: f"{x:,.2f}")
-                        
-                        st.dataframe(display_df, use_container_width=True, height=400)
+                        st.markdown("### 📋 Транзакции")
+                        st.dataframe(df, use_container_width=True, height=400)
                         
                         output = io.BytesIO()
                         with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -580,24 +606,16 @@ def main():
                                 'Сумма': ['sum', 'count']
                             }).round(2)
                             summary.to_excel(writer, sheet_name='Сводка по статьям')
-                            
-                            direction_summary = df.groupby(['Направление', 'Субнаправление']).agg({
-                                'Сумма': 'sum'
-                            }).round(2)
-                            direction_summary.to_excel(writer, sheet_name='Сводка по объектам')
                         
                         output.seek(0)
-                        
                         st.download_button(
-                            label="📥 Скачать отчет (Excel)",
+                            label="📥 Скачать Excel",
                             data=output,
                             file_name=f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             use_container_width=True
                         )
-                        
                     else:
-                        st.error("❌ Не удалось обработать файл. Проверьте формат.")
+                        st.error("❌ Не удалось обработать файл")
     
     with tab2:
         st.markdown("### Загрузите несколько выписок")
@@ -610,49 +628,42 @@ def main():
         )
         
         if uploaded_files:
-            st.success(f"✅ Загружено файлов: {len(uploaded_files)}")
+            st.success(f"✅ Загружено: {len(uploaded_files)} файлов")
             
-            if st.button("🚀 Анализировать все файлы", key="analyze_multiple", use_container_width=True):
+            if st.button("🚀 Анализировать все", key="analyze_multiple"):
                 all_transactions = []
                 progress_bar = st.progress(0)
-                status_text = st.empty()
+                status = st.empty()
                 
                 for idx, file in enumerate(uploaded_files):
-                    status_text.text(f"Обработка: {file.name}")
-                    
-                    file_content = file.read()
-                    transactions = parse_bank_file(file_content, file.name)
+                    status.text(f"Обработка: {file.name}")
+                    content = file.read()
+                    transactions = parse_bank_file(content, file.name)
                     all_transactions.extend(transactions)
-                    
                     progress_bar.progress((idx + 1) / len(uploaded_files))
                 
-                status_text.empty()
+                status.empty()
                 
                 if all_transactions:
                     df = pd.DataFrame(all_transactions)
                     
                     st.markdown("---")
-                    st.markdown("### 📊 Общая статистика")
-                    
                     col1, col2, col3, col4 = st.columns(4)
+                    
                     with col1:
-                        total_income = df[df['Сумма'] > 0]['Сумма'].sum()
-                        st.metric("💰 Общий доход", f"{total_income:,.2f}")
+                        income = df[df['Сумма'] > 0]['Сумма'].sum()
+                        st.metric("💰 Доходы", f"{income:,.2f}")
                     with col2:
-                        total_expense = abs(df[df['Сумма'] < 0]['Сумма'].sum())
-                        st.metric("💸 Общий расход", f"{total_expense:,.2f}")
+                        expense = abs(df[df['Сумма'] < 0]['Сумма'].sum())
+                        st.metric("💸 Расходы", f"{expense:,.2f}")
                     with col3:
-                        total_balance = total_income - total_expense
-                        st.metric("⚖️ Итоговый баланс", f"{total_balance:,.2f}")
+                        balance = income - expense
+                        st.metric("⚖️ Баланс", f"{balance:,.2f}")
                     with col4:
-                        st.metric("📝 Всего операций", len(df))
+                        st.metric("📝 Операций", len(df))
                     
-                    st.markdown("### 📋 Все операции")
-                    
-                    display_df = df.copy()
-                    display_df['Сумма'] = display_df['Сумма'].apply(lambda x: f"{x:,.2f}")
-                    
-                    st.dataframe(display_df, use_container_width=True, height=500)
+                    st.markdown("### 📋 Все транзакции")
+                    st.dataframe(df, use_container_width=True, height=500)
                     
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -669,17 +680,14 @@ def main():
                         article_summary.to_excel(writer, sheet_name='Сводка по статьям')
                     
                     output.seek(0)
-                    
                     st.download_button(
-                        label="📥 Скачать полный отчет (Excel)",
+                        label="📥 Скачать Excel",
                         data=output,
                         file_name=f"full_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True
                     )
-                    
                 else:
-                    st.error("❌ Не удалось обработать ни одного файла.")
+                    st.error("❌ Не удалось обработать файлы")
 
 if __name__ == "__main__":
     main()
