@@ -36,7 +36,7 @@ with st.sidebar:
     st.markdown("**Поддерживаемые форматы:** Excel (.xlsx, .xls), CSV")
     st.markdown("**Счет берется из имени файла**")
     st.markdown("---")
-    st.markdown("**Версия 3.1** — исправлена обработка расходных операций Revolut")
+    st.markdown("**Версия 3.2** — исправлена обработка расходных операций Revolut")
 
 # ==================== КЛАСС УМНОГО ДЕТЕКТОРА ЗАГОЛОВКОВ ====================
 class HeaderDetector:
@@ -217,7 +217,7 @@ def parse_date(date_str):
     return date_str
 
 def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, description=""):
-    """Исправленное определение знака суммы для всех форматов"""
+    """Исправленное определение знака суммы"""
     if pd.isna(amount_str):
         return 0
     amount_str = str(amount_str).strip()
@@ -252,7 +252,7 @@ def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, descriptio
         except:
             return 0
 
-    # Общая колонка суммы — определяем знак по наличию минуса
+    # Общая колонка суммы — определяем знак по наличию минуса в исходной строке
     # Убираем валюту и пробелы
     amount_str = re.sub(r'[A-Z]{3}$', '', amount_str.strip())
     amount_str = amount_str.replace(',', '.').replace(' ', '')
@@ -260,11 +260,10 @@ def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, descriptio
     # Определяем знак по наличию минуса в исходной строке
     has_minus = '-' in original_str
     
-    # Для Revolut: если в колонке Type стоит FEE или TRANSFER и сумма не имеет минуса
+    # Дополнительная проверка: если в описании есть "To", "Fee" или это TRANSFER с получателем — это расход
     desc_lower = description.lower()
-    if ('fee' in desc_lower or 'transfer' in desc_lower) and not has_minus:
-        # Проверяем, есть ли в строке знак минуса или слово "to" (для расходов)
-        if 'to ' in desc_lower or 'fee' in desc_lower:
+    if not has_minus:
+        if 'to ' in desc_lower or 'fee' in desc_lower or 'transfer' in desc_lower:
             has_minus = True
     
     amount_str = re.sub(r'[^0-9\.\-]', '', amount_str)
@@ -289,7 +288,7 @@ def should_split_rental_payment(description, amount, file_name):
     desc_lower = description.lower()
     file_lower = file_name.lower()
 
-    # Только для Paysera, Revolut и Industra (арендные платежи)
+    # Только для Paysera, Revolut и Industra
     if not any(x in file_lower for x in ['paysera', 'revolut', 'industra']):
         return False
 
@@ -299,7 +298,8 @@ def should_split_rental_payment(description, amount, file_name):
         'commission', 'комиссия', 'fee', 'charge', 'tax', 'налог',
         'salary', 'зарплата', 'refund', 'возврат', 'interest', 'проценты',
         'valsts budžets', 'budžets', 'vid', 'rigas valstpilsētas pašvaldība',
-        'latvenergo', 'rigas udens', 'eco baltia', 'bite', 'tele2', 'tet'
+        'latvenergo', 'rigas udens', 'eco baltia', 'bite', 'tele2', 'tet',
+        'rīgas lifti', 'taipans', 'sidorans', 'komval'
     ]
     for kw in exclude_keywords:
         if kw in desc_lower:
@@ -728,39 +728,7 @@ def parse_file(file_content, file_name):
         try:
             row = df.iloc[idx]
             
-            date = ''
-            if date_col in row:
-                date_val = row[date_col]
-                if pd.notna(date_val):
-                    date = parse_date(date_val)
-            if not date:
-                continue
-            
-            amount = 0
-            
-            # Сначала пытаемся получить сумму из колонки Amount
-            if amount_col is not None:
-                amount_val = row[amount_col] if amount_col in row else None
-                if pd.notna(amount_val) and str(amount_val).strip() and str(amount_val).strip() != '':
-                    # Передаём описание для контекста (для определения знака)
-                    desc_for_context = ''
-                    if desc_col in row:
-                        desc_for_context = str(row[desc_col]) if pd.notna(row[desc_col]) else ''
-                    amount = parse_amount(amount_val, description=desc_for_context)
-            
-            # Если не нашли через Amount, пробуем Debit/Credit
-            if amount == 0 and debit_col is not None and credit_col is not None:
-                debit_val = row[debit_col] if debit_col in row else None
-                credit_val = row[credit_col] if credit_col in row else None
-                
-                if pd.notna(debit_val) and str(debit_val).strip() and str(debit_val).strip() != '':
-                    amount = parse_amount(debit_val, is_debit_col=True, is_credit_col=False)
-                elif pd.notna(credit_val) and str(credit_val).strip() and str(credit_val).strip() != '':
-                    amount = parse_amount(credit_val, is_debit_col=False, is_credit_col=True)
-            
-            if amount == 0:
-                continue
-            
+            # Сначала собираем описание, чтобы использовать его для определения знака суммы
             description = ''
             if desc_col in row:
                 desc_val = row[desc_col]
@@ -781,6 +749,37 @@ def parse_file(file_content, file_name):
                         description += ' ' + str(val)
             
             description = description.strip()
+            
+            # Дата
+            date = ''
+            if date_col in row:
+                date_val = row[date_col]
+                if pd.notna(date_val):
+                    date = parse_date(date_val)
+            if not date:
+                continue
+            
+            # Сумма — теперь передаём описание для контекста
+            amount = 0
+            
+            # Сначала пробуем колонку Amount (она есть в Revolut)
+            if amount_col is not None:
+                amount_val = row[amount_col] if amount_col in row else None
+                if pd.notna(amount_val) and str(amount_val).strip() and str(amount_val).strip() != '':
+                    amount = parse_amount(amount_val, description=description)
+            
+            # Если не нашли через Amount, пробуем Debit/Credit
+            if amount == 0 and debit_col is not None and credit_col is not None:
+                debit_val = row[debit_col] if debit_col in row else None
+                credit_val = row[credit_col] if credit_col in row else None
+                
+                if pd.notna(debit_val) and str(debit_val).strip() and str(debit_val).strip() != '':
+                    amount = parse_amount(debit_val, is_debit_col=True, is_credit_col=False, description=description)
+                elif pd.notna(credit_val) and str(credit_val).strip() and str(credit_val).strip() != '':
+                    amount = parse_amount(credit_val, is_debit_col=False, is_credit_col=True, description=description)
+            
+            if amount == 0:
+                continue
             
             currency = 'EUR'
             if 'CZK' in file_lower or 'czk' in str(df.columns).lower() or 'czk' in description.lower():
