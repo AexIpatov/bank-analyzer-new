@@ -36,7 +36,7 @@ with st.sidebar:
     st.markdown("**Поддерживаемые форматы:** Excel (.xlsx, .xls), CSV")
     st.markdown("**Счет берется из имени файла**")
     st.markdown("---")
-    st.markdown("**Версия 3.0** — исправлены знаки сумм, разбивка аренды и маппинг статей")
+    st.markdown("**Версия 3.1** — исправлена обработка расходных операций Revolut")
 
 # ==================== КЛАСС УМНОГО ДЕТЕКТОРА ЗАГОЛОВКОВ ====================
 class HeaderDetector:
@@ -44,19 +44,20 @@ class HeaderDetector:
         self.header_patterns = {
             'date': [
                 'date', 'дата', 'datum', 'dátum', 'transaction date', 'value date', 'booking date',
-                'дата транзакции', 'дата операции', 'posting date', 'Date started (UTC)', 'Дата'
+                'дата транзакции', 'дата операции', 'posting date', 'Date started (UTC)', 'Дата',
+                'Date completed (UTC)'
             ],
             'amount': [
                 'amount', 'сумма', 'összeg', 'betrag', 'дебет', 'кредит', 'debit(d)', 'credit(c)',
                 'сумма списания', 'сумма зачисления', 'доход', 'расход', 'orig amount', 'payment amount',
-                'Total amount', 'Payment currency'
+                'Total amount', 'Payment currency', 'Amount'
             ],
             'debit': ['debit', 'дебет', 'расход', 'withdrawal', 'списание', 'debet'],
             'credit': ['credit', 'кредит', 'доход', 'deposit', 'зачисление'],
             'description': [
                 'description', 'описание', 'leírás', 'beschreibung', 'details', 'детали',
                 'transaction details', 'назначение платежа', 'примечание', 'narrative', 'information',
-                'Transaction Details', 'Purpose of payment', 'particulars', 'beneficiary'
+                'Transaction Details', 'Purpose of payment', 'particulars', 'beneficiary', 'Description'
             ],
             'balance': ['balance', 'остаток', 'egyenleg', 'saldo', 'closing balance', 'конечный остаток']
         }
@@ -216,21 +217,22 @@ def parse_date(date_str):
     return date_str
 
 def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, description=""):
-    """Исправленное определение знака суммы с учетом формата Industra"""
+    """Исправленное определение знака суммы для всех форматов"""
     if pd.isna(amount_str):
         return 0
     amount_str = str(amount_str).strip()
-    if amount_str == '' or amount_str == 'nan':
+    if amount_str == '' or amount_str == 'nan' or amount_str == '-':
         return 0
 
     original_str = amount_str
     
+    # Обработка странных форматов
     if amount_str.startswith('-+'):
         amount_str = '-' + amount_str[2:]
-    
     if amount_str.startswith('+-'):
         amount_str = '-' + amount_str[2:]
 
+    # Если это колонка дебета (расхода) — сумма всегда отрицательная
     if is_debit_col:
         amount_str = re.sub(r'[^0-9\.,\-]', '', amount_str)
         amount_str = amount_str.replace(',', '.')
@@ -240,6 +242,7 @@ def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, descriptio
         except:
             return 0
 
+    # Если это колонка кредита (дохода) — сумма всегда положительная
     if is_credit_col:
         amount_str = re.sub(r'[^0-9\.,]', '', amount_str)
         amount_str = amount_str.replace(',', '.')
@@ -249,14 +252,19 @@ def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, descriptio
         except:
             return 0
 
+    # Общая колонка суммы — определяем знак по наличию минуса
+    # Убираем валюту и пробелы
     amount_str = re.sub(r'[A-Z]{3}$', '', amount_str.strip())
     amount_str = amount_str.replace(',', '.').replace(' ', '')
     
-    has_minus = amount_str.startswith('-')
+    # Определяем знак по наличию минуса в исходной строке
+    has_minus = '-' in original_str
     
+    # Для Revolut: если в колонке Type стоит FEE или TRANSFER и сумма не имеет минуса
     desc_lower = description.lower()
-    if ('industra' in desc_lower or 'индустра' in desc_lower) and ('commission' in desc_lower or 'fee' in desc_lower or 'комиссия' in desc_lower):
-        if not has_minus and '+' in original_str:
+    if ('fee' in desc_lower or 'transfer' in desc_lower) and not has_minus:
+        # Проверяем, есть ли в строке знак минуса или слово "to" (для расходов)
+        if 'to ' in desc_lower or 'fee' in desc_lower:
             has_minus = True
     
     amount_str = re.sub(r'[^0-9\.\-]', '', amount_str)
@@ -274,27 +282,33 @@ def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, descriptio
 
 def should_split_rental_payment(description, amount, file_name):
     """Определяет, нужно ли разбивать платёж на аренду и компенсацию КУ"""
+    # Только положительные суммы могут быть арендными платежами
+    if amount <= 0:
+        return False
+    
     desc_lower = description.lower()
     file_lower = file_name.lower()
 
-    if amount <= 0:
-        return False
-
+    # Только для Paysera, Revolut и Industra (арендные платежи)
     if not any(x in file_lower for x in ['paysera', 'revolut', 'industra']):
         return False
 
+    # Исключаем явно не арендные платежи
     exclude_keywords = [
         'booking.com', 'airbnb', 'loan', 'deposit', 'депозит', 
         'commission', 'комиссия', 'fee', 'charge', 'tax', 'налог',
-        'salary', 'зарплата', 'refund', 'возврат', 'interest', 'проценты'
+        'salary', 'зарплата', 'refund', 'возврат', 'interest', 'проценты',
+        'valsts budžets', 'budžets', 'vid', 'rigas valstpilsētas pašvaldība',
+        'latvenergo', 'rigas udens', 'eco baltia', 'bite', 'tele2', 'tet'
     ]
     for kw in exclude_keywords:
         if kw in desc_lower:
             return False
 
+    # Ключевые слова для арендных платежей
     rent_keywords = [
         'rent', 'аренд', 'caka', 'antonijas', 'matisa', 'valdemara', 
-        'for rent', 'utilities', 'dzivoklis', 'apartment', 'flat',
+        'for rent', 'dzivoklis', 'apartment', 'flat',
         'money added', 'topup', 'from', 'received', 'incoming',
         'brīvības', 'gertrudes', 'mucenieku', 'dzirnavu', 'cesu',
         'skunu', 'deglava', 'hospitalu', 'bruninieku'
@@ -409,21 +423,33 @@ def get_article(description, amount, file_name):
     desc_lower = description.lower()
     file_lower = file_name.lower()
 
+    # Если это перевод между счетами (внутренний)
+    if any(kw in desc_lower for kw in [
+        'currency exchange', 'конвертация', 'internal payment',
+        'transfer to own account', 'между своими счетами', 'own transfer',
+        'внутренний перевод', 'межбанковский перевод', 'bank transfer'
+    ]):
+        if amount < 0:
+            return 'Перевод между счетами', 'Расходы', 'Внутренний перевод'
+        else:
+            return 'Перевод между счетами', 'Доходы', 'Внутренний перевод'
+
     if amount < 0:
-        # 1.2.17 РКО
+        # 1.2.17 РКО — банковские комиссии
         if any(kw in desc_lower for kw in [
             'комиссия', 'commission', 'fee', 'charge', 'maintenance', 'rko', 'subscription',
             'atm withdrawal', 'плата за обслуживание', 'service package', 'számlakivonat díja',
             'netbankár monthly fee', 'conversion fee', 'charge for', 'bank charge',
             'pasha bank charge', 'fee for', 'monthly fee', 'account maintenance', 'card fee',
-            'banking fee', 'transaction fee', 'service charge', 'tariff', 'тариф'
+            'banking fee', 'transaction fee', 'service charge', 'tariff', 'тариф',
+            'revolut business fee', 'grow plan fee', 'expenses app charge'
         ]):
             return '1.2.17 РКО', 'Расходы', 'Банковские комиссии'
 
         # 1.2.15.1 Зарплата
         if any(kw in desc_lower for kw in [
             'зарплат', 'salary', 'darba alga', 'algas izmaksa', 'darba algas izmaksa',
-            'wage', 'payroll', 'alga', 'зарплата', 'зарплату'
+            'wage', 'payroll', 'alga', 'зарплата', 'зарплату', 'algas'
         ]):
             return '1.2.15.1 Зарплата', 'Расходы', 'Зарплата'
 
@@ -557,14 +583,6 @@ def get_article(description, amount, file_name):
         ]):
             return '1.2.27 Расходы в ожидании возмещения ЗП по другим бизнесам', 'Расходы', 'Прочие расходы'
 
-        # Перевод между счетами
-        if any(kw in desc_lower for kw in [
-            'currency exchange', 'конвертация', 'internal payment',
-            'transfer to own account', 'между своими счетами', 'own transfer',
-            'внутренний перевод', 'межбанковский перевод', 'bank transfer'
-        ]):
-            return 'Перевод между счетами', 'Расходы', 'Внутренний перевод'
-
         # 1.2.37 Возврат гарантийных депозитов
         if any(kw in desc_lower for kw in [
             'deposit return', 'возврат депозита', 'depozīta atgriešana',
@@ -572,9 +590,11 @@ def get_article(description, amount, file_name):
         ]):
             return '1.2.37 Возврат гарантийных депозитов', 'Расходы', 'Возврат депозитов'
 
+        # По умолчанию для расходов
         return '1.2.8.1 Обслуживание объектов (бытовые вопросы, без ремонта)', 'Расходы', 'Обслуживание объектов'
 
     else:
+        # Доходы
         # 1.1.1.2 Поступления систем бронирования
         if any(kw in desc_lower for kw in ['airbnb', 'booking.com', 'booking b.v.']):
             return '1.1.1.2 Поступления систем бронирования (Airbnb, Booking и пр.)', 'Доходы', 'Краткосрочная аренда'
@@ -609,10 +629,6 @@ def get_article(description, amount, file_name):
         ]):
             return '3.1.1 Ввод средств', 'Доходы', 'Ввод средств'
 
-        # 1.1.1.1 Арендная плата (наличные)
-        if any(kw in desc_lower for kw in ['наличные', 'cash']) and 'rent' in desc_lower:
-            return '1.1.1.1 Арендная плата (наличные)', 'Доходы', 'Арендная плата наличные'
-
         # 1.1.2.3 Компенсация по коммунальным расходам
         if any(kw in desc_lower for kw in [
             'komunālie', 'utilities', 'компенсац', 'возмещени', 'utility',
@@ -632,13 +648,11 @@ def get_article(description, amount, file_name):
         ]):
             return '1.1.2.2 Возвраты от поставщиков', 'Доходы', 'Возвраты от поставщиков'
 
-        # 1.1.1.3 Арендная плата (счёт)
-        if any(kw in desc_lower for kw in [
-            'арендн', 'rent', 'money added', 'ire', 'dzivoklis', 'from',
-            'credit of sepa', 'topup', 'received', 'incoming payment'
-        ]):
-            return '1.1.1.3 Арендная плата (счёт)', 'Доходы', 'Арендная плата'
+        # 1.1.1.1 Арендная плата (наличные)
+        if any(kw in desc_lower for kw in ['наличные', 'cash']) and 'rent' in desc_lower:
+            return '1.1.1.1 Арендная плата (наличные)', 'Доходы', 'Арендная плата наличные'
 
+        # 1.1.1.3 Арендная плата (счёт) — по умолчанию для доходов
         return '1.1.1.3 Арендная плата (счёт)', 'Доходы', 'Арендная плата'
 
 
@@ -682,13 +696,14 @@ def parse_file(file_content, file_name):
     debit_col = None
     credit_col = None
     desc_col = None
+    type_col = None
     
     for col in df.columns:
         col_lower = str(col).lower()
-        if any(kw in col_lower for kw in ['date', 'дата', 'datum', 'booking', 'posting', 'value', 'started', 'value date']):
+        if any(kw in col_lower for kw in ['date', 'дата', 'datum', 'booking', 'posting', 'value', 'started', 'value date', 'date completed']):
             if date_col is None:
                 date_col = col
-        if any(kw in col_lower for kw in ['amount', 'сумма', 'total amount', 'orig amount']):
+        if any(kw in col_lower for kw in ['amount', 'сумма', 'total amount', 'orig amount', 'amount']):
             if amount_col is None:
                 amount_col = col
         if any(kw in col_lower for kw in ['debit', 'дебет', 'расход', 'withdrawal', 'debet']):
@@ -697,9 +712,12 @@ def parse_file(file_content, file_name):
         if any(kw in col_lower for kw in ['credit', 'кредит', 'доход', 'deposit']):
             if credit_col is None:
                 credit_col = col
-        if any(kw in col_lower for kw in ['description', 'описание', 'details', 'назначение', 'narrative', 'information', 'info', 'transaction details', 'purpose of payment']):
+        if any(kw in col_lower for kw in ['description', 'описание', 'details', 'назначение', 'narrative', 'information', 'info', 'transaction details', 'purpose of payment', 'description']):
             if desc_col is None:
                 desc_col = col
+        if any(kw in col_lower for kw in ['type', 'тип', 'transaction type']):
+            if type_col is None:
+                type_col = col
     
     if date_col is None and len(df.columns) > 0:
         date_col = df.columns[0]
@@ -720,7 +738,18 @@ def parse_file(file_content, file_name):
             
             amount = 0
             
-            if debit_col is not None and credit_col is not None:
+            # Сначала пытаемся получить сумму из колонки Amount
+            if amount_col is not None:
+                amount_val = row[amount_col] if amount_col in row else None
+                if pd.notna(amount_val) and str(amount_val).strip() and str(amount_val).strip() != '':
+                    # Передаём описание для контекста (для определения знака)
+                    desc_for_context = ''
+                    if desc_col in row:
+                        desc_for_context = str(row[desc_col]) if pd.notna(row[desc_col]) else ''
+                    amount = parse_amount(amount_val, description=desc_for_context)
+            
+            # Если не нашли через Amount, пробуем Debit/Credit
+            if amount == 0 and debit_col is not None and credit_col is not None:
                 debit_val = row[debit_col] if debit_col in row else None
                 credit_val = row[credit_col] if credit_col in row else None
                 
@@ -728,11 +757,6 @@ def parse_file(file_content, file_name):
                     amount = parse_amount(debit_val, is_debit_col=True, is_credit_col=False)
                 elif pd.notna(credit_val) and str(credit_val).strip() and str(credit_val).strip() != '':
                     amount = parse_amount(credit_val, is_debit_col=False, is_credit_col=True)
-            
-            elif amount_col is not None:
-                amount_val = row[amount_col] if amount_col in row else None
-                if pd.notna(amount_val):
-                    amount = parse_amount(amount_val, description="")
             
             if amount == 0:
                 continue
@@ -743,8 +767,15 @@ def parse_file(file_content, file_name):
                 if pd.notna(desc_val):
                     description = str(desc_val)
             
+            # Добавляем тип операции в описание для контекста
+            if type_col in row:
+                type_val = row[type_col]
+                if pd.notna(type_val) and str(type_val).strip():
+                    description = f"{str(type_val)} {description}"
+            
+            # Добавляем другие колонки в описание
             for col in df.columns:
-                if col not in [date_col, amount_col, debit_col, credit_col, desc_col]:
+                if col not in [date_col, amount_col, debit_col, credit_col, desc_col, type_col]:
                     val = row[col]
                     if pd.notna(val) and str(val).strip() and str(val) != 'nan':
                         description += ' ' + str(val)
