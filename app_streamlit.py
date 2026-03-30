@@ -30,14 +30,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header"><h1>📊 Финансовый аналитик выписок v6.1</h1><p>Полная поддержка всех форматов</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"><h1>📊 Финансовый аналитик выписок v6.2</h1><p>Полная поддержка всех форматов</p></div>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### 🧠 О программе")
     st.markdown("**Поддерживаемые форматы:** Excel (.xlsx, .xls), CSV, TXT")
     st.markdown("**Поддерживаемые банки:** Pasha, CSOB, UniCredit, Industra, Kapital, Mashreq, WIO, Revolut, Paysera, MKB Budapest")
     st.markdown("---")
-    st.markdown("**Версия 6.1** — полная поддержка MKB Budapest")
+    st.markdown("**Версия 6.2** — исправлены отступы")
 
 class Config:
     DATE_FORMATS = [
@@ -49,11 +49,14 @@ class Config:
     CSV_DELIMITERS = [';', ',', '\t', '|', ':', '~']
     ENCODINGS = ['utf-8', 'utf-8-sig', 'windows-1251', 'cp1251', 'latin-1']
     CURRENCIES = {'EUR': 'EUR', 'CZK': 'CZK', 'HUF': 'HUF', 'AZN': 'AZN', 'AED': 'AED', 'RUB': 'RUB'}
-    def detect_encoding(file_path: str) -> str:
+
+
+def detect_encoding(file_path: str) -> str:
     with open(file_path, 'rb') as f:
         raw = f.read(10000)
     result = chardet.detect(raw)
     return result['encoding'] if result['encoding'] else 'utf-8'
+
 
 def detect_delimiter(file_path: str, encoding: str) -> str:
     with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
@@ -62,6 +65,7 @@ def detect_delimiter(file_path: str, encoding: str) -> str:
         if sample.count(delim) > 5:
             return delim
     return ','
+
 
 def read_file(file_content: bytes, file_name: str) -> pd.DataFrame:
     with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as tmp:
@@ -97,6 +101,8 @@ def read_file(file_content: bytes, file_name: str) -> pd.DataFrame:
             os.unlink(tmp_path)
         except:
             pass
+
+
 def parse_mkb_budapest(file_content: bytes, file_name: str) -> pd.DataFrame:
     """Специальный парсер для выписок MKB Budapest"""
     with tempfile.NamedTemporaryFile(delete=False, suffix='.xls') as tmp:
@@ -175,6 +181,8 @@ def parse_mkb_budapest(file_content: bytes, file_name: str) -> pd.DataFrame:
             os.unlink(tmp_path)
         except:
             pass
+
+
 def parse_date(date_str) -> str:
     if pd.isna(date_str):
         return ''
@@ -204,6 +212,7 @@ def parse_date(date_str) -> str:
                 pass
     
     return date_str
+
 
 def parse_amount(amount_str, description="") -> float:
     if pd.isna(amount_str):
@@ -251,6 +260,8 @@ def parse_amount(amount_str, description="") -> float:
             except:
                 pass
         return 0.0
+
+
 def get_article(description: str, amount: float) -> str:
     desc_lower = description.lower()
     
@@ -424,6 +435,8 @@ def calculate_split(amount: float, subdirection: str) -> Tuple[float, float]:
             util = round(util + (amount - total), 2)
     
     return rent, util
+
+
 def parse_file(file_content: bytes, file_name: str) -> List[Dict]:
     file_lower = file_name.lower()
     
@@ -593,6 +606,8 @@ def parse_file(file_content: bytes, file_name: str) -> List[Dict]:
             continue
     
     return transactions
+
+
 def main():
     tab1, tab2 = st.tabs(["📂 Один файл", "📚 Несколько файлов"])
     
@@ -708,4 +723,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()    
+    main()
