@@ -210,7 +210,7 @@ class HeaderDetector:
                 best_row = row_idx
         
         # Минимальный порог для определения заголовка
-        if best_score >= 2:  # Уменьшен порог для лучшего обнаружения
+        if best_score >= 2:
             return best_row
         return -1
     
@@ -231,9 +231,9 @@ class HeaderDetector:
                     if kw in cell_str:
                         if category not in header_keywords_found:
                             header_keywords_found.add(category)
-                            score += 2  # Больший вес для уникальных категорий
+                            score += 2
                         else:
-                            score += 1  # Меньший вес для повторяющихся
+                            score += 1
                         break
             
             # Штраф за числовые значения
@@ -263,7 +263,6 @@ class HeaderDetector:
             
             # Проверка на числовое значение
             try:
-                # Попытка преобразовать в число
                 float(cell_str.replace(',', '.'))
                 numeric_count += 1
             except:
@@ -541,7 +540,6 @@ def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, descriptio
             is_negative = True
         elif has_income and not has_expense:
             is_negative = False
-        # Если есть оба или ни одного, оставляем как есть
     
     try:
         value = float(amount_str)
@@ -678,7 +676,7 @@ class ArticleClassifier:
             ],
             '1.2.3 Оплата рекламных систем (бюджет)': [
                 'facebook', 'facbk', 'tiktok', 'ads', 'marketing', 'реклам', 'advertising',
-                'instagram', 'google ads', 'fb ads', 'яндекс директ', ''yandex direct',
+                'instagram', 'google ads', 'fb ads', 'яндекс директ', 'yandex direct',
                 'контекстная реклама', 'contextual advertising', 'promotion', 'продвижение',
                 'propertyfinder', 'tiktok ads', 'linkedin ads', 'twitter ads', 'pinterest ads',
                 'реклама в', 'рекламная кампания', 'ad campaign'
@@ -828,17 +826,14 @@ class ArticleClassifier:
         desc_lower = description.lower()
         file_lower = file_name.lower()
         
-        # Определение родительской статьи
-        parent_article = ""
-        
         # Для расходов
         if amount < 0:
             for article, keywords in self.expense_articles.items():
                 for keyword in keywords:
                     if keyword in desc_lower:
                         # Определяем родительскую статью
-                        article_code = article.split(' ')[0]  # Берем код до пробела
-                        parent_code = '.'.join(article_code.split('.')[:2])  # Берем первые два уровня
+                        article_code = article.split(' ')[0]
+                        parent_code = '.'.join(article_code.split('.')[:2])
                         parent_article = self.parent_articles.get(parent_code, "")
                         return article, parent_article
             
@@ -950,13 +945,13 @@ class RentalSplitter:
     """Класс для разбивки арендных платежей"""
     def __init__(self):
         self.split_ratios = {
-            'AC89 Чака 89 (дом + парковка)': (0.836, 0.164),  # 83.6% аренда, 16.4% КУ
-            'AN14 Антониас 14 (дом + парковка)': (0.80, 0.20),  # 80% аренда, 20% КУ
-            'M81 - Matisa 81': (0.70, 0.30),  # 70% аренда, 30% КУ
-            'B117 Бривибас, 117': (0.85, 0.15),  # 85% аренда, 15% КУ
-            'V22 К. Валдемара 22': (0.55, 0.45),  # 55% аренда, 45% КУ
-            'G77 Гертрудес, 77': (0.85, 0.15),  # 85% аренда, 15% КУ
-            'default': (0.85, 0.15)  # По умолчанию
+            'AC89 Чака 89 (дом + парковка)': (0.836, 0.164),
+            'AN14 Антониас 14 (дом + парковка)': (0.80, 0.20),
+            'M81 - Matisa 81': (0.70, 0.30),
+            'B117 Бривибас, 117': (0.85, 0.15),
+            'V22 К. Валдемара 22': (0.55, 0.45),
+            'G77 Гертрудес, 77': (0.85, 0.15),
+            'default': (0.85, 0.15)
         }
     
     def should_split(self, description: str, amount: float, file_name: str, subdirection: str) -> bool:
@@ -1010,7 +1005,6 @@ class RentalSplitter:
         # Корректировка для точного соответствия исходной сумме
         total = rent_share + utility_share
         if abs(total - amount) > 0.01:
-            # Корректируем большую часть
             if rent_share > utility_share:
                 rent_share = round(rent_share + (amount - total), 2)
             else:
@@ -1128,7 +1122,7 @@ def parse_file(file_content: bytes, file_name: str) -> List[Dict]:
                             date_count += 1
                         except:
                             pass
-                    if date_count > len(sample) * 0.5:  # Более 50% значений - даты
+                    if date_count > len(sample) * 0.5:
                         date_col = col
                         break
     
@@ -1199,18 +1193,15 @@ def parse_file(file_content: bytes, file_name: str) -> List[Dict]:
                 if pd.notna(payer_val) and str(payer_val).strip():
                     payer = str(payer_val)
             
-            # Добавление других колонок к описанию (кроме числовых и дат)
+            # Добавление других колонок к описанию
             for col in df.columns:
                 if col not in [date_col, amount_col, debit_col, credit_col, desc_col, type_col, payer_col, currency_col]:
                     val = row[col]
                     if pd.notna(val) and str(val).strip() and str(val) != 'nan':
-                        # Проверяем, не является ли значение числом или датой
                         try:
                             float(str(val).replace(',', '.'))
-                            # Это число, пропускаем
                             continue
                         except:
-                            # Не число, добавляем
                             description += ' ' + str(val)
             
             description = description.strip()
@@ -1264,10 +1255,8 @@ def parse_file(file_content: bytes, file_name: str) -> List[Dict]:
                         val = row[col]
                         if pd.notna(val):
                             try:
-                                # Пробуем преобразовать в число
                                 num_val = float(str(val).replace(',', '.'))
                                 if num_val != 0:
-                                    # Определяем знак по описанию
                                     temp_amount = parse_amount(str(val), description=description)
                                     if temp_amount != 0:
                                         amount = temp_amount
@@ -1297,7 +1286,7 @@ def parse_file(file_content: bytes, file_name: str) -> List[Dict]:
                 currency = 'AZN'
             elif 'aed' in file_lower or 'оаэ' in file_lower or 'дирхам' in file_lower or 'uae' in file_lower:
                 currency = 'AED'
-            elif 'rub' in file_lower or'россия' in file_lower or 'russia' in file_lower:
+            elif 'rub' in file_lower or 'россия' in file_lower or 'russia' in file_lower:
                 currency = 'RUB'
             elif 'usd' in file_lower or 'доллар' in file_lower or 'dollar' in file_lower:
                 currency = 'USD'
@@ -1373,7 +1362,7 @@ def parse_file(file_content: bytes, file_name: str) -> List[Dict]:
                 })
         
         except Exception as e:
-            # Пропускаем проблемные строки, но логируем
+            # Пропускаем проблемные строки
             continue
     
     return transactions
@@ -1548,7 +1537,10 @@ def main():
         st.markdown("#### Разделители CSV")
         st.write("Поддерживаемые разделители:")
         for delim in Config.CSV_DELIMITERS:
-            st.write(f"- `{delim}`" if delim != '\t' else "- `\\t` (табуляция)")
+            if delim == '\t':
+                st.write("- `\\t` (табуляция)")
+            else:
+                st.write(f"- `{delim}`")
         
         st.markdown("#### Кодировки")
         st.write("Поддерживаемые кодировки:")
