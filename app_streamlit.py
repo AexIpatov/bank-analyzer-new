@@ -399,11 +399,15 @@ def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, descriptio
         expense_keywords = [
             'fee', 'charge', 'комиссия', 'tax', 'налог', 'to ', 'transfer to',
             'списание', 'снятие', 'оплата', 'payment', 'платеж', 'withdrawal',
-            'дебит', 'расход', 'стоимость', 'цена', 'cost', 'price', 'purchase'
+            'дебит', 'расход', 'стоимость', 'цена', 'cost', 'price', 'purchase',
+            'buy', 'купить', 'оплачено', 'paid', 'withdraw', 'снятие средств',
+            'вывод средств', 'отправлено', 'sent', 'перевод', 'transfer',
+            'плата', 'оплата за', 'оплата по', 'оплата услуги'
         ]
         income_keywords = [
             'from', 'received', 'incoming', 'deposit', 'зачисление', 'пополнение',
-            'возврат', 'refund', 'компенсация', 'income', 'доход', 'поступление'
+            'возврат', 'refund', 'компенсация', 'compensation', 'income',
+            'доход', 'поступление', 'receipt', 'получено', 'got', 'received from'
         ]
         
         has_expense = any(keyword in desc_lower for keyword in expense_keywords)
@@ -444,6 +448,7 @@ class ArticleClassifier:
             '1.1.1': 'Поступления за аренду недвижимости и земельных участков',
             '1.1.2': 'Прочие поступления',
             '1.1.4': 'Поступления за оказание услуг',
+            '1.2.1': 'Закупка до 1000 евро',
             '1.2.2': 'Командировочные расходы',
             '1.2.3': 'Оплата рекламных систем (бюджет)',
             '1.2.8': 'Обслуживание объектов',
@@ -454,143 +459,237 @@ class ArticleClassifier:
             '1.2.17': 'РКО',
             '1.2.21': 'Офисные расходы',
             '1.2.24': 'Расходы по отдельному бизнесу',
-            '1.2.27': 'Расходы в ожидании возмещения ЗП',
-            '1.2.28': 'Расходы за другие компании группы',
+            '1.2.27': 'Расходы в ожидании возмещения ЗП по другим бизнесам',
+            '1.2.28': 'Расходы, произведённые за другие компании группы (к возмещению)',
+            '1.2.33': 'Непредвиденные расходы',
             '1.2.34': 'Вознаграждение инвестора',
             '1.2.37': 'Возврат гарантийных депозитов',
+            '1.2.38': 'НДС в составе комиссий банка',
+            '2.2.4': 'Прочее',
             '2.2.7': 'Расходы по приобретению недвижимости',
+            '2.2.9': 'Перемещение расход отдельный бизнес',
             '3.1.1': 'Ввод средств',
             '3.1.3': 'Получение внутригруппового займа',
-            '3.1.4': 'Возврат выданного займа'
+            '3.1.4': 'Возврат выданного внутригруппового займа'
         }
         
         self.expense_articles = {
             '1.2.17 РКО': [
-                'комиссия', 'commission', 'fee', 'charge', 'maintenance', 'rko',
-                'плата за обслуживание', 'service package', 'számlakivonat díja',
-                'netbankár monthly fee', 'conversion fee', 'bank charge',
-                'monthly fee', 'account maintenance', 'card fee', 'transaction fee'
+                'комиссия', 'commission', 'fee', 'charge', 'maintenance', 'rko', 'subscription',
+                'atm withdrawal', 'плата за обслуживание', 'service package', 'számlakivonat díja',
+                'netbankár monthly fee', 'conversion fee', 'charge for', 'bank charge',
+                'pasha bank charge', 'monthly fee', 'account maintenance', 'card fee',
+                'banking fee', 'transaction fee', 'service charge', 'tariff', 'тариф',
+                'revolut business fee', 'grow plan fee', 'expenses app charge',
+                'foreign exchange transaction fee', 'fee for',
+                'popl.', 'vedeni', 'balicek', 'vypis', 'postou', 'tuz', 'ok', 'odch',
+                'prich', 'intc', 'pl', 'st', 'tp', 'bankovní poplatek', 'opłata bankowa',
+                'banka ücreti', 'bank fee', 'service fee', 'administrative fee'
             ],
             '1.2.15.1 Зарплата': [
-                'зарплат', 'salary', 'darba alga', 'algas izmaksa', 'wage', 'payroll'
+                'зарплат', 'salary', 'darba alga', 'algas izmaksa', 'darba algas izmaksa',
+                'wage', 'payroll', 'alga', 'зарплата', 'зарплату', 'algas', 'salary amount',
+                'darba algas izmaksa par', 'mzda', 'płaca', 'maaş', 'wages', 'payment to employee'
             ],
             '1.2.15.2 Налоги на ФОТ': [
                 'nodokļu nomaksa', 'vid', 'budžets', 'налог', 'valsts budžets',
-                'social tax', 'подоходный налог', 'income tax', 'dsmf'
+                'nodokļu', 'darba devēja', 'nodoku nomaksa', 'state revenue service',
+                'social tax', 'социальный налог', 'подоходный налог', 'income tax',
+                'dsmf', 'государственные сборы', 'taxes', 'налоги', 'daň', 'podatek',
+                'vergi', 'tax payment', 'tax deduction'
             ],
             '1.2.16.3 НДС': [
-                'value added tax', 'vat', 'ндс', 'pvn', 'output tax', 'dph', 'iva'
+                'value added tax', 'vat', 'ндс', 'pvn', 'output tax', 'pvn nodoklis',
+                'pvns', 'н.д.с.', 'добавленная стоимость', 'value added tax - output',
+                'dph', 'iva', 'kdv', 'moms', 'btw', 'tva'
             ],
             '1.2.16.1 Налог на недвижимость': [
-                'nekustamā īpašuma nodoklis', 'налог на недвижимость', 'property tax'
+                'nekustamā īpašuma nodoklis', 'налог на недвижимость', 'pašvaldība',
+                'property tax', 'real estate tax', 'имущественный налог',
+                'rigas valstspilsētas pašvaldība', 'daň z nemovitosti', 'podatek od nieruchomości',
+                'emlak vergisi'
             ],
             '1.2.10.5 Электричество': [
-                'latvenergo', 'elektri', 'электричеств', 'electricity', 'power'
+                'latvenergo', 'elektri', 'электричеств', 'electricity', 'power',
+                'elektrība', 'электроэнергия', 'light', 'освещение', 'электричество',
+                'elektřina', 'prąd', 'elektrik'
             ],
             '1.2.10.3 Вода': [
-                'rigas udens', 'ūdens', 'вода', 'water'
+                'rigas udens', 'ūdens', 'вода', 'water', 'woda', 'víz',
+                'водоснабжение', 'водопровод', 'rīgas ūdens', 'voda', 'su'
             ],
             '1.2.10.2 Газ': [
-                'gāze', 'газ', 'gas', 'heating'
+                'gāze', 'газ', 'gas', 'heating', 'отопление', 'тепло',
+                'gáz', 'газовое', 'газоснабжение', 'plyn', 'gaz'
             ],
             '1.2.10.1 Мусор': [
-                'atkritumi', 'мусор', 'eco baltia', 'clean r', 'waste'
+                'atkritumi', 'мусор', 'eco baltia', 'clean r', 'waste', 'garbage',
+                'вывоз мусора', 'утилизация', 'trash', 'rubbish', 'odpad', 'çöp'
             ],
             '1.2.10.6 Коммунальные УК дома': [
                 'rigas namu pārvaldnieks', 'latvijas namsaimnieks', 'biedrība',
-                'управляющая компания', 'management fee'
+                'dzīvokļu īpašnieku', 'apartment owners', 'management fee',
+                'управляющая компания', 'ук', 'house management', 'condominium',
+                'vecruni', 'nia nami', 'mūsu nams', 'správa domu', 'yönetim ücreti'
             ],
             '1.2.9.1 Связь, интернет, TV': [
-                'tele2', 'bite', 'tet', 'internet', 'связь', 'telenet', 'wifi'
+                'tele2', 'bite', 'tet', 'internet', 'связь', 'telenet', 'wifi', 'broadband',
+                'телефон', 'phone', 'мобильная связь', 'mobile', 'телевидение', 'tv',
+                'телеком', 'telecom', 'связь и интернет', 'bite latvija', 'telekomunikace',
+                'telekomunikacja', 'iletişim'
             ],
             '1.2.9.3 IT сервисы': [
                 'google one', 'lovable', 'openai', 'chatgpt', 'browsec', 'adobe',
-                'albato', 'slack', 'it сервисы', 'software', 'subscription'
+                'albato', 'slack', 'it сервисы', 'software', 'subscription',
+                'microsoft', 'office 365', 'cloud', 'хостинг', 'hosting', 'domain',
+                'домен', 'сервер', 'server', 'vps', 'vpn', 'антивирус', 'antivirus',
+                'asana', 'zapier', 'google *google', 'digitalocean', 'aws', 'azure',
+                'github', 'gitlab', 'bitbucket', 'jira', 'confluence', 'trello',
+                'notion', 'figma', 'sketch', 'zoom', 'teams', 'slack'
             ],
-            '1.2.3 Оплата рекламных систем': [
-                'facebook', 'facbk', 'tiktok', 'ads', 'marketing', 'реклам',
-                'instagram', 'google ads', 'fb ads', 'propertyfinder'
+            '1.2.3 Оплата рекламных систем (бюджет)': [
+                'facebook', 'facbk', 'tiktok', 'ads', 'marketing', 'реклам', 'advertising',
+                'instagram', 'google ads', 'fb ads', 'яндекс директ', 'yandex direct',
+                'контекстная реклама', 'contextual advertising', 'promotion', 'продвижение',
+                'propertyfinder', 'tiktok ads', 'linkedin ads', 'twitter ads', 'pinterest ads',
+                'реклама в', 'рекламная кампания', 'ad campaign'
             ],
             '1.2.2 Командировочные расходы': [
-                'flydubai', 'taxi', 'flixbus', 'bolt', 'uber', 'careem',
-                'travel', 'transport', 'hotel', 'авиабилеты', 'tickets',
-                'командировка', 'dubai taxi', 'enoc', 'emarat'
+                'flydubai', 'taxi', 'flixbus', 'bolt', 'uber', 'flix', 'careem',
+                'travel', 'transport', 'hotel', 'accommodation', 'авиабилеты',
+                'билеты', 'tickets', 'проживание', 'питание', 'meal', 'food',
+                'командировка', 'business trip', 'транспортные расходы', 'dubai taxi',
+                'cars taxi', 'enoc', 'emarat', 'hotel', 'отель', 'restaurant', 'ресторан',
+                'airbnb', 'booking.com', 'expedia', 'hostel', 'hostelworld', 'train',
+                'bus', 'metro', 'subway', 'car rental', 'rental car'
             ],
-            '1.2.8.1 Обслуживание объектов': [
+            '1.2.8.1 Обслуживание объектов (бытовые вопросы, без ремонта)': [
                 'apmaksa par rēķinu', 'обслуживание', 'ремонт', 'lifti', 'taipans',
-                'sidorans', 'komval', 'rīgas lifti', 'maintenance'
+                'sidorans', 'komval', 'rīgas lifti', 'maintenance', 'repair',
+                'уборка', 'cleaning', 'клининг', 'сантехник', 'электрик',
+                'plumber', 'electrician', 'техническое обслуживание', 'atlas materials',
+                'údržba', 'bakım', 'cleaning service', 'janitor', 'уборщик'
             ],
             '1.2.8.2 Страхование': [
-                'balta', 'страхование', 'insurance', 'insure'
+                'balta', 'страхование', 'insurance', 'insure', 'страховка',
+                'страховой взнос', 'insurance premium', 'pojištění', 'sigorta'
             ],
             '1.2.12 Бухгалтер': [
-                'lubova loseva', 'loseva', 'бухгалтер', 'accounting'
+                'lubova loseva', 'loseva', 'бухгалтер', 'accounting', 'bookkeeping',
+                'бухгалтерские услуги', 'бухгалтерия', 'accountant', 'audit', 'аудит',
+                'účetní', 'muhasebeci'
             ],
             '2.2.7 Расходы по приобретению недвижимости': [
-                'pirkuma liguma', 'приобретение недвижимости', 'property purchase',
-                'аванс покупной стоимости', 'rezervacni smlouva'
+                'pirkuma liguma', 'приобретение недвижимости', 'аванс покупной стоимости',
+                'property purchase', 'real estate purchase', 'покупка недвижимости',
+                'advance payment', 'авансовый платеж', 'rezervacni smlouva',
+                'kupní smlouva', 'satın alma'
             ],
-            '1.2.27 Расходы в ожидании возмещения': [
-                'jl/nf', 'jl/zp', 'расходы в ожидании', 'other business'
+            '1.2.27 Расходы в ожидании возмещения ЗП по другим бизнесам': [
+                'jl/nf', 'jl/zp', 'расходы в ожидании', 'other business',
+                'временные расходы', 'temporary expenses', 'alexander plyatsevoy'
             ],
             '1.2.37 Возврат гарантийных депозитов': [
-                'deposit return', 'возврат депозита', 'depozīta atgriešana'
+                'deposit return', 'возврат депозита', 'depozīta atgriešana',
+                'гарантийный депозит', 'security deposit refund', 'vrácení zálohy',
+                'depozito iade'
+            ],
+            '1.2.21.1 Аренда офиса': [
+                'office rent', 'аренда офиса', 'icare odәnisi', 'rent payment',
+                'аренда помещения', 'office space', 'kancelář', 'ofis kirası'
+            ],
+            '1.2.21.2 Административные офисные расходы': [
+                'office', 'офис', 'stationery', 'канцелярия', 'post office', 'ceska posta',
+                'почта', 'post', 'канцелярские товары', 'kancelářské potřeby',
+                'ofis malzemeleri'
             ],
             '1.2.24 Расходы по отдельному бизнесу': [
-                'vzr div', 'nav', 'personal income', 'social security',
-                'giro payment', 'transaction fee part'
+                'vzr div', 'nav', 'personal income', 'social security', 'social contribution',
+                'giro payment', 'transaction fee part', 'nav corporate tax', 'nav tarsasagi ado'
             ],
-            '1.2.28 Расходы за другие компании': [
-                'относится к александру', 'за другие компании', 'revelton'
+            '1.2.28 Расходы, произведённые за другие компании группы (к возмещению)': [
+                'относится к александру', 'за другие компании', 'revelton',
+                'расходы за другие компании', 'other companies', 'pro jiné společnosti',
+                'diğer şirketler için'
+            ],
+            '1.2.33 Непредвиденные расходы': [
+                'kompensācija', 'непредвиденные', 'unexpected', 'compensation',
+                'neočekávané výdaje', 'beklenmedik giderler'
             ],
             '1.2.34 Вознаграждение инвестора': [
-                'вознаграждение инвестора', 'investor reward', 'bs property', 'bs rerum'
+                'вознаграждение инвестора', 'investor reward', 'bs property', 'bs rerum',
+                'odměna investora', 'yatırımcı ödülü'
+            ],
+            '1.2.38 НДС в составе комиссий банка': [
+                'value added tax', 'vat', 'ндс', 'tax on commission', 'bank commission vat',
+                'dph z bankovních poplatků', 'banka komisyonu kdv'
             ],
             'Перевод между счетами': [
                 'currency exchange', 'конвертация', 'internal payment',
-                'transfer to own account', 'между своими счетами',
-                'ipp transfer', 'inter company transfer', 'same-day own account transfer'
+                'transfer to own account', 'между своими счетами', 'own transfer',
+                'внутренний перевод', 'межбанковский перевод', 'bank transfer',
+                'перевод между счетами', 'перевод в кассу', 'перевод на счет',
+                'ipp transfer', 'inter company transfer', 'same-day own account transfer',
+                'převod mezi účty', 'hesap transferi'
             ]
         }
         
         self.income_articles = {
-            '1.1.1.2 Поступления систем бронирования': [
-                'airbnb', 'booking.com', 'booking b.v.'
+            '1.1.1.2 Поступления систем бронирования (Airbnb, Booking и пр.)': [
+                'airbnb', 'booking.com', 'booking b.v.', 'booking', 'airbnb payments',
+                'vrbo', 'homeaway', 'expedia', 'tripadvisor', 'agoda'
             ],
             '1.1.1.4 Получение гарантийного депозита': [
-                'depozits', 'депозит', 'deposit', 'guarantee', 'security deposit'
+                'depozits', 'депозит', 'deposit', 'guarantee', 'security deposit',
+                'гарантийный депозит', 'záloha', 'depozito'
+            ],
+            '1.1.1.5 Возмещения': [
+                'atlıdzība', 'возмещение', 'compensation', 'refund', 'возврат',
+                'компенсация', 'náhrada', 'tazminat'
             ],
             '1.1.4.1 Комиссия за продажу недвижимости': [
                 'commission', 'agency commissions', 'incoming swift payment',
                 'marketing and advertisement', 'consultancy fees', 'real estate commission',
-                'inward remittance', 'fund transfer'
+                'agent commission', 'комиссия за продажу', 'inward remittance',
+                'fund transfer', 'provision', 'komise', 'komisyon'
             ],
             '3.1.3 Получение внутригруппового займа': [
-                'loan', 'займ', 'baltic solutions', 'payment acc loan agreement'
+                'loan', 'займ', 'baltic solutions', 'payment acc loan agreement',
+                'loan payment', 'loan repayment', 'получение займа', 'půjčka', 'kredi'
             ],
-            '3.1.4 Возврат выданного займа': [
-                'loan return', 'возврат займа', 'partial repayment', 'repayment'
+            '3.1.4 Возврат выданного внутригруппового займа': [
+                'loan return', 'возврат займа', 'partial repayment', 'repayment',
+                'partial repayment of the loan', 'возврат выданного займа',
+                'splátka půjčky', 'kredi geri ödemesi'
             ],
             '3.1.1 Ввод средств': [
-                'transfer to own account', 'между своими счетами', 'own transfer',
-                'fx spot/fwd payment', 'конвертация валюты'
+                'transfer to own account', 'между своими счетами', 'own transfer', 'ввод средств',
+                'fx spot/fwd payment', 'конвертация валюты', 'vklad', 'yatırım'
             ],
             '1.1.2.3 Компенсация по коммунальным расходам': [
-                'komunālie', 'utilities', 'компенсац', 'возмещени', 'communal'
+                'komunālie', 'utilities', 'компенсац', 'возмещени', 'utility',
+                'communal', 'heating cost', 'water cost', 'коммунальные', 'компенсация',
+                'возмещение коммунальных', 'kompenzace', 'tazminat'
             ],
             '1.1.2.4 Прочие мелкие поступления': [
-                'кэшбэк', 'cashback', 'u rok do', 'interest', 'проценты'
+                'кэшбэк', 'cashback', 'u rok do', 'interest', 'проценты', 'урок',
+                'urok do', 'процент', 'interest payment', 'cash back', 'cash-back',
+                'cashback bonus', 'cashback reward'
             ],
             '1.1.2.2 Возвраты от поставщиков': [
-                'return on request', 'возврат', 'refund', 'reversal', 'vat reversal'
+                'return on request', 'возврат', 'refund', 'reversal', 'vat reversal',
+                'возврат от поставщика', 'supplier refund', 'vrácení od dodavatele',
+                'tedarikçi iadesi'
             ],
             '1.1.1.1 Арендная плата (наличные)': [
-                'наличные', 'cash', 'cash payment'
+                'наличные', 'cash', 'cash payment', 'hotovost', 'nakit'
             ],
             '1.1.1.3 Арендная плата (счёт)': [
                 'арендн', 'rent', 'money added', 'ire', 'dzivoklis', 'from',
                 'credit of sepa', 'topup', 'received', 'incoming payment',
-                'sent from', 'поступление', 'rent payment', 'nájemné', 'kira'
+                'partial repayment', 'payment acc loan agreement', 'sent from',
+                'поступление', 'received from', 'rent payment', 'арендная плата',
+                'плата за аренду', 'ire par', 'par dzivokli', 'nájemné', 'kira'
             ]
         }
     
@@ -605,7 +704,7 @@ class ArticleClassifier:
                         parent_code = '.'.join(article_code.split('.')[:2])
                         parent_article = self.parent_articles.get(parent_code, "")
                         return article, parent_article
-            return '1.2.8.1 Обслуживание объектов', '1.2.8 Обслуживание объектов'
+            return '1.2.8.1 Обслуживание объектов (бытовые вопросы, без ремонта)', '1.2.8 Обслуживание объектов'
         else:
             for article, keywords in self.income_articles.items():
                 for keyword in keywords:
@@ -614,7 +713,7 @@ class ArticleClassifier:
                         parent_code = '.'.join(article_code.split('.')[:2])
                         parent_article = self.parent_articles.get(parent_code, "")
                         return article, parent_article
-            return '1.1.1.3 Арендная плата (счёт)', '1.1.1 Поступления за аренду'
+            return '1.1.1.3 Арендная плата (счёт)', '1.1.1 Поступления за аренду недвижимости и земельных участков'
 
 
 # ==================== ОПРЕДЕЛЕНИЕ НАПРАВЛЕНИЙ ====================
@@ -622,46 +721,52 @@ class DirectionClassifier:
     def __init__(self):
         self.directions = {
             'Latvia': [
-                ('AN14 Антониас 14', ['antonijas', 'an14']),
-                ('AC89 Чака 89', ['caka', 'ac89', 'čaka']),
-                ('M81 - Matisa 81', ['matisa', 'm81']),
-                ('B117 Бривибас, 117', ['brīvības 117', 'b117']),
+                ('AN14 Антониас 14 (дом + парковка)', ['antonijas', 'an14', 'antonias']),
+                ('AC89 Чака 89 (дом + парковка)', ['caka', 'ac89', 'čaka', 'caka iela', 'chaka']),
+                ('M81 - Matisa 81', ['matisa', 'm81', 'matīsa']),
+                ('B117 Бривибас, 117', ['brīvības 117', 'b117', 'brivibas', 'brīvības']),
                 ('B78 Бривибас, 78', ['brīvības 78', 'b78']),
-                ('G77 Гертрудес, 77', ['gertrudes', 'g77']),
-                ('V22 К. Валдемара 22', ['valdemara', 'v22']),
+                ('G77 Гертрудес, 77', ['gertrudes', 'g77', 'gertrūdes']),
+                ('V22 К. Валдемара 22', ['valdemara', 'v22', 'valdemāra']),
                 ('MU3 - Mucenieku 3 - 4', ['mucenieku', 'mu3']),
-                ('DS1 Дзирнаву, 1', ['dzirnavu', 'ds1']),
-                ('C23 Цесу, 23', ['cesu', 'c23']),
-                ('SK3-Skunju 3', ['skunu', 'sk3']),
-                ('D4 Парковка-Deglava4', ['deglava', 'd4']),
-                ('H5 Хоспиталю', ['hospitalu', 'h5']),
-                ('BRN_Brunieku', ['bruninieku', 'brn']),
-                ('AC87 Гараж Чака', ['ac87', 'caka 87'])
+                ('DS1 Дзирнаву, 1', ['dzirnavu', 'ds1', 'dzirnavu iela']),
+                ('C23 Цесу, 23', ['cesu', 'c23', 'cesu iela']),
+                ('SK3-Skunju 3', ['skunu', 'sk3', 'skunju', 'skunu iela']),
+                ('D4 Парковка-Deglava4', ['deglava', 'd4', 'deglava iela']),
+                ('H5 Хоспиталю', ['hospitalu', 'h5', 'hospitalu iela']),
+                ('BRN_Brunieku', ['bruninieku', 'brn', 'bruņinieku', 'bruninieku iela']),
+                ('AC87 Гараж Чака', ['ac87', 'caka 87']),
+                ('UK_Latvia', ['uk_latvia', 'латвия', 'latvia', 'riga', 'рига'])
             ],
             'Europe': [
-                ('F6 Помещение в доме Будапешт', ['budapest', 'f6', 'yulia galvin']),
+                ('F6 Помещение в доме Будапешт', ['budapest', 'f6', 'yulia galvin', 'будапешт']),
                 ('DZ1_Dzibik1', ['dzibik', 'dz1', 'bilych nadiia']),
-                ('J91 Ялтская', ['j91', 'ялтская', 'bastet']),
-                ('TGM45 Масарика', ['masaryka', 'tgm45', 'bagel lounge']),
-                ('OT1_Otovice', ['otovice', 'ot1', 'komplekt']),
+                ('J91 Ялтская - Помещение маленькое', ['j91', 'ялтская', 'bastet']),
+                ('TGM45 Масарика - Bagel Lounge', ['masaryka', 'tgm45', 'bagel lounge', 'restco', 'masaryk']),
+                ('OT1_Otovice Участок Свалка', ['otovice', 'ot1', 'komplekt', 'sedlecky kaolin']),
                 ('MOL - Офис Molly', ['twohills', 'molly', 'mol']),
-                ('LT_Vilnus', ['sveciy', 'vilnus']),
-                ('TGM20-Masaryka20', ['garpiz', 'tgm20']),
-                ('Pernik', ['pernik'])
+                ('LT_Vilnus', ['sveciy', 'vilnus', 'vilnius', 'вильнюс']),
+                ('TGM20-Masaryka20', ['garpiz', 'tgm20', 'masaryka20']),
+                ('Pernik', ['pernik']),
+                ('UK_EU', ['uk_eu', 'европа', 'europe', 'eu', 'чехия', 'czech', 'чехия'])
             ],
             'East-Восток': [
-                ('BIS - Baku', ['icheri', 'bis', 'baku', 'cordiality']),
-                ('UKA - UK_AZ-Аренда', ['uka', 'uk_az', 'азербайджан'])
+                ('BIS - Baku, Icheri Sheher 1,2', ['icheri', 'bis', 'baku', 'cordiality', 'баку']),
+                ('UKA - UK_AZ-Аренда', ['uka', 'uk_az', 'азербайджан', 'azerbaijan', 'azn'])
             ],
             'Nomiqa': [
-                ('BNQ_BAKU-Nomiqa', ['bnq', 'baku-nomiqa']),
-                ('DNQ_Dubai-Nomiqa', ['dnq', 'dubai-nomiqa', 'nomiqa real estate', 'mashreq'])
+                ('BNQ_BAKU-Nomiqa', ['bnq', 'baku-nomiqa', 'bunda']),
+                ('DNQ_Dubai-Nomiqa', ['dnq', 'dubai-nomiqa', 'nomiqa real estate', 'mashreq', 'dubai', 'дубай'])
             ],
             'Unelma': [
                 ('UK_Unelma', ['unelma'])
             ],
             'Отдельный бизнес': [
-                ('', ['jl/nf', 'jl/zp', 'отдельный бизнес', 'в ожидании возмещения'])
+                ('', ['jl/nf', 'jl/zp', 'отдельный бизнес', 'в ожидании возмещения',
+                     'alexander plyatsevoy', 'временные расходы', 'temporary business'])
+            ],
+            'UK Estate': [
+                ('', ['uk estate', 'общие расходы', 'general expenses', 'head office'])
             ]
         }
     
@@ -678,13 +783,13 @@ class DirectionClassifier:
                     if keyword in combined_text:
                         return direction, subdirection
         
-        if any(x in file_lower for x in ['pasha', 'kapital', 'bunda', 'azn', 'azerbaijan']):
+        if any(x in file_lower for x in ['pasha', 'kapital', 'bunda', 'azn', 'azerbaijan', 'баку']):
             return 'East-Восток', 'UKA - UK_AZ-Аренда'
-        if any(x in file_lower for x in ['mashreq', 'wio', 'aed', 'dubai', 'uae']):
+        if any(x in file_lower for x in ['mashreq', 'wio', 'aed', 'dubai', 'uae', 'оаэ']):
             return 'Nomiqa', 'DNQ_Dubai-Nomiqa'
-        if any(x in file_lower for x in ['csob', 'unicredit', 'czk', 'czech', 'praha', 'budapest', 'mkb']):
+        if any(x in file_lower for x in ['csob', 'unicredit', 'czk', 'чехия', 'czech', 'praha', 'prague', 'budapest', 'mkb']):
             return 'Europe', 'UK_EU'
-        if any(x in file_lower for x in ['industra', 'revolut', 'paysera', 'latvia', 'riga']):
+        if any(x in file_lower for x in ['industra', 'revolut', 'paysera', 'латвия', 'latvia', 'riga', 'lv']):
             return 'Latvia', 'UK_Latvia'
         
         return 'UK Estate', ''
@@ -694,8 +799,8 @@ class DirectionClassifier:
 class RentalSplitter:
     def __init__(self):
         self.split_ratios = {
-            'AC89 Чака 89': (0.836, 0.164),
-            'AN14 Антониас 14': (0.80, 0.20),
+            'AC89 Чака 89 (дом + парковка)': (0.836, 0.164),
+            'AN14 Антониас 14 (дом + парковка)': (0.80, 0.20),
             'M81 - Matisa 81': (0.70, 0.30),
             'B117 Бривибас, 117': (0.85, 0.15),
             'V22 К. Валдемара 22': (0.55, 0.45),
@@ -714,7 +819,7 @@ class RentalSplitter:
             'commission', 'комиссия', 'fee', 'charge', 'tax', 'налог',
             'salary', 'зарплата', 'refund', 'возврат', 'interest',
             'valsts budžets', 'latvenergo', 'rigas udens', 'bite', 'tele2',
-            'inward remittance', 'fund transfer', 'conversion'
+            'inward remittance', 'fund transfer', 'conversion', 'exchange'
         ]
         
         for kw in exclude_keywords:
@@ -724,7 +829,10 @@ class RentalSplitter:
         rent_keywords = [
             'rent', 'аренд', 'caka', 'antonijas', 'matisa', 'valdemara',
             'for rent', 'dzivoklis', 'apartment', 'ire',
-            'money added', 'topup', 'from', 'received'
+            'money added', 'topup', 'from', 'received', 'incoming',
+            'brīvības', 'gertrudes', 'mucenieku', 'dzirnavu', 'cesu',
+            'skunu', 'deglava', 'hospitalu', 'bruninieku', 'nájemné',
+            'kira', 'rental', 'lease', 'лизинг'
         ]
         
         has_rent_keyword = any(kw in desc_lower for kw in rent_keywords)
@@ -840,7 +948,7 @@ def parse_file(file_content: bytes, file_name: str) -> List[Dict]:
             credit_col = col
         if desc_col is None and any(kw in col_lower for kw in detector.header_patterns['description']):
             desc_col = col
-        if payer_col is None and any(kw in col_lower for kw in ['payer', 'плательщик', 'получатель', 'beneficiary']):
+        if payer_col is None and any(kw in col_lower for kw in ['payer', 'плательщик', 'получатель', 'beneficiary', 'recipient']):
             payer_col = col
     
     if date_col is None and len(df.columns) > 0:
@@ -938,6 +1046,12 @@ def parse_file(file_content: bytes, file_name: str) -> List[Dict]:
                 currency = 'AED'
             elif 'rub' in file_lower:
                 currency = 'RUB'
+            elif 'usd' in file_lower:
+                currency = 'USD'
+            elif 'gbp' in file_lower:
+                currency = 'GBP'
+            elif 'pln' in file_lower:
+                currency = 'PLN'
             
             account_name = file_name.replace('.csv', '').replace('.xlsx', '').replace('.xls', '').replace('.txt', '')
             
@@ -1124,11 +1238,14 @@ def main():
     with tab3:
         st.markdown("### Настройки анализа")
         st.markdown("#### Форматы дат")
-        for fmt in Config.DATE_FORMATS[:8]:
+        for fmt in Config.DATE_FORMATS[:10]:
             st.write(f"- `{fmt}`")
         st.markdown("#### Разделители CSV")
         for delim in Config.CSV_DELIMITERS:
-            st.write(f"- `{delim}`" if delim != '\t' else "- `\\t` (табуляция)")
+            if delim == '\t':
+                st.write("- `\\t` (табуляция)")
+            else:
+                st.write(f"- `{delim}`")
         st.markdown("#### Валюты")
         for code, name in Config.CURRENCIES.items():
             st.write(f"- `{code}`")
