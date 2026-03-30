@@ -44,33 +44,28 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Конфигурация
-class Config:
-    DATE_FORMATS = [
-        "%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%Y.%m.%d",
-        "%d-%m-%Y", "%m/%d/%Y", "%Y/%m/%d", "%d.%m.%y",
-        "%d/%m/%y", "%y-%m-%d", "%Y%m%d"
-    ]
-
 def parse_dates(date_val) -> str:
     """Парсинг даты из различных форматов"""
     if pd.isna(date_val):
         return ''
     
-    # Если это datetime объект
     if isinstance(date_val, (datetime, pd.Timestamp)):
         return date_val.strftime("%Y-%m-%d")
     
     date_str = str(date_val).strip()
     
-    # Очистка
     if ' ' in date_str:
         date_str = date_str.split(' ')[0]
     if 'T' in date_str:
         date_str = date_str.split('T')[0]
     
-    # Пробуем все форматы
-    for fmt in Config.DATE_FORMATS:
+    # Пробуем разные форматы
+    formats = [
+        "%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%Y.%m.%d",
+        "%d-%m-%Y", "%m/%d/%Y", "%Y/%m/%d", "%d.%m.%y"
+    ]
+    
+    for fmt in formats:
         try:
             return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
         except:
@@ -78,121 +73,82 @@ def parse_dates(date_val) -> str:
     
     return date_str
 
-def parse_amount(amount_val, description="") -> float:
-    """Парсинг суммы с правильной обработкой"""
+def parse_amount(amount_val) -> float:
+    """Парсинг суммы"""
     if pd.isna(amount_val):
         return 0.0
     
-    # Если это уже число
     if isinstance(amount_val, (int, float)):
         return float(amount_val)
     
     amount_str = str(amount_val).strip()
-    if amount_str in ['', 'nan', 'NaN', 'None', '-', 'null']:
+    if amount_str in ['', 'nan', 'NaN', 'None', '-']:
         return 0.0
     
-    # Сохраняем оригинал
-    original = amount_str
-    
-    # Определяем знак
-    is_negative = False
-    if amount_str.startswith('-'):
-        is_negative = True
-        amount_str = amount_str[1:]
-    elif amount_str.startswith('+'):
+    # Сохраняем знак
+    is_negative = amount_str.startswith('-')
+    if is_negative:
         amount_str = amount_str[1:]
     
-    # Удаляем валюту
+    # Удаляем валюту и пробелы
     amount_str = re.sub(r'\s*[A-Z]{3}\s*$', '', amount_str)
-    amount_str = re.sub(r'^\s*[A-Z]{3}\s*', '', amount_str)
-    
-    # Удаляем пробелы
     amount_str = amount_str.replace(' ', '').replace('\xa0', '').replace('\u202f', '')
     
-    # Очищаем от всех символов, кроме цифр, минуса и точки/запятой
-    # Заменяем запятую на точку для десятичных
+    # Заменяем запятую на точку (европейский формат)
     if ',' in amount_str:
-        # Проверяем, является ли запятая десятичным разделителем
-        parts = amount_str.split(',')
-        if len(parts) == 2 and len(parts[1]) <= 2:
-            amount_str = amount_str.replace(',', '.')
+        amount_str = amount_str.replace(',', '.')
     
-    # Удаляем все кроме цифр, минуса и точки
+    # Очищаем от всего кроме цифр, минуса и точки
     amount_str = re.sub(r'[^\d.-]', '', amount_str)
     
-    if not amount_str or amount_str == '-':
+    if not amount_str:
         return 0.0
     
     try:
         amount = float(amount_str)
-    except ValueError:
-        # Пробуем найти число в строке
-        numbers = re.findall(r'-?\d+\.?\d*', original)
-        if numbers:
-            try:
-                amount = float(numbers[0])
-            except:
-                return 0.0
-        else:
-            return 0.0
-    
-    # Контекстное определение знака для расходов
-    if not is_negative and amount > 0 and description:
-        desc_lower = description.lower()
-        expense_keywords = [
-            'fee', 'charge', 'komis', 'díja', 'комиссия', 'tax', 'налог',
-            'payment', 'оплата', 'списание', 'withdrawal', 'service', 
-            'monthly', 'számlakivonat', 'díj'
-        ]
-        if any(kw in desc_lower for kw in expense_keywords):
-            is_negative = True
-    
-    if is_negative and amount > 0:
-        amount = -amount
-    
-    return amount
+        return -amount if is_negative else amount
+    except:
+        return 0.0
 
 def get_article(description: str, amount: float) -> str:
-    """Определение статьи расходов/доходов"""
+    """Определение статьи"""
     desc_lower = description.lower()
     
-    if amount < 0:  # Расходы
-        if any(kw in desc_lower for kw in ['fee', 'charge', 'service package', 'számlakivonat díja', 'díja']):
-            return '1.2.17 РКО (банковские комиссии)'
-        if any(kw in desc_lower for kw in ['налог', 'tax', 'vat']):
+    if amount < 0:
+        if any(kw in desc_lower for kw in ['fee', 'charge', 'service', 'díja', 'komis']):
+            return '1.2.17 РКО'
+        if any(kw in desc_lower for kw in ['tax', 'налог', 'vid', 'budžets']):
             return '1.2.15.2 Налоги'
-        if any(kw in desc_lower for kw in ['электричество', 'electricity']):
-            return '1.2.10.5 Электричество'
-        if any(kw in desc_lower for kw in ['вода', 'water']):
-            return '1.2.10.3 Вода'
-        if any(kw in desc_lower for kw in ['газ', 'gas']):
+        if any(kw in desc_lower for kw in ['газ', 'gas', 'gāze']):
             return '1.2.10.2 Газ'
-        if any(kw in desc_lower for kw in ['интернет', 'internet', 'телефон']):
-            return '1.2.9.1 Связь, интернет'
+        if any(kw in desc_lower for kw in ['электричество', 'electricity', 'elektri']):
+            return '1.2.10.5 Электричество'
+        if any(kw in desc_lower for kw in ['вода', 'water', 'ūdens']):
+            return '1.2.10.3 Вода'
         return '1.2.8.1 Обслуживание объектов'
-    else:  # Доходы
-        if any(kw in desc_lower for kw in ['аренд', 'rent']):
+    else:
+        if any(kw in desc_lower for kw in ['rent', 'аренд', 'money added', 'from']):
             return '1.1.1.3 Арендная плата'
-        if any(kw in desc_lower for kw in ['возврат', 'refund']):
-            return '1.1.2.2 Возвраты от поставщиков'
         return '1.1.1.3 Арендная плата'
 
 def get_direction(description: str, file_name: str) -> Tuple[str, str]:
-    """Определение направления и объекта"""
+    """Определение направления"""
     file_lower = file_name.lower()
     
-    # MKB Budapest
     if 'budapest' in file_lower or 'mkb' in file_lower:
-        return 'Europe', 'F6 Будапешт (MKB)'
-    
-    # Latvia объекты
-    desc_lower = description.lower()
-    if 'antonijas' in desc_lower:
+        return 'Europe', 'F6 Будапешт'
+    if 'antonijas' in file_lower:
         return 'Latvia', 'AN14 Антониас 14'
-    if 'caka' in desc_lower:
+    if 'caka' in file_lower:
         return 'Latvia', 'AC89 Чака 89'
-    if 'matisa' in desc_lower:
-        return 'Latvia', 'M81 Матиса 81'
+    if 'pasha' in file_lower:
+        return 'East', 'Pasha Bank'
+    if 'kapital' in file_lower:
+        return 'East', 'Kapital Bank'
+    if 'mashreq' in file_lower:
+        return 'Dubai', 'Mashreq Bank'
+    if 'wise' in file_lower:
+        return 'Europe', 'Wise'
     
     return 'Other', 'Прочее'
 
@@ -205,73 +161,65 @@ def parse_mkb_budapest(file_content: bytes, file_name: str) -> List[Dict]:
         df = pd.read_excel(io.BytesIO(file_content), header=None)
         
         if df.empty:
-            st.error("Файл пуст")
             return []
         
-        # Отладочная информация
-        st.info(f"Файл прочитан. Размер: {df.shape[0]} строк x {df.shape[1]} колонок")
-        
-        # Ищем строку с заголовками (Serial number, Value date и т.д.)
-        header_row = -1
-        for idx in range(min(30, len(df))):
-            row_text = ' '.join([str(cell).lower() for cell in df.iloc[idx] if pd.notna(cell)])
-            if 'serial number' in row_text or 'value date' in row_text:
-                header_row = idx
+        # Ищем строку с данными (не заголовки)
+        # В MKB файле данные начинаются после строки с "Serial number"
+        data_start_row = -1
+        for idx in range(min(20, len(df))):
+            row = df.iloc[idx]
+            # Ищем строку с Serial number
+            first_cell = str(row[0]).lower() if len(row) > 0 else ''
+            if 'serial number' in first_cell:
+                data_start_row = idx + 1
                 break
         
-        if header_row == -1:
-            st.error("Не найдена строка с заголовками")
+        if data_start_row == -1:
+            # Если не нашли, пробуем искать по первому числовому значению
+            for idx in range(min(20, len(df))):
+                row = df.iloc[idx]
+                if len(row) > 0 and not pd.isna(row[0]):
+                    try:
+                        # Пробуем преобразовать в число
+                        float(str(row[0]).strip())
+                        data_start_row = idx
+                        break
+                    except:
+                        continue
+        
+        if data_start_row == -1:
             return []
         
-        st.success(f"Найдена строка заголовков: {header_row + 1}")
+        # Определяем индексы колонок по первой строке данных
+        sample_row = df.iloc[data_start_row]
         
-        # Определяем индексы колонок
-        headers = []
-        for idx, cell in enumerate(df.iloc[header_row]):
-            if pd.isna(cell):
-                headers.append(f'col_{idx}')
-            else:
-                headers.append(str(cell).strip())
-        
-        # Индексы нужных колонок
         date_idx = None
         amount_idx = None
         desc_idx = None
-        currency_idx = None
         
-        for idx, header in enumerate(headers):
-            header_lower = header.lower()
-            if 'value date' in header_lower:
-                date_idx = idx
-            elif 'amount' in header_lower:
-                amount_idx = idx
-            elif 'narrative' in header_lower or 'transaction type' in header_lower:
-                desc_idx = idx
-            elif 'currency' in header_lower:
-                currency_idx = idx
+        # В MKB файле:
+        # Колонка 1 - Serial number (дата в формате YYYY-MM-DD)
+        # Колонка 2 - Value date
+        # Колонка 11 - Transaction type (описание)
+        # Колонка 9 - Amount (сумма)
         
-        # Если не нашли по заголовкам, ищем по содержимому
-        if amount_idx is None:
-            # Ищем колонку с числами
-            for idx in range(len(headers)):
-                sample = df.iloc[header_row+1:header_row+5, idx].dropna()
-                if len(sample) > 0:
-                    sample_str = sample.astype(str)
-                    if any(re.search(r'-?\d+', str(v)) for v in sample_str):
+        date_idx = 1  # Value date
+        amount_idx = 9  # Amount
+        desc_idx = 11  # Transaction type
+        
+        # Проверяем, что индексы существуют
+        if amount_idx >= len(sample_row):
+            # Пробуем найти Amount по содержимому
+            for idx in range(len(sample_row)):
+                val = sample_row[idx]
+                if not pd.isna(val):
+                    val_str = str(val)
+                    if re.search(r'-?\d+', val_str) and 'HUF' in val_str:
                         amount_idx = idx
                         break
         
-        if date_idx is None:
-            date_idx = 1  # Value date обычно во второй колонке
-        
-        if desc_idx is None:
-            desc_idx = 4  # Narrative обычно в 5-й колонке
-        
-        st.info(f"Колонки: дата={date_idx}, сумма={amount_idx}, описание={desc_idx}")
-        
         # Обрабатываем строки
-        processed = 0
-        for idx in range(header_row + 1, len(df)):
+        for idx in range(data_start_row, len(df)):
             try:
                 row = df.iloc[idx]
                 
@@ -284,9 +232,6 @@ def parse_mkb_budapest(file_content: bytes, file_name: str) -> List[Dict]:
                     continue
                     
                 date_val = row[date_idx]
-                if pd.isna(date_val):
-                    continue
-                
                 date = parse_dates(date_val)
                 if not date:
                     continue
@@ -306,16 +251,9 @@ def parse_mkb_budapest(file_content: bytes, file_name: str) -> List[Dict]:
                 if desc_idx and desc_idx < len(row) and not pd.isna(row[desc_idx]):
                     description = str(row[desc_idx])
                 
-                # Добавляем Transaction type если есть
-                if len(row) > 11 and not pd.isna(row[11]):  # Transaction type
-                    if description:
-                        description += ' - '
-                    description += str(row[11])
-                
-                # Получаем валюту
-                currency = 'HUF'
-                if currency_idx and currency_idx < len(row) and not pd.isna(row[currency_idx]):
-                    currency = str(row[currency_idx])
+                # Добавляем Narrative если есть
+                if len(row) > 12 and not pd.isna(row[12]):
+                    description += ' - ' + str(row[12])
                 
                 # Определяем статью и направление
                 article = get_article(description, amount)
@@ -324,24 +262,76 @@ def parse_mkb_budapest(file_content: bytes, file_name: str) -> List[Dict]:
                 transactions.append({
                     'Дата': date,
                     'Сумма': amount,
-                    'Валюта': currency,
+                    'Валюта': 'HUF',
                     'Описание': description[:500],
                     'Статья': article,
                     'Направление': direction,
                     'Субнаправление': subdirection,
                     'Файл': file_name
                 })
-                processed += 1
                 
             except Exception as e:
                 continue
         
-        st.success(f"Обработано транзакций: {processed}")
         return transactions
         
     except Exception as e:
         st.error(f"Ошибка при парсинге MKB файла: {str(e)}")
         return []
+
+def parse_csv_safe(file_content: bytes, file_name: str) -> pd.DataFrame:
+    """Безопасный парсинг CSV с автоматическим определением разделителя"""
+    try:
+        # Определяем кодировку
+        detected = chardet.detect(file_content[:10000])
+        encoding = detected['encoding'] if detected['encoding'] else 'utf-8'
+        
+        # Декодируем
+        try:
+            content = file_content.decode(encoding)
+        except:
+            content = file_content.decode('utf-8', errors='ignore')
+        
+        # Пробуем разные разделители
+        for delimiter in [';', ',', '\t', '|']:
+            try:
+                # Пробуем прочитать с этим разделителем
+                df = pd.read_csv(
+                    io.StringIO(content), 
+                    sep=delimiter,
+                    encoding='utf-8',
+                    engine='python',
+                    on_bad_lines='skip',
+                    header=0
+                )
+                
+                # Проверяем, что получили разумное количество колонок
+                if len(df.columns) > 1 and len(df) > 0:
+                    return df
+            except:
+                continue
+        
+        # Если ничего не помогло, читаем без заголовков
+        for delimiter in [';', ',', '\t', '|']:
+            try:
+                df = pd.read_csv(
+                    io.StringIO(content), 
+                    sep=delimiter,
+                    encoding='utf-8',
+                    engine='python',
+                    on_bad_lines='skip',
+                    header=None
+                )
+                if len(df.columns) > 1 and len(df) > 0:
+                    return df
+            except:
+                continue
+        
+        return pd.DataFrame()
+        
+    except Exception as e:
+        st.error(f"Ошибка при парсинге CSV {file_name}: {str(e)}")
+        return pd.DataFrame()
 
 def parse_bank_file(file_content: bytes, file_name: str) -> List[Dict]:
     """Универсальный парсер файлов банков"""
@@ -349,37 +339,73 @@ def parse_bank_file(file_content: bytes, file_name: str) -> List[Dict]:
     
     # Специальная обработка для MKB Budapest
     if 'budapest' in file_lower or 'mkb' in file_lower:
-        st.info("Обнаружен файл MKB Budapest, использую специальный парсер...")
         return parse_mkb_budapest(file_content, file_name)
     
-    # Общий парсер для остальных файлов
     transactions = []
     
     try:
         # Определяем тип файла
         if file_name.endswith(('.xlsx', '.xls')):
+            # Excel файл
             df = pd.read_excel(io.BytesIO(file_content), header=0)
+            if df.empty:
+                df = pd.read_excel(io.BytesIO(file_content), header=None)
         else:
-            # Для CSV/TXT
-            content = file_content.decode('utf-8', errors='ignore')
-            df = pd.read_csv(io.StringIO(content), sep=None, engine='python')
+            # CSV/TXT файл
+            df = parse_csv_safe(file_content, file_name)
         
         if df.empty:
             return []
         
         # Поиск колонок
-        date_col, amount_col, desc_col = None, None, None
+        date_col = None
+        amount_col = None
+        desc_col = None
         
         for col in df.columns:
-            col_lower = str(col).lower()
-            if any(kw in col_lower for kw in ['date', 'дата', 'value date']):
+            col_str = str(col).lower()
+            
+            if 'date' in col_str or 'дата' in col_str or 'value date' in col_str:
                 date_col = col
-            elif any(kw in col_lower for kw in ['amount', 'сумма', 'total']):
+            elif 'amount' in col_str or 'сумма' in col_str or 'total' in col_str:
                 amount_col = col
-            elif any(kw in col_lower for kw in ['description', 'описание', 'narrative']):
+            elif 'description' in col_str or 'описание' in col_str or 'narrative' in col_str or 'purpose' in col_str:
                 desc_col = col
         
+        # Если не нашли по имени, ищем по содержимому
         if date_col is None:
+            for col in df.columns:
+                sample = df[col].dropna().head(5)
+                if len(sample) > 0:
+                    sample_str = sample.astype(str)
+                    if any(re.search(r'\d{4}-\d{2}-\d{2}', str(v)) for v in sample_str):
+                        date_col = col
+                        break
+        
+        if amount_col is None:
+            for col in df.columns:
+                sample = df[col].dropna().head(5)
+                if len(sample) > 0:
+                    sample_str = sample.astype(str)
+                    if any(re.search(r'-?\d+[.,]?\d*', str(v)) for v in sample_str):
+                        amount_col = col
+                        break
+        
+        if desc_col is None and len(df.columns) > 2:
+            # Используем колонку с самым длинным текстом
+            max_len = 0
+            for col in df.columns:
+                if col not in [date_col, amount_col]:
+                    try:
+                        avg_len = df[col].astype(str).str.len().mean()
+                        if avg_len > max_len:
+                            max_len = avg_len
+                            desc_col = col
+                    except:
+                        pass
+        
+        # Если все еще не нашли, используем первые колонки
+        if date_col is None and len(df.columns) > 0:
             date_col = df.columns[0]
         if amount_col is None and len(df.columns) > 1:
             amount_col = df.columns[1]
@@ -391,31 +417,57 @@ def parse_bank_file(file_content: bytes, file_name: str) -> List[Dict]:
             try:
                 row = df.iloc[idx]
                 
-                # Дата
-                date_val = row[date_col] if date_col in df.columns else None
+                # Пропускаем строки с метаданными
+                first_cell = str(row.iloc[0]).lower() if len(row) > 0 else ''
+                if first_cell in ['iban:', 'müddət:', 'account', 'customer', 'commission']:
+                    continue
+                
+                # Получаем дату
+                if date_col not in df.columns:
+                    continue
+                    
+                date_val = row[date_col]
                 if pd.isna(date_val):
                     continue
+                
                 date = parse_dates(date_val)
                 if not date:
                     continue
                 
-                # Сумма
-                amount_val = row[amount_col] if amount_col in df.columns else 0
+                # Получаем сумму
+                if amount_col not in df.columns:
+                    continue
+                    
+                amount_val = row[amount_col]
                 amount = parse_amount(amount_val)
+                
                 if amount == 0:
                     continue
                 
-                # Описание
+                # Получаем описание
                 description = ''
                 if desc_col and desc_col in df.columns and not pd.isna(row[desc_col]):
                     description = str(row[desc_col])
                 
-                # Валюта
+                # Добавляем другие колонки в описание
+                for col in df.columns:
+                    if col not in [date_col, amount_col, desc_col]:
+                        val = row[col]
+                        if not pd.isna(val) and str(val).strip() and str(val) != 'nan':
+                            description += f" {val}"
+                
+                description = description.strip()
+                
+                # Определяем валюту
                 currency = 'EUR'
                 if 'czk' in file_lower:
                     currency = 'CZK'
                 elif 'huf' in file_lower:
                     currency = 'HUF'
+                elif 'azn' in file_lower:
+                    currency = 'AZN'
+                elif 'aed' in file_lower:
+                    currency = 'AED'
                 
                 # Статья и направление
                 article = get_article(description, amount)
@@ -443,7 +495,6 @@ def parse_bank_file(file_content: bytes, file_name: str) -> List[Dict]:
 
 # Основной интерфейс
 def main():
-    # Заголовок
     st.markdown("""
     <div class="main-header">
         <h1>📊 Финансовый аналитик выписок</h1>
@@ -451,7 +502,6 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
-    # Боковая панель
     with st.sidebar:
         st.markdown("### 📌 Информация")
         st.info("""
@@ -461,27 +511,22 @@ def main():
         
         **Поддерживаемые банки:**
         - MKB Budapest (специальный парсер)
-        - Pasha Bank
-        - CSOB
-        - UniCredit
-        - Revolut
-        - Paysera
-        
-        **Валюты:**
-        EUR, CZK, HUF, AZN, AED
+        - Revolut, Paysera
+        - Pasha Bank, Kapital Bank
+        - Mashreq Bank, Wise
+        - CSOB, UniCredit, Industra
         """)
         
         st.markdown("---")
-        st.markdown("### 🎯 Особенности")
+        st.markdown("### 🔧 Особенности")
         st.markdown("""
-        - ✅ Специальный парсер для MKB Budapest
-        - ✅ Автоматическое распознавание колонок
-        - ✅ Правильная обработка сумм в HUF
+        - ✅ Автоматическое определение кодировки
+        - ✅ Умный поиск колонок
+        - ✅ Поддержка нескольких валют
         - ✅ Автоматическая категоризация
-        - ✅ Экспорт в Excel с аналитикой
+        - ✅ Обработка ошибок CSV
         """)
     
-    # Вкладки
     tab1, tab2 = st.tabs(["📄 Один файл", "📚 Несколько файлов"])
     
     with tab1:
@@ -495,22 +540,15 @@ def main():
         
         if uploaded_file:
             st.success(f"✅ Загружен файл: {uploaded_file.name}")
-            st.info(f"Размер файла: {uploaded_file.size} байт")
             
-            col1, col2 = st.columns([1, 4])
-            with col1:
-                analyze_btn = st.button("🚀 Анализировать", key="analyze_single", use_container_width=True)
-            
-            if analyze_btn:
+            if st.button("🚀 Анализировать", key="analyze_single", use_container_width=True):
                 with st.spinner("Анализируем выписку..."):
-                    # Парсинг файла
                     file_content = uploaded_file.read()
                     transactions = parse_bank_file(file_content, uploaded_file.name)
                     
                     if transactions:
                         df = pd.DataFrame(transactions)
                         
-                        # Статистика
                         st.markdown("---")
                         st.markdown("### 📊 Сводная статистика")
                         
@@ -527,31 +565,22 @@ def main():
                         with col4:
                             st.metric("📝 Операций", len(df))
                         
-                        # Таблица с транзакциями
                         st.markdown("### 📋 Детализация операций")
                         
-                        # Форматирование для отображения
                         display_df = df.copy()
                         display_df['Сумма'] = display_df['Сумма'].apply(lambda x: f"{x:,.2f}")
                         
-                        st.dataframe(
-                            display_df,
-                            use_container_width=True,
-                            height=400
-                        )
+                        st.dataframe(display_df, use_container_width=True, height=400)
                         
-                        # Экспорт в Excel
                         output = io.BytesIO()
                         with pd.ExcelWriter(output, engine='openpyxl') as writer:
                             df.to_excel(writer, sheet_name='Транзакции', index=False)
                             
-                            # Добавляем сводную таблицу
                             summary = df.groupby('Статья').agg({
                                 'Сумма': ['sum', 'count']
                             }).round(2)
                             summary.to_excel(writer, sheet_name='Сводка по статьям')
                             
-                            # Сводка по направлениям
                             direction_summary = df.groupby(['Направление', 'Субнаправление']).agg({
                                 'Сумма': 'sum'
                             }).round(2)
@@ -562,13 +591,13 @@ def main():
                         st.download_button(
                             label="📥 Скачать отчет (Excel)",
                             data=output,
-                            file_name=f"financial_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            file_name=f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             use_container_width=True
                         )
                         
                     else:
-                        st.error("❌ Не удалось обработать файл. Проверьте формат и попробуйте снова.")
+                        st.error("❌ Не удалось обработать файл. Проверьте формат.")
     
     with tab2:
         st.markdown("### Загрузите несколько выписок")
@@ -602,7 +631,6 @@ def main():
                 if all_transactions:
                     df = pd.DataFrame(all_transactions)
                     
-                    # Статистика
                     st.markdown("---")
                     st.markdown("### 📊 Общая статистика")
                     
@@ -619,30 +647,22 @@ def main():
                     with col4:
                         st.metric("📝 Всего операций", len(df))
                     
-                    # Детализация
                     st.markdown("### 📋 Все операции")
                     
                     display_df = df.copy()
                     display_df['Сумма'] = display_df['Сумма'].apply(lambda x: f"{x:,.2f}")
                     
-                    st.dataframe(
-                        display_df,
-                        use_container_width=True,
-                        height=500
-                    )
+                    st.dataframe(display_df, use_container_width=True, height=500)
                     
-                    # Экспорт
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
                         df.to_excel(writer, sheet_name='Все транзакции', index=False)
                         
-                        # Сводка по файлам
                         file_summary = df.groupby('Файл').agg({
                             'Сумма': ['sum', 'count']
                         }).round(2)
                         file_summary.to_excel(writer, sheet_name='Сводка по файлам')
                         
-                        # Сводка по статьям
                         article_summary = df.groupby('Статья').agg({
                             'Сумма': ['sum', 'count']
                         }).round(2)
