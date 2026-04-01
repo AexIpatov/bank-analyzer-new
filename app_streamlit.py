@@ -29,19 +29,19 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header"><h1>📊 Финансовый аналитик выписок v6.0</h1><p>Полная поддержка Paysera и других банков</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"><h1>📊 Финансовый аналитик выписок v7.0</h1><p>Полная поддержка Paysera</p></div>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### 🧠 О программе")
     st.markdown("**Поддерживаемые форматы:** Excel (.xlsx, .xls), CSV")
     st.markdown("**Счет берется из имени файла**")
     st.markdown("---")
-    st.markdown("**Версия 6.0** — исправлен парсинг Paysera")
+    st.markdown("**Версия 7.0** — исправлен парсинг Paysera")
 
 
 # ==================== ФУНКЦИИ ПАРСИНГА ====================
-def read_csv_paysera(file_content, file_name):
-    """Специальный парсер для файлов Paysera"""
+def parse_paysera_csv(file_content, file_name):
+    """Специальный парсер для файлов Paysera с правильным определением колонок"""
     with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp:
         tmp.write(file_content)
         tmp_path = tmp.name
@@ -60,16 +60,24 @@ def read_csv_paysera(file_content, file_name):
         # Ищем строку с заголовками (Тип, Номер выписки, Номер перевода, Дата и время...)
         header_row_idx = -1
         for i, line in enumerate(lines):
-            if 'Тип' in line and 'Дата и время' in line:
+            line_clean = line.replace('"', '').strip()
+            if line_clean.startswith('Тип') and 'Дата и время' in line_clean:
                 header_row_idx = i
                 break
+        
+        if header_row_idx == -1:
+            # Пробуем найти строку с "Тип" без кавычек
+            for i, line in enumerate(lines):
+                if 'Тип' in line and 'Дата и время' in line:
+                    header_row_idx = i
+                    break
         
         if header_row_idx == -1:
             return pd.DataFrame()
         
         # Парсим заголовки
         header_line = lines[header_row_idx].strip()
-        # Убираем лишние кавычки в начале и конце
+        # Убираем кавычки в начале и конце
         if header_line.startswith('"') and header_line.endswith('"'):
             header_line = header_line[1:-1]
         
@@ -96,14 +104,15 @@ def read_csv_paysera(file_content, file_name):
                 continue
             
             # Убираем кавычки в начале и конце строки
+            line_clean = line
             if line.startswith('"') and line.endswith('"'):
-                line = line[1:-1]
+                line_clean = line[1:-1]
             
             # Парсим строку с учетом кавычек
             row = []
             current = ''
             in_quotes = False
-            for char in line:
+            for char in line_clean:
                 if char == '"':
                     in_quotes = not in_quotes
                 elif char == ',' and not in_quotes:
@@ -118,18 +127,28 @@ def read_csv_paysera(file_content, file_name):
             if row and len(row) > 0 and row[0] in ['Start balance', 'Final balance', 'Debit turnover', 'Credit turnover', 'Balance']:
                 continue
             
+            # Пропускаем строки с пустыми данными
+            if len(row) == 1 and not row[0]:
+                continue
+            
             data_rows.append(row)
         
         if not data_rows:
             return pd.DataFrame()
         
+        # Определяем максимальное количество колонок в данных
+        max_cols = max(len(row) for row in data_rows) if data_rows else 0
+        
         # Выравниваем колонки
-        max_cols = len(headers)
         for row in data_rows:
             while len(row) < max_cols:
                 row.append('')
         
-        df = pd.DataFrame(data_rows, columns=headers[:len(data_rows[0])])
+        # Обрезаем заголовки до максимального количества колонок
+        headers = headers[:max_cols]
+        
+        # Создаем DataFrame
+        df = pd.DataFrame(data_rows, columns=headers)
         return df
         
     except Exception as e:
@@ -164,6 +183,31 @@ def read_general_csv(file_content, file_name):
                     return df
             except:
                 continue
+        
+        # Если не получилось, читаем построчно
+        with open(tmp_path, 'r', encoding=encoding, errors='ignore') as f:
+            lines = f.readlines()
+        
+        data = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            # Пробуем разные разделители
+            for sep in [';', ',', '\t']:
+                if sep in line:
+                    parts = line.split(sep)
+                    data.append(parts)
+                    break
+            else:
+                data.append([line])
+        
+        if data:
+            max_cols = max(len(row) for row in data)
+            for row in data:
+                while len(row) < max_cols:
+                    row.append('')
+            return pd.DataFrame(data)
         
         return pd.DataFrame()
     except Exception as e:
@@ -203,7 +247,7 @@ def read_file(file_content, file_name):
     
     # Для Paysera используем специальный парсер
     if 'paysera' in file_lower and file_name.endswith('.csv'):
-        return read_csv_paysera(file_content, file_name)
+        return parse_paysera_csv(file_content, file_name)
     
     # Для CSV
     if file_name.endswith('.csv'):
@@ -278,10 +322,18 @@ def parse_amount(amount_str, description=""):
     if not is_negative:
         expense_keywords = [
             'fee', 'charge', 'комиссия', 'tax', 'налог', 'apmaksa', 
-            'nodokļu', 'spisanie', 'списание', 'payment', 'оплата'
+            'nodokļu', 'spisanie', 'списание', 'payment', 'оплата',
+            'перевод', 'transfer', 'отправлено'
         ]
-        if any(kw in desc_lower for kw in expense_keywords):
+        income_keywords = ['from', 'received', 'incoming', 'зачисление', 'поступление', 'получено']
+        
+        has_expense = any(kw in desc_lower for kw in expense_keywords)
+        has_income = any(kw in desc_lower for kw in income_keywords)
+        
+        if has_expense and not has_income:
             is_negative = True
+        elif has_income and not has_expense:
+            is_negative = False
     
     try:
         val = float(amount_str)
@@ -358,7 +410,7 @@ def get_article(description, amount):
             return '1.1.2.4 Прочие мелкие поступления'
         if any(kw in desc_lower for kw in ['refund', 'возврат', 'reversal']):
             return '1.1.2.2 Возвраты от поставщиков'
-        if any(kw in desc_lower for kw in ['арендн', 'rent', 'money added', 'topup', 'received']):
+        if any(kw in desc_lower for kw in ['арендн', 'rent', 'money added', 'topup', 'received', 'from']):
             return '1.1.1.3 Арендная плата (счёт)'
         return '1.1.1.3 Арендная плата (счёт)'
 
@@ -433,11 +485,12 @@ def should_split_rental(description, amount):
     
     desc_lower = description.lower()
     
-    exclude = ['booking.com', 'airbnb', 'loan', 'deposit', 'commission', 'fee', 'tax', 'salary', 'refund', 'valsts', 'latvenergo', 'rigas udens']
+    exclude = ['booking.com', 'airbnb', 'loan', 'deposit', 'commission', 'fee', 'tax', 'salary', 'refund', 
+               'valsts', 'latvenergo', 'rigas udens', 'inward remittance', 'fund transfer', 'swift payment']
     if any(kw in desc_lower for kw in exclude):
         return False
     
-    rent_keywords = ['rent', 'аренд', 'caka', 'antonijas', 'matisa', 'valdemara', 'money added', 'topup', 'from']
+    rent_keywords = ['rent', 'аренд', 'caka', 'antonijas', 'matisa', 'valdemara', 'money added', 'topup', 'from', 'received']
     if not any(kw in desc_lower for kw in rent_keywords):
         return False
     
@@ -490,6 +543,15 @@ def parse_file(file_content, file_name):
     if date_col is None and len(df.columns) > 0:
         date_col = df.columns[0]
     
+    # Для Paysera: колонка "Кредит / Дебет" содержит К или Д
+    if 'paysera' in file_name.lower():
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if 'кредит' in col_lower or 'дебет' in col_lower:
+                debit_col = col
+                credit_col = col
+                break
+    
     transactions = []
     
     for idx in range(len(df)):
@@ -515,22 +577,49 @@ def parse_file(file_content, file_name):
             # Пробуем amount_col
             if amount_col in row:
                 amount_val = row[amount_col]
-                if pd.notna(amount_val):
+                if pd.notna(amount_val) and str(amount_val).strip():
                     amount = parse_amount(amount_val)
             
-            # Пробуем debit/credit
-            if amount == 0 and debit_col in row and credit_col in row:
-                debit_val = row[debit_col] if debit_col in row else None
-                credit_val = row[credit_col] if credit_col in row else None
+            # Пробуем debit/credit колонку (для Paysera)
+            if amount == 0 and (debit_col in row or credit_col in row):
+                if debit_col in row:
+                    debit_val = row[debit_col]
+                    if pd.notna(debit_val) and str(debit_val).strip():
+                        if str(debit_val).strip() == 'Д' or str(debit_val).strip() == 'D':
+                            # Нужно взять сумму из amount_col или другой колонки
+                            if amount_col in row:
+                                amount = -abs(parse_amount(row[amount_col]))
+                            else:
+                                # Ищем колонку с суммой
+                                for c in df.columns:
+                                    val = row[c]
+                                    if pd.notna(val) and str(val).strip() and re.search(r'\d+[.,]\d+', str(val)):
+                                        amount = -abs(parse_amount(val))
+                                        break
                 
-                if pd.notna(debit_val) and str(debit_val).strip():
-                    amount = parse_amount(debit_val)
-                    if amount != 0:
-                        amount = -abs(amount)
-                elif pd.notna(credit_val) and str(credit_val).strip():
-                    amount = parse_amount(credit_val)
-                    if amount != 0:
-                        amount = abs(amount)
+                if credit_col in row and amount == 0:
+                    credit_val = row[credit_col]
+                    if pd.notna(credit_val) and str(credit_val).strip():
+                        if str(credit_val).strip() == 'К' or str(credit_val).strip() == 'C':
+                            if amount_col in row:
+                                amount = abs(parse_amount(row[amount_col]))
+                            else:
+                                for c in df.columns:
+                                    val = row[c]
+                                    if pd.notna(val) and str(val).strip() and re.search(r'\d+[.,]\d+', str(val)):
+                                        amount = abs(parse_amount(val))
+                                        break
+            
+            # Если всё ещё нет суммы, ищем в любой колонке число
+            if amount == 0:
+                for col in df.columns:
+                    if col not in [date_col, desc_col, debit_col, credit_col]:
+                        val = row[col]
+                        if pd.notna(val) and str(val).strip():
+                            test_amount = parse_amount(val)
+                            if test_amount != 0:
+                                amount = test_amount
+                                break
             
             if amount == 0:
                 continue
