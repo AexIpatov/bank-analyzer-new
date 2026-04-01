@@ -36,7 +36,8 @@ with st.sidebar:
     st.markdown("**Поддерживаемые форматы:** Excel (.xlsx, .xls), CSV")
     st.markdown("**Счет берется из имени файла**")
     st.markdown("---")
-    st.markdown("**Версия 4.0** — полная поддержка всех статей, направлений и разбивки аренды")
+    st.markdown("**Версия 5.0** — исправлен парсинг Paysera")
+
 
 # ==================== КЛАСС УМНОГО ДЕТЕКТОРА ЗАГОЛОВКОВ ====================
 class HeaderDetector:
@@ -45,22 +46,22 @@ class HeaderDetector:
             'date': [
                 'date', 'дата', 'datum', 'dátum', 'transaction date', 'value date', 'booking date',
                 'дата транзакции', 'дата операции', 'posting date', 'Date started (UTC)', 'Дата',
-                'Date completed (UTC)', 'Дата транзакции'
+                'Date completed (UTC)', 'Дата транзакции', 'Дата и время'
             ],
             'amount': [
                 'amount', 'сумма', 'összeg', 'betrag', 'дебет', 'кредит', 'debit(d)', 'credit(c)',
                 'сумма списания', 'сумма зачисления', 'доход', 'расход', 'orig amount', 'payment amount',
-                'Total amount', 'Payment currency', 'Amount', 'Сумма'
+                'Total amount', 'Payment currency', 'Amount', 'Сумма', 'Сумма и валюта'
             ],
-            'debit': ['debit', 'дебет', 'расход', 'withdrawal', 'списание', 'debet', 'Расход'],
-            'credit': ['credit', 'кредит', 'доход', 'deposit', 'зачисление', 'Доход'],
+            'debit': ['debit', 'дебет', 'расход', 'withdrawal', 'списание', 'debet', 'Расход', 'Д'],
+            'credit': ['credit', 'кредит', 'доход', 'deposit', 'зачисление', 'Доход', 'К'],
             'description': [
                 'description', 'описание', 'leírás', 'beschreibung', 'details', 'детали',
                 'transaction details', 'назначение платежа', 'примечание', 'narrative', 'information',
                 'Transaction Details', 'Purpose of payment', 'particulars', 'beneficiary', 'Description',
                 'Назначение платежа', 'Информация о транзакции', 'Транзакция', 'Описание'
             ],
-            'balance': ['balance', 'остаток', 'egyenleg', 'saldo', 'closing balance', 'конечный остаток']
+            'balance': ['balance', 'остаток', 'egyenleg', 'saldo', 'closing balance', 'конечный остаток', 'Баланс']
         }
 
         self.file_patterns = {
@@ -87,7 +88,7 @@ class HeaderDetector:
                     return file_type
         return "unknown"
 
-    def find_header_row(self, df: pd.DataFrame, max_rows_to_check: int = 30) -> int:
+    def find_header_row(self, df: pd.DataFrame, max_rows_to_check: int = 50) -> int:
         if df.empty:
             return -1
 
@@ -199,8 +200,12 @@ def parse_date(date_str):
     if pd.isna(date_str):
         return ''
     date_str = str(date_str).strip()
+    
+    # Обработка формата Paysera: "2026-03-16 08:18:22 +0100"
     if ' ' in date_str:
         date_str = date_str.split(' ')[0]
+    if 'T' in date_str:
+        date_str = date_str.split('T')[0]
 
     formats = ["%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%Y.%m.%d", "%d-%m-%Y", "%m/%d/%Y", "%Y/%m/%d"]
     for fmt in formats:
@@ -221,7 +226,7 @@ def parse_date(date_str):
     return date_str
 
 def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, description=""):
-    """Исправленное определение знака суммы"""
+    """Исправленное определение знака суммы с поддержкой формата Paysera"""
     if pd.isna(amount_str):
         return 0
     amount_str = str(amount_str).strip()
@@ -230,6 +235,15 @@ def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, descriptio
 
     original_str = amount_str
     
+    # Обработка формата Paysera: "-320.00,EUR" или "320.00,EUR"
+    if ',' in amount_str and not '.' in amount_str:
+        amount_str = amount_str.replace(',', '.')
+    
+    # Удаляем валюту из строки
+    amount_str = re.sub(r',[A-Z]{3}$', '', amount_str)
+    amount_str = re.sub(r'[A-Z]{3}$', '', amount_str)
+    
+    # Обработка формата "-+50.00" (Industra)
     if amount_str.startswith('-+'):
         amount_str = '-' + amount_str[2:]
     if amount_str.startswith('+-'):
@@ -253,26 +267,33 @@ def parse_amount(amount_str, is_debit_col=False, is_credit_col=False, descriptio
         except:
             return 0
 
-    amount_str = re.sub(r'[A-Z]{3}$', '', amount_str.strip())
-    amount_str = amount_str.replace(',', '.').replace(' ', '')
+    amount_str = amount_str.replace(' ', '')
     
+    # Определяем знак
     has_minus = amount_str.startswith('-')
+    amount_str = amount_str.lstrip('-')
+    
+    # Убираем всё кроме цифр и точки
+    amount_str = re.sub(r'[^\d.]', '', amount_str)
+    if amount_str == '':
+        return 0
     
     desc_lower = description.lower()
-    if not has_minus:
-        if any(x in desc_lower for x in ['fee', 'charge', 'комиссия', 'tax', 'налог', 'to ', 'transfer to']):
-            has_minus = True
     
-    amount_str = re.sub(r'[^0-9\.\-]', '', amount_str)
-    if amount_str == '' or amount_str == '-':
-        return 0
+    # Контекстное определение знака
+    if not has_minus:
+        expense_keywords = ['fee', 'charge', 'комиссия', 'tax', 'налог', 'to ', 'transfer to', 'apmaksa', 'nodokļu']
+        if any(kw in desc_lower for kw in expense_keywords):
+            has_minus = True
+    else:
+        # Если есть минус в строке, но это доход (редко)
+        income_keywords = ['from', 'received', 'incoming', 'credit', 'зачисление']
+        if any(kw in desc_lower for kw in income_keywords):
+            has_minus = False
 
     try:
         val = float(amount_str)
-        if has_minus:
-            return -abs(val)
-        else:
-            return abs(val)
+        return -abs(val) if has_minus else abs(val)
     except:
         return 0
 
@@ -371,9 +392,7 @@ def get_article(description, amount, file_name):
             'atm withdrawal', 'плата за обслуживание', 'service package', 'számlakivonat díja',
             'netbankár monthly fee', 'conversion fee', 'charge for', 'bank charge',
             'pasha bank charge', 'monthly fee', 'account maintenance', 'card fee',
-            'banking fee', 'transaction fee', 'service charge', 'tariff', 'тариф',
-            'revolut business fee', 'grow plan fee', 'expenses app charge',
-            'conversion fee', 'foreign exchange transaction fee', 'fee for'
+            'banking fee', 'transaction fee', 'service charge', 'tariff', 'тариф'
         ]):
             return '1.2.17 РКО'
 
@@ -388,8 +407,7 @@ def get_article(description, amount, file_name):
         if any(kw in desc_lower for kw in [
             'nodokļu nomaksa', 'vid', 'budžets', 'налог', 'valsts budžets',
             'nodokļu', 'darba devēja', 'nodoku nomaksa', 'state revenue service',
-            'social tax', 'социальный налог', 'подоходный налог', 'income tax',
-            'dsmf', 'государственные сборы'
+            'social tax', 'социальный налог', 'подоходный налог', 'income tax'
         ]):
             return '1.2.15.2 Налоги на ФОТ'
 
@@ -446,128 +464,72 @@ def get_article(description, amount, file_name):
         # 1.2.9.1 Связь, интернет, TV
         if any(kw in desc_lower for kw in [
             'tele2', 'bite', 'tet', 'internet', 'связь', 'telenet', 'wifi', 'broadband',
-            'телефон', 'phone', 'мобильная связь', 'mobile', 'телевидение', 'tv',
-            'телеком', 'telecom', 'связь и интернет'
+            'телефон', 'phone', 'мобильная связь', 'mobile', 'телевидение', 'tv'
         ]):
             return '1.2.9.1 Связь, интернет, TV'
 
         # 1.2.9.3 IT сервисы
         if any(kw in desc_lower for kw in [
             'google one', 'lovable', 'openai', 'chatgpt', 'browsec', 'adobe',
-            'albato', 'slack', 'it сервисы', 'software', 'subscription',
-            'microsoft', 'office 365', 'cloud', 'хостинг', 'hosting', 'domain',
-            'домен', 'сервер', 'server', 'vps', 'vpn', 'антивирус', 'antivirus',
-            'asana', 'zapier'
+            'albato', 'slack', 'it сервисы', 'software', 'subscription'
         ]):
             return '1.2.9.3 IT сервисы'
 
         # 1.2.3 Оплата рекламных систем
         if any(kw in desc_lower for kw in [
-            'facebook', 'facbk', 'tiktok', 'ads', 'marketing', 'реклам', 'advertising',
-            'instagram', 'google ads', 'fb ads', 'яндекс директ', 'yandex direct',
-            'контекстная реклама', 'contextual advertising', 'promotion', 'продвижение',
-            'propertyfinder'
+            'facebook', 'facbk', 'tiktok', 'ads', 'marketing', 'реклам', 'advertising'
         ]):
             return '1.2.3 Оплата рекламных систем (бюджет)'
 
         # 1.2.2 Командировочные расходы
         if any(kw in desc_lower for kw in [
             'flydubai', 'taxi', 'flixbus', 'bolt', 'uber', 'flix', 'careem',
-            'travel', 'transport', 'hotel', 'accommodation', 'авиабилеты',
-            'билеты', 'tickets', 'проживание', 'питание', 'meal', 'food',
-            'командировка', 'business trip', 'транспортные расходы', 'dubai taxi',
-            'cars taxi', 'enoc', 'emarat'
+            'travel', 'transport', 'hotel', 'accommodation', 'авиабилеты'
         ]):
             return '1.2.2 Командировочные расходы'
 
         # 1.2.8.1 Обслуживание объектов
         if any(kw in desc_lower for kw in [
             'apmaksa par rēķinu', 'обслуживание', 'ремонт', 'lifti', 'taipans',
-            'sidorans', 'komval', 'rīgas lifti', 'maintenance', 'repair',
-            'уборка', 'cleaning', 'клининг', 'сантехник', 'электрик',
-            'plumber', 'electrician', 'техническое обслуживание'
+            'sidorans', 'komval', 'rīgas lifti', 'maintenance', 'repair'
         ]):
             return '1.2.8.1 Обслуживание объектов (бытовые вопросы, без ремонта)'
 
         # 1.2.8.2 Страхование
         if any(kw in desc_lower for kw in [
-            'balta', 'страхование', 'insurance', 'insure', 'страховка',
-            'страховой взнос', 'insurance premium'
+            'balta', 'страхование', 'insurance', 'insure', 'страховка'
         ]):
             return '1.2.8.2 Страхование'
 
         # 1.2.12 Бухгалтер
         if any(kw in desc_lower for kw in [
-            'lubova loseva', 'loseva', 'бухгалтер', 'accounting', 'bookkeeping',
-            'бухгалтерские услуги', 'бухгалтерия', 'accountant', 'audit', 'аудит'
+            'lubova loseva', 'loseva', 'бухгалтер', 'accounting', 'bookkeeping'
         ]):
             return '1.2.12 Бухгалтер'
 
         # 2.2.7 Расходы по приобретению недвижимости
         if any(kw in desc_lower for kw in [
             'pirkuma liguma', 'приобретение недвижимости', 'аванс покупной стоимости',
-            'property purchase', 'real estate purchase', 'покупка недвижимости',
-            'advance payment', 'авансовый платеж', 'rezervacni smlouva'
+            'property purchase', 'real estate purchase', 'покупка недвижимости'
         ]):
             return '2.2.7 Расходы по приобретению недвижимости'
 
         # 1.2.27 Расходы в ожидании возмещения
         if any(kw in desc_lower for kw in [
-            'jl/nf', 'jl/zp', 'расходы в ожидании', 'other business',
-            'временные расходы', 'temporary expenses'
+            'jl/nf', 'jl/zp', 'расходы в ожидании', 'other business'
         ]):
             return '1.2.27 Расходы в ожидании возмещения ЗП по другим бизнесам'
 
         # 1.2.37 Возврат гарантийных депозитов
         if any(kw in desc_lower for kw in [
-            'deposit return', 'возврат депозита', 'depozīta atgriešana',
-            'гарантийный депозит', 'security deposit refund'
+            'deposit return', 'возврат депозита', 'depozīta atgriešana'
         ]):
             return '1.2.37 Возврат гарантийных депозитов'
-
-        # 1.2.21.1 Аренда офиса
-        if any(kw in desc_lower for kw in [
-            'office rent', 'аренда офиса', 'icare odәnisi', 'rent payment'
-        ]) and 'baku' in desc_lower:
-            return '1.2.21.1 Аренда офиса'
-
-        # 1.2.21.2 Административные офисные расходы
-        if any(kw in desc_lower for kw in [
-            'office', 'офис', 'stationery', 'канцелярия', 'post office', 'ceska posta'
-        ]):
-            return '1.2.21.2 Административные офисные расходы'
-
-        # 1.2.24 Расходы по отдельному бизнесу
-        if any(kw in desc_lower for kw in [
-            'vzr div', 'nav', 'personal income', 'social security', 'social contribution',
-            'giro payment', 'transaction fee part'
-        ]):
-            return '1.2.24 Расходы по отдельному бизнесу'
-
-        # 1.2.28 Расходы, произведённые за другие компании группы
-        if any(kw in desc_lower for kw in [
-            'относится к александру', 'за другие компании', 'revelton'
-        ]):
-            return '1.2.28 Расходы, произведённые за другие компании группы (к возмещению)'
-
-        # 1.2.33 Непредвиденные расходы
-        if 'kompensācija' in desc_lower:
-            return '1.2.33 Непредвиденные расходы'
-
-        # 1.2.34 Вознаграждение инвестора
-        if any(kw in desc_lower for kw in ['вознаграждение инвестора', 'investor reward']):
-            return '1.2.34 Вознаграждение инвестора'
-
-        # 1.2.38 НДС в составе комиссий банка
-        if any(kw in desc_lower for kw in ['value added tax', 'vat', 'ндс']) and 'commission' in desc_lower:
-            return '1.2.38 НДС в составе комиссий банка'
 
         # Перевод между счетами
         if any(kw in desc_lower for kw in [
             'currency exchange', 'конвертация', 'internal payment',
-            'transfer to own account', 'между своими счетами', 'own transfer',
-            'внутренний перевод', 'межбанковский перевод', 'bank transfer',
-            'перевод между счетами'
+            'transfer to own account', 'между своими счетами', 'own transfer'
         ]):
             return 'Перевод между счетами'
 
@@ -590,8 +552,7 @@ def get_article(description, amount, file_name):
         # 1.1.4.1 Комиссия за продажу недвижимости
         if any(kw in desc_lower for kw in [
             'commission', 'agency commissions', 'incoming swift payment',
-            'marketing and advertisement', 'consultancy fees', 'real estate commission',
-            'agent commission', 'комиссия за продажу'
+            'marketing and advertisement', 'consultancy fees', 'real estate commission'
         ]):
             return '1.1.4.1 Комиссия за продажу недвижимости'
 
@@ -604,8 +565,7 @@ def get_article(description, amount, file_name):
 
         # 3.1.4 Возврат выданного внутригруппового займа
         if any(kw in desc_lower for kw in [
-            'loan return', 'возврат займа', 'partial repayment', 'repayment',
-            'partial repayment of the loan'
+            'loan return', 'возврат займа', 'partial repayment', 'repayment'
         ]):
             return '3.1.4 Возврат выданного внутригруппового займа'
 
@@ -624,7 +584,7 @@ def get_article(description, amount, file_name):
 
         # 1.1.2.4 Прочие мелкие поступления
         if any(kw in desc_lower for kw in [
-            'кэшбэк', 'cashback', 'u rok do', 'interest', 'проценты', 'урок'
+            'кэшбэк', 'cashback', 'u rok do', 'interest', 'проценты'
         ]):
             return '1.1.2.4 Прочие мелкие поступления'
 
@@ -635,14 +595,13 @@ def get_article(description, amount, file_name):
             return '1.1.2.2 Возвраты от поставщиков'
 
         # 1.1.1.1 Арендная плата (наличные)
-        if any(kw in desc_lower for kw in ['наличные', 'cash']) and any(x in desc_lower for x in ['rent', 'аренд']):
+        if any(kw in desc_lower for kw in ['наличные', 'cash']):
             return '1.1.1.1 Арендная плата (наличные)'
 
         # 1.1.1.3 Арендная плата (счёт)
         if any(kw in desc_lower for kw in [
             'арендн', 'rent', 'money added', 'ire', 'dzivoklis', 'from',
-            'credit of sepa', 'topup', 'received', 'incoming payment',
-            'partial repayment', 'payment acc loan agreement'
+            'credit of sepa', 'topup', 'received', 'incoming payment'
         ]):
             return '1.1.1.3 Арендная плата (счёт)'
 
@@ -651,27 +610,32 @@ def get_article(description, amount, file_name):
 
 # ==================== РАЗБИВКА АРЕНДНЫХ ПЛАТЕЖЕЙ ====================
 def should_split_rental_payment(description, amount, file_name):
+    """Определяет, нужно ли разбивать платёж на аренду и компенсацию КУ"""
     if amount <= 0:
         return False
     
     desc_lower = description.lower()
     file_lower = file_name.lower()
 
+    # Только для Paysera, Revolut, Industra (арендные платежи от физических лиц)
     if not any(x in file_lower for x in ['paysera', 'revolut', 'industra']):
         return False
 
+    # Исключаем явно не арендные платежи
     exclude_keywords = [
         'booking.com', 'airbnb', 'loan', 'deposit', 'депозит', 
         'commission', 'комиссия', 'fee', 'charge', 'tax', 'налог',
         'salary', 'зарплата', 'refund', 'возврат', 'interest', 'проценты',
         'valsts budžets', 'budžets', 'vid', 'rigas valstpilsētas pašvaldība',
         'latvenergo', 'rigas udens', 'eco baltia', 'bite', 'tele2', 'tet',
-        'rīgas lifti', 'taipans', 'sidorans', 'komval', 'apmaksa par'
+        'rīgas lifti', 'taipans', 'sidorans', 'komval', 'apmaksa par',
+        'inward remittance', 'fund transfer', 'swift payment'
     ]
     for kw in exclude_keywords:
         if kw in desc_lower:
             return False
 
+    # Ключевые слова для арендных платежей от физических лиц
     rent_keywords = [
         'rent', 'аренд', 'caka', 'antonijas', 'matisa', 'valdemara', 
         'for rent', 'dzivoklis', 'apartment', 'flat', 'ire',
@@ -682,6 +646,7 @@ def should_split_rental_payment(description, amount, file_name):
     
     has_rent_keyword = any(kw in desc_lower for kw in rent_keywords)
     
+    # Также проверяем наличие кодов объектов
     object_codes = ['ac89', 'an14', 'm81', 'b117', 'v22', 'g77', 'mu3', 
                    'ds1', 'c23', 'sk3', 'd4', 'h5', 'brn', 'ac87']
     has_object_code = any(code in desc_lower for code in object_codes)
@@ -689,8 +654,10 @@ def should_split_rental_payment(description, amount, file_name):
     return has_rent_keyword or has_object_code
 
 def calculate_split(amount, file_name, description):
+    """Рассчитывает разбивку на аренду и компенсацию КУ"""
     desc_lower = description.lower()
     
+    # Правила из Финтабло
     if any(x in desc_lower for x in ['caka', 'ac89', 'čaka']):
         return round(amount * 0.836, 2), round(amount * 0.164, 2)
     
@@ -722,32 +689,67 @@ def parse_file(file_content, file_name):
     file_lower = file_name.lower()
     detector = HeaderDetector()
     
-    header_row = detector.find_header_row(df)
-    if header_row >= 0 and detector.validate_header_row(df, header_row):
-        headers = [str(h).strip() if pd.notna(h) else f'col_{i}' for i, h in enumerate(df.iloc[header_row].values)]
-        seen = {}
-        unique_headers = []
-        for h in headers:
-            if h in seen:
-                seen[h] += 1
-                unique_headers.append(f"{h}_{seen[h]}")
-            else:
-                seen[h] = 0
-                unique_headers.append(h)
+    # Специальная обработка для файлов Paysera (многострочные заголовки)
+    if 'paysera' in file_lower:
+        # Ищем строку с заголовками
+        header_row = -1
+        for idx in range(min(30, len(df))):
+            row_text = ' '.join([str(cell).lower() for cell in df.iloc[idx] if pd.notna(cell)])
+            if 'тип' in row_text and 'дата и время' in row_text:
+                header_row = idx
+                break
         
-        data_rows = []
-        for idx in range(header_row + 1, len(df)):
-            row = list(df.iloc[idx].values)
-            if len(row) < len(unique_headers):
-                row.extend([''] * (len(unique_headers) - len(row)))
-            data_rows.append(row[:len(unique_headers)])
-        
-        df = pd.DataFrame(data_rows, columns=unique_headers)
+        if header_row >= 0:
+            # Извлекаем заголовки
+            headers = []
+            for cell in df.iloc[header_row]:
+                if pd.isna(cell):
+                    headers.append('')
+                else:
+                    headers.append(str(cell).strip())
+            
+            # Собираем данные
+            data_rows = []
+            for idx in range(header_row + 1, len(df)):
+                row = list(df.iloc[idx].values)
+                if all(pd.isna(cell) or str(cell).strip() == '' for cell in row):
+                    continue
+                if len(row) < len(headers):
+                    row.extend([''] * (len(headers) - len(row)))
+                data_rows.append(row[:len(headers)])
+            
+            if data_rows:
+                df = pd.DataFrame(data_rows, columns=headers)
+    
+    # Если не нашли заголовки Paysera, пробуем стандартный детектор
+    if df.empty or ('paysera' not in file_lower):
+        header_row = detector.find_header_row(df)
+        if header_row >= 0 and detector.validate_header_row(df, header_row):
+            headers = [str(h).strip() if pd.notna(h) else f'col_{i}' for i, h in enumerate(df.iloc[header_row].values)]
+            seen = {}
+            unique_headers = []
+            for h in headers:
+                if h in seen:
+                    seen[h] += 1
+                    unique_headers.append(f"{h}_{seen[h]}")
+                else:
+                    seen[h] = 0
+                    unique_headers.append(h)
+            
+            data_rows = []
+            for idx in range(header_row + 1, len(df)):
+                row = list(df.iloc[idx].values)
+                if len(row) < len(unique_headers):
+                    row.extend([''] * (len(unique_headers) - len(row)))
+                data_rows.append(row[:len(unique_headers)])
+            
+            df = pd.DataFrame(data_rows, columns=unique_headers)
     
     if df.empty:
         st.warning("⚠️ В файле не найдено данных для обработки")
         return []
     
+    # Определение колонок
     date_col = None
     amount_col = None
     debit_col = None
@@ -758,27 +760,20 @@ def parse_file(file_content, file_name):
     
     for col in df.columns:
         col_lower = str(col).lower()
-        if any(kw in col_lower for kw in ['date', 'дата', 'datum', 'booking', 'posting', 'value', 'started', 'value date', 'date completed', 'дата транзакции']):
-            if date_col is None:
-                date_col = col
-        if any(kw in col_lower for kw in ['amount', 'сумма', 'total amount', 'orig amount', 'payment amount']):
-            if amount_col is None:
-                amount_col = col
-        if any(kw in col_lower for kw in ['debit', 'дебет', 'расход', 'withdrawal', 'debet', 'расход']):
-            if debit_col is None:
-                debit_col = col
-        if any(kw in col_lower for kw in ['credit', 'кредит', 'доход', 'deposit', 'доход']):
-            if credit_col is None:
-                credit_col = col
-        if any(kw in col_lower for kw in ['description', 'описание', 'details', 'назначение', 'narrative', 'information', 'info', 'transaction details', 'purpose of payment', 'description', 'назначение платежа', 'информация']):
-            if desc_col is None:
-                desc_col = col
-        if any(kw in col_lower for kw in ['type', 'тип', 'transaction type']):
-            if type_col is None:
-                type_col = col
-        if any(kw in col_lower for kw in ['payer', 'плательщик', 'получатель', 'beneficiary', 'recipient']):
-            if payer_col is None:
-                payer_col = col
+        if date_col is None and any(kw in col_lower for kw in ['date', 'дата', 'datum', 'booking', 'posting', 'value', 'started', 'value date', 'дата и время']):
+            date_col = col
+        if amount_col is None and any(kw in col_lower for kw in ['amount', 'сумма', 'total amount', 'сумма и валюта']):
+            amount_col = col
+        if debit_col is None and any(kw in col_lower for kw in ['debit', 'дебет', 'расход', 'withdrawal', 'debet', 'д']):
+            debit_col = col
+        if credit_col is None and any(kw in col_lower for kw in ['credit', 'кредит', 'доход', 'deposit', 'к']):
+            credit_col = col
+        if desc_col is None and any(kw in col_lower for kw in ['description', 'описание', 'details', 'назначение', 'narrative', 'information', 'info', 'назначение платежа']):
+            desc_col = col
+        if type_col is None and any(kw in col_lower for kw in ['type', 'тип', 'transaction type']):
+            type_col = col
+        if payer_col is None and any(kw in col_lower for kw in ['payer', 'плательщик', 'получатель', 'beneficiary', 'recipient']):
+            payer_col = col
     
     if date_col is None and len(df.columns) > 0:
         date_col = df.columns[0]
@@ -789,17 +784,24 @@ def parse_file(file_content, file_name):
         try:
             row = df.iloc[idx]
             
+            # Пропускаем пустые строки
+            if all(pd.isna(cell) or str(cell).strip() == '' for cell in row):
+                continue
+            
+            # Описание
             description = ''
             if desc_col in row:
                 desc_val = row[desc_col]
                 if pd.notna(desc_val):
                     description = str(desc_val)
             
+            # Тип операции
             if type_col in row:
                 type_val = row[type_col]
                 if pd.notna(type_val) and str(type_val).strip():
                     description = f"{str(type_val)} {description}"
             
+            # Плательщик/получатель
             payer = ''
             if payer_col in row:
                 payer_val = row[payer_col]
@@ -807,6 +809,7 @@ def parse_file(file_content, file_name):
                     payer = str(payer_val)
                     description = f"{description} {payer}"
             
+            # Добавляем другие колонки
             for col in df.columns:
                 if col not in [date_col, amount_col, debit_col, credit_col, desc_col, type_col, payer_col]:
                     val = row[col]
@@ -815,6 +818,7 @@ def parse_file(file_content, file_name):
             
             description = description.strip()
             
+            # Дата
             date = ''
             if date_col in row:
                 date_val = row[date_col]
@@ -823,25 +827,29 @@ def parse_file(file_content, file_name):
             if not date:
                 continue
             
+            # Сумма
             amount = 0
             
-            if amount_col is not None:
-                amount_val = row[amount_col] if amount_col in row else None
-                if pd.notna(amount_val) and str(amount_val).strip() and str(amount_val).strip() != '':
+            # Пробуем amount_col
+            if amount_col in row:
+                amount_val = row[amount_col]
+                if pd.notna(amount_val) and str(amount_val).strip():
                     amount = parse_amount(amount_val, description=description)
             
-            if amount == 0 and debit_col is not None and credit_col is not None:
+            # Пробуем debit/credit
+            if amount == 0 and debit_col in row and credit_col in row:
                 debit_val = row[debit_col] if debit_col in row else None
                 credit_val = row[credit_col] if credit_col in row else None
                 
-                if pd.notna(debit_val) and str(debit_val).strip() and str(debit_val).strip() != '':
-                    amount = parse_amount(debit_val, is_debit_col=True, is_credit_col=False, description=description)
-                elif pd.notna(credit_val) and str(credit_val).strip() and str(credit_val).strip() != '':
-                    amount = parse_amount(credit_val, is_debit_col=False, is_credit_col=True, description=description)
+                if pd.notna(debit_val) and str(debit_val).strip():
+                    amount = parse_amount(debit_val, is_debit_col=True, description=description)
+                elif pd.notna(credit_val) and str(credit_val).strip():
+                    amount = parse_amount(credit_val, is_credit_col=True, description=description)
             
             if amount == 0:
                 continue
             
+            # Валюта
             currency = 'EUR'
             if any(x in file_lower for x in ['czk', 'czech']) or 'CZK' in description:
                 currency = 'CZK'
@@ -856,6 +864,7 @@ def parse_file(file_content, file_name):
             
             account_name = file_name.replace('.csv', '').replace('.xlsx', '').replace('.xls', '')
             
+            # Разбивка арендных платежей
             if should_split_rental_payment(description, amount, file_name):
                 rent_share, utility_share = calculate_split(amount, file_name, description)
                 
