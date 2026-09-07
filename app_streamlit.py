@@ -100,6 +100,14 @@ def detect_csv_delimiter(file_path: str) -> str:
     except:
         return ';'
 
+def clean_account_name(filename: str) -> str:
+    """Очищает имя файла для получения наименования счета"""
+    name = os.path.splitext(filename)[0]
+    name = re.sub(r'\d{4}-\d{2}-\d{2}', '', name)
+    name = re.sub(r'[_-]', ' ', name).strip()
+    name = re.sub(r'\s+', ' ', name)
+    return name if name else 'Неизвестный счет'
+
 # ==================== ПАРСИНГ ФАЙЛОВ ====================
 class BankStatementParser:
     """Основной парсер банковских выписок"""
@@ -107,9 +115,11 @@ class BankStatementParser:
     def __init__(self):
         self.transactions = []
         self.bank_name = ''
+        self.account_name = ''
     
     def parse_file(self, file_content: bytes, filename: str) -> List[Dict]:
         """Основной метод парсинга"""
+        self.account_name = clean_account_name(filename)
         self.bank_name = self._get_bank_name(filename)
         
         file_type = detect_file_type(filename)
@@ -131,10 +141,7 @@ class BankStatementParser:
             if key in file_lower:
                 return info['name']
         
-        name = os.path.splitext(filename)[0]
-        name = re.sub(r'\d{4}-\d{2}-\d{2}', '', name)
-        name = re.sub(r'[_-]', ' ', name).strip()
-        return name if name else 'Unknown Bank'
+        return 'Неизвестный банк'
     
     def _parse_csv(self, file_content: bytes, filename: str, file_type: str) -> List[Dict]:
         """Парсинг CSV файлов"""
@@ -323,6 +330,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': counterparty[:200] if counterparty else '',
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -392,6 +400,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': counterparty[:200],
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -480,6 +489,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': counterparty[:200],
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -567,6 +577,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': counterparty[:200] if counterparty else '',
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -642,6 +653,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': counterparty[:200],
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -718,6 +730,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': counterparty[:200],
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -789,6 +802,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': '',
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -867,6 +881,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': '',
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -922,37 +937,7 @@ class BankStatementParser:
                 if counterparty_col in row:
                     counterparty = str(row[counterparty_col]) if pd.notna(row[counterparty_col]) else ''
                 
-                transactions.append({
-                    'Дата': date,
-                    'Сумма': amount,
-                    'Контрагент': counterparty[:200],
-                    'Наименование банка': self.bank_name,
-                    'Направление': 'Расход' if amount < 0 else 'Доход',
-                    'Описание': description[:500]
-                })
-            except Exception as e:
-                continue
-        
-        return transactions
-    
-    def _parse_generic_excel(self, df: pd.DataFrame, filename: str) -> List[Dict]:
-        """Универсальный парсер для Excel файлов"""
-        transactions = []
-        
-        date_col = None
-        amount_col = None
-        desc_col = None
-        counterparty_col = None
-        
-        for col in df.columns:
-            col_lower = str(col).lower()
-            if 'date' in col_lower and date_col is None:
-                date_col = col
-            elif 'amount' in col_lower and amount_col is None:
-                amount_col = col
-            elif 'description' in col_lower and desc_col is None:
-                desc_col
-    import streamlit as st
+               import streamlit as st
 import pandas as pd
 import os
 import re
@@ -1054,6 +1039,14 @@ def detect_csv_delimiter(file_path: str) -> str:
     except:
         return ';'
 
+def clean_account_name(filename: str) -> str:
+    """Очищает имя файла для получения наименования счета"""
+    name = os.path.splitext(filename)[0]
+    name = re.sub(r'\d{4}-\d{2}-\d{2}', '', name)
+    name = re.sub(r'[_-]', ' ', name).strip()
+    name = re.sub(r'\s+', ' ', name)
+    return name if name else 'Неизвестный счет'
+
 # ==================== ПАРСИНГ ФАЙЛОВ ====================
 class BankStatementParser:
     """Основной парсер банковских выписок"""
@@ -1061,9 +1054,11 @@ class BankStatementParser:
     def __init__(self):
         self.transactions = []
         self.bank_name = ''
+        self.account_name = ''
     
     def parse_file(self, file_content: bytes, filename: str) -> List[Dict]:
         """Основной метод парсинга"""
+        self.account_name = clean_account_name(filename)
         self.bank_name = self._get_bank_name(filename)
         
         file_type = detect_file_type(filename)
@@ -1085,10 +1080,7 @@ class BankStatementParser:
             if key in file_lower:
                 return info['name']
         
-        name = os.path.splitext(filename)[0]
-        name = re.sub(r'\d{4}-\d{2}-\d{2}', '', name)
-        name = re.sub(r'[_-]', ' ', name).strip()
-        return name if name else 'Unknown Bank'
+        return 'Неизвестный банк'
     
     def _parse_csv(self, file_content: bytes, filename: str, file_type: str) -> List[Dict]:
         """Парсинг CSV файлов"""
@@ -1277,6 +1269,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': counterparty[:200] if counterparty else '',
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -1346,6 +1339,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': counterparty[:200],
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -1434,6 +1428,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': counterparty[:200],
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -1521,6 +1516,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': counterparty[:200] if counterparty else '',
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -1596,6 +1592,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': counterparty[:200],
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -1672,6 +1669,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': counterparty[:200],
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -1743,6 +1741,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': '',
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -1821,6 +1820,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': '',
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -1880,6 +1880,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': counterparty[:200],
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -1939,6 +1940,7 @@ class BankStatementParser:
                     'Дата': date,
                     'Сумма': amount,
                     'Контрагент': counterparty[:200],
+                    'Наименование счета': self.account_name,
                     'Наименование банка': self.bank_name,
                     'Направление': 'Расход' if amount < 0 else 'Доход',
                     'Описание': description[:500]
@@ -2085,11 +2087,11 @@ def main():
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df.to_excel(writer, sheet_name='Транзакции', index=False)
                     
-                    bank_summary = df.groupby('Наименование банка').agg({
+                    bank_summary = df.groupby('Наименование счета').agg({
                         'Сумма': ['count', 'sum']
                     }).round(2)
                     bank_summary.columns = ['Количество операций', 'Сумма']
-                    bank_summary.to_excel(writer, sheet_name='Сводка по банкам')
+                    bank_summary.to_excel(writer, sheet_name='Сводка по счетам')
                 
                 output.seek(0)
                 st.download_button(
