@@ -175,6 +175,180 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
+# ==================== ПАРСЕР MKB С ОТЛАДКОЙ ====================
+
+def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    """Парсер для выписок MKB Bank (Венгрия) с отладкой"""
+    transactions = []
+    
+    st.info("🔍 Начинаем парсинг MKB...")
+    
+    # Показываем первые 10 строк для отладки
+    st.write("📄 Первые 10 строк файла:")
+    for idx in range(min(10, len(df))):
+        row_text = ' '.join(str(v) for v in df.iloc[idx].values if pd.notna(v))
+        st.write(f"Строка {idx}: {row_text[:200]}...")
+    
+    # Ищем строку с заголовками
+    header_row = -1
+    for idx in range(min(50, len(df))):
+        row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+        if 'sorszám' in row_text and 'értéknap' in row_text:
+            header_row = idx
+            st.success(f"✅ Найдена строка заголовков: {idx}")
+            break
+    
+    if header_row == -1:
+        # Пробуем найти по ключевым словам
+        for idx in range(min(50, len(df))):
+            row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+            if 'értéknap' in row_text and 'összeg' in row_text:
+                header_row = idx
+                st.success(f"✅ Найдена строка заголовков по ключевым словам: {idx}")
+                break
+    
+    if header_row == -1:
+        st.error("❌ Строка с заголовками не найдена!")
+        return []
+    
+    # Получаем заголовки
+    headers = []
+    for val in df.iloc[header_row].values:
+        if pd.isna(val):
+            headers.append('')
+        else:
+            headers.append(str(val).strip())
+    
+    # Удаляем пустые заголовки в конце
+    while headers and headers[-1] == '':
+        headers.pop()
+    
+    st.write(f"📋 Заголовки: {headers[:15]}...")
+    
+    # Получаем данные
+    data_rows = []
+    for idx in range(header_row + 1, len(df)):
+        row = list(df.iloc[idx].values)
+        if all(pd.isna(x) or str(x).strip() == '' for x in row):
+            continue
+        if len(row) < len(headers):
+            row.extend([''] * (len(headers) - len(row)))
+        data_rows.append(row[:len(headers)])
+    
+    st.info(f"📊 Найдено строк данных: {len(data_rows)}")
+    
+    if not data_rows:
+        st.error("❌ Нет данных после заголовков!")
+        return []
+    
+    df_clean = pd.DataFrame(data_rows, columns=headers)
+    
+    st.write("📊 Данные после обработки:")
+    st.dataframe(df_clean.head(5))
+    
+    # Находим нужные колонки
+    date_col = None
+    amount_col = None
+    desc_col = None
+    counterparty_col = None
+    
+    for col in df_clean.columns:
+        col_lower = str(col).lower()
+        if 'értéknap' in col_lower:
+            date_col = col
+            st.success(f"✅ Найдена колонка даты: {col}")
+        elif 'összeg' in col_lower:
+            amount_col = col
+            st.success(f"✅ Найдена колонка суммы: {col}")
+        elif 'közlemény' in col_lower:
+            desc_col = col
+            st.success(f"✅ Найдена колонка описания: {col}")
+        elif 'kezdeményezett neve' in col_lower:
+            counterparty_col = col
+            st.success(f"✅ Найдена колонка контрагента: {col}")
+    
+    if date_col is None and len(df_clean.columns) > 1:
+        date_col = df_clean.columns[1]
+        st.warning(f"⚠️ Используем колонку {date_col} как дату")
+    if amount_col is None and len(df_clean.columns) > 9:
+        amount_col = df_clean.columns[9]
+        st.warning(f"⚠️ Используем колонку {amount_col} как сумму")
+    
+    if date_col is None or amount_col is None:
+        st.error("❌ Не найдены колонки даты или суммы!")
+        return []
+    
+    # Парсим транзакции
+    for idx, row in df_clean.iterrows():
+        try:
+            # Дата
+            if date_col not in row:
+                continue
+            date_val = row[date_col]
+            if pd.isna(date_val):
+                continue
+            
+            date_str = str(date_val).strip()
+            st.write(f"📌 Обработка строки {idx}: дата={date_str}")
+            
+            if date_str.endswith('.0'):
+                date_str = date_str[:-2]
+            if date_str.isdigit() and len(date_str) == 8:
+                date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+            
+            date = parse_date(date_str)
+            if not date:
+                st.warning(f"⚠️ Не удалось распарсить дату: {date_str}")
+                continue
+            
+            # Сумма
+            if amount_col not in row:
+                continue
+            amount_val = row[amount_col]
+            if pd.isna(amount_val):
+                continue
+            
+            amount = parse_amount(amount_val)
+            st.write(f"   Сумма: {amount}")
+            
+            if amount == 0.0:
+                continue
+            
+            # Описание
+            description = ''
+            if desc_col and desc_col in row and pd.notna(row[desc_col]):
+                description = str(row[desc_col])
+            
+            # Контрагент
+            counterparty = ''
+            if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
+                counterparty = str(row[counterparty_col])
+            
+            if not description:
+                desc_parts = []
+                for col in df_clean.columns:
+                    if col not in [date_col, amount_col, counterparty_col]:
+                        val = row[col]
+                        if pd.notna(val) and str(val).strip():
+                            desc_parts.append(str(val))
+                if desc_parts:
+                    description = ' '.join(desc_parts)
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty[:200] if counterparty else '',
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+            st.success(f"✅ Добавлена транзакция: {date} | {amount}")
+        except Exception as e:
+            st.warning(f"⚠️ Ошибка в строке {idx}: {str(e)}")
+            continue
+    
+    st.success(f"✅ Найдено транзакций: {len(transactions)}")
+    return transactions
+
 # ==================== ПАРСЕР B1 ESTATE (UniCredit) ====================
 
 def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -418,150 +592,6 @@ def parse_revolut(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if desc_col and desc_col in row and pd.notna(row[desc_col]):
                 description = str(row[desc_col])
             
-            counterparty = ''
-            if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
-                counterparty = str(row[counterparty_col])
-            
-            if not description:
-                desc_parts = []
-                for col in df_clean.columns:
-                    if col not in [date_col, amount_col, counterparty_col]:
-                        val = row[col]
-                        if pd.notna(val) and str(val).strip():
-                            desc_parts.append(str(val))
-                if desc_parts:
-                    description = ' '.join(desc_parts)
-            
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': counterparty[:200] if counterparty else '',
-                'Наименование счета': account_name,
-                'Описание': description[:500]
-            })
-        except Exception as e:
-            continue
-    
-    return transactions
-
-# ==================== ПАРСЕР MKB (ОКОНЧАТЕЛЬНО ИСПРАВЛЕННЫЙ) ====================
-
-def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    """Парсер для выписок MKB Bank (Венгрия)"""
-    transactions = []
-    
-    # Ищем строку с заголовками (без учета регистра)
-    header_row = -1
-    for idx in range(min(50, len(df))):
-        row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-        if 'sorszám' in row_text and 'értéknap' in row_text:
-            header_row = idx
-            break
-    
-    if header_row == -1:
-        # Пробуем найти по ключевым словам
-        for idx in range(min(50, len(df))):
-            row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-            if 'értéknap' in row_text and 'összeg' in row_text:
-                header_row = idx
-                break
-    
-    if header_row == -1:
-        return []
-    
-    # Получаем заголовки
-    headers = []
-    for val in df.iloc[header_row].values:
-        if pd.isna(val):
-            headers.append('')
-        else:
-            headers.append(str(val).strip())
-    
-    # Удаляем пустые заголовки в конце
-    while headers and headers[-1] == '':
-        headers.pop()
-    
-    # Получаем данные (все строки после заголовков)
-    data_rows = []
-    for idx in range(header_row + 1, len(df)):
-        row = list(df.iloc[idx].values)
-        # Проверяем, что строка не пустая
-        if all(pd.isna(x) or str(x).strip() == '' for x in row):
-            continue
-        if len(row) < len(headers):
-            row.extend([''] * (len(headers) - len(row)))
-        data_rows.append(row[:len(headers)])
-    
-    if not data_rows:
-        return []
-    
-    df_clean = pd.DataFrame(data_rows, columns=headers)
-    
-    # Находим нужные колонки
-    date_col = None
-    amount_col = None
-    desc_col = None
-    counterparty_col = None
-    
-    for col in df_clean.columns:
-        col_lower = str(col).lower()
-        if 'értéknap' in col_lower:
-            date_col = col
-        elif 'összeg' in col_lower:
-            amount_col = col
-        elif 'közlemény' in col_lower:
-            desc_col = col
-        elif 'kezdeményezett neve' in col_lower:
-            counterparty_col = col
-    
-    # Если не нашли, пробуем по индексам (из структуры файла)
-    # Sorszám(0) | Értéknap(1) | ... | Összeg(9) | Devizanem(10)
-    if date_col is None and len(df_clean.columns) > 1:
-        date_col = df_clean.columns[1]
-    if amount_col is None and len(df_clean.columns) > 9:
-        amount_col = df_clean.columns[9]
-    
-    if date_col is None or amount_col is None:
-        return []
-    
-    for idx, row in df_clean.iterrows():
-        try:
-            # Дата
-            if date_col not in row:
-                continue
-            date_val = row[date_col]
-            if pd.isna(date_val):
-                continue
-            
-            date_str = str(date_val).strip()
-            # Удаляем .0 в конце
-            if date_str.endswith('.0'):
-                date_str = date_str[:-2]
-            # Если дата в формате 20260828
-            if date_str.isdigit() and len(date_str) == 8:
-                date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-            
-            date = parse_date(date_str)
-            if not date:
-                continue
-            
-            # Сумма
-            if amount_col not in row:
-                continue
-            amount_val = row[amount_col]
-            if pd.isna(amount_val):
-                continue
-            
-            amount = parse_amount(amount_val)
-            if amount == 0.0:
-                continue
-            
-            # Описание
-            description = ''
-            if desc_col and desc_col in row and pd.notna(row[desc_col]):
-                description = str(row[desc_col])
-            
-            # Контрагент
             counterparty = ''
             if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
                 counterparty = str(row[counterparty_col])
