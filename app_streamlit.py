@@ -8,14 +8,6 @@ from datetime import datetime
 from io import BytesIO
 from typing import Dict, List, Tuple, Optional
 
-# Попытка импорта pdfplumber для работы с PDF
-try:
-    import pdfplumber
-    PDF_SUPPORT = True
-except ImportError:
-    PDF_SUPPORT = False
-    st.warning("⚠️ Для обработки PDF файлов требуется установка pdfplumber. Установите: pip install pdfplumber")
-
 st.set_page_config(page_title="Аналитик банковских выписок", page_icon="🏦", layout="wide")
 
 st.markdown("""
@@ -36,7 +28,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header"><h1>🏦 Аналитик банковских выписок</h1><p>Поддержка PDF, CSV, XLSX, XLS форматов</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"><h1>🏦 Аналитик банковских выписок</h1><p>Поддержка CSV, XLSX, XLS форматов</p></div>', unsafe_allow_html=True)
 
 # ==================== СПРАВОЧНИК БАНКОВ ====================
 BANK_REFERENCE = {
@@ -221,190 +213,6 @@ def find_header_row(df: pd.DataFrame) -> int:
     
     return -1
 
-# ==================== ПАРСЕР PDF ====================
-def parse_pdf(file_content: bytes, filename: str) -> List[Dict]:
-    """Парсинг PDF файлов с банковскими выписками"""
-    transactions = []
-    
-    if not PDF_SUPPORT:
-        st.error("⚠️ Для обработки PDF требуется установка библиотеки pdfplumber")
-        return []
-    
-    account_name = clean_account_name(filename)
-    bank_name = get_bank_name(filename)
-    
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
-            tmp.write(file_content)
-            tmp_path = tmp.name
-        
-        with pdfplumber.open(tmp_path) as pdf:
-            all_text = ""
-            
-            for page in pdf.pages:
-                # Извлекаем текст
-                text = page.extract_text()
-                if text:
-                    all_text += text + "\n"
-                
-                # Извлекаем таблицы
-                tables = page.extract_tables()
-                for table in tables:
-                    if table and len(table) > 1:
-                        # Преобразуем таблицу в DataFrame
-                        df = pd.DataFrame(table)
-                        transactions.extend(parse_table_from_pdf(df, account_name, bank_name))
-            
-            # Если таблицы не найдены, пытаемся парсить текст
-            if not transactions and all_text:
-                transactions = parse_text_from_pdf(all_text, account_name, bank_name)
-        
-        os.unlink(tmp_path)
-        
-    except Exception as e:
-        st.error(f"Ошибка при парсинге PDF {filename}: {str(e)}")
-        return []
-    
-    return transactions
-
-def parse_table_from_pdf(df: pd.DataFrame, account_name: str, bank_name: str) -> List[Dict]:
-    """Парсинг таблиц из PDF"""
-    transactions = []
-    
-    # Ищем строку с заголовками
-    header_row = find_header_row(df)
-    
-    if header_row >= 0:
-        headers = [str(h).strip() for h in df.iloc[header_row].values]
-        df.columns = headers
-        df = df.iloc[header_row + 1:].reset_index(drop=True)
-    
-    # Определяем колонки
-    date_col = None
-    amount_col = None
-    desc_col = None
-    counterparty_col = None
-    
-    for col in df.columns:
-        col_lower = str(col).lower()
-        if any(kw in col_lower for kw in ['date', 'дата', 'datum']):
-            date_col = col
-        elif any(kw in col_lower for kw in ['amount', 'сумма']):
-            amount_col = col
-        elif any(kw in col_lower for kw in ['description', 'описание', 'details']):
-            desc_col = col
-        elif any(kw in col_lower for kw in ['counterparty', 'контрагент', 'name']):
-            counterparty_col = col
-    
-    if date_col is None and len(df.columns) > 0:
-        date_col = df.columns[0]
-    if amount_col is None and len(df.columns) > 1:
-        amount_col = df.columns[1]
-    
-    for idx, row in df.iterrows():
-        try:
-            date = ''
-            if date_col in row:
-                date = parse_date(str(row[date_col])) if pd.notna(row[date_col]) else ''
-            
-            if not date:
-                continue
-            
-            amount = 0
-            if amount_col in row:
-                amount = parse_amount(str(row[amount_col])) if pd.notna(row[amount_col]) else 0
-            
-            if amount == 0:
-                continue
-            
-            description = ''
-            if desc_col in row:
-                description = str(row[desc_col]) if pd.notna(row[desc_col]) else ''
-            
-            counterparty = ''
-            if counterparty_col in row:
-                counterparty = str(row[counterparty_col]) if pd.notna(row[counterparty_col]) else ''
-            
-            # Если описание пустое, собираем из других колонок
-            if not description:
-                for col in df.columns:
-                    if col not in [date_col, amount_col, counterparty_col]:
-                        val = row[col]
-                        if pd.notna(val) and str(val).strip():
-                            description += str(val) + ' '
-            
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': counterparty[:200] if counterparty else '',
-                'Наименование счета': account_name,
-                'Наименование банка': bank_name,
-                'Направление': 'Расход' if amount < 0 else 'Доход',
-                'Описание': description[:500]
-            })
-        except Exception as e:
-            continue
-    
-    return transactions
-
-def parse_text_from_pdf(text: str, account_name: str, bank_name: str) -> List[Dict]:
-    """Парсинг текста из PDF (если таблицы не найдены)"""
-    transactions = []
-    
-    # Ищем строки, похожие на транзакции
-    # Паттерн для поиска: дата + сумма + описание
-    lines = text.split('\n')
-    
-    # Паттерны для поиска дат и сумм
-    date_pattern = r'\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}'
-    amount_pattern = r'[-+]?\d+[.,]\d{2}\s*[A-Z]{3}|[-+]?\d+[.,]\d{2}'
-    
-    for i, line in enumerate(lines):
-        line = line.strip()
-        if not line:
-            continue
-        
-        # Ищем дату
-        date_match = re.search(date_pattern, line)
-        if not date_match:
-            continue
-        
-        date = parse_date(date_match.group())
-        if not date:
-            continue
-        
-        # Ищем сумму
-        amount_match = re.search(amount_pattern, line)
-        if not amount_match:
-            continue
-        
-        amount_str = amount_match.group()
-        # Очищаем от валюты
-        amount_str = re.sub(r'\s*[A-Z]{3}\s*$', '', amount_str)
-        amount = parse_amount(amount_str)
-        
-        if amount == 0:
-            continue
-        
-        # Остальная часть строки - описание
-        description = line
-        # Удаляем дату и сумму из описания
-        description = re.sub(date_pattern, '', description)
-        description = re.sub(amount_pattern, '', description)
-        description = re.sub(r'\s+', ' ', description).strip()
-        
-        transactions.append({
-            'Дата': date,
-            'Сумма': amount,
-            'Контрагент': '',
-            'Наименование счета': account_name,
-            'Наименование банка': bank_name,
-            'Направление': 'Расход' if amount < 0 else 'Доход',
-            'Описание': description[:500] if description else line[:500]
-        })
-    
-    return transactions
-
 # ==================== ПАРСЕР CSV ====================
 def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
     """Парсинг CSV файлов"""
@@ -576,27 +384,22 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     """Основная функция парсинга файла"""
     ext = os.path.splitext(filename)[1].lower()
     
-    if ext == '.pdf':
-        return parse_pdf(file_content, filename)
-    elif ext == '.csv':
+    if ext == '.csv':
         return parse_csv(file_content, filename)
     elif ext in ['.xlsx', '.xls']:
         return parse_excel(file_content, filename)
     else:
-        st.warning(f"Неподдерживаемый формат файла: {filename}")
+        st.warning(f"Неподдерживаемый формат файла: {filename}. Используйте CSV или Excel.")
         return []
 
 # ==================== ИНТЕРФЕЙС ====================
 def main():
     st.markdown("### 📂 Загрузите банковские выписки")
-    st.markdown("Поддерживаются форматы: **PDF, CSV, XLSX, XLS**")
-    
-    if not PDF_SUPPORT:
-        st.warning("⚠️ Для обработки PDF установите: pip install pdfplumber")
+    st.markdown("Поддерживаются форматы: **CSV, XLSX, XLS**")
     
     uploaded_files = st.file_uploader(
         "Выберите файлы",
-        type=['pdf', 'csv', 'xlsx', 'xls'],
+        type=['csv', 'xlsx', 'xls'],
         accept_multiple_files=True
     )
     
