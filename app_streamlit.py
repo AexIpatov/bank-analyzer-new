@@ -178,39 +178,30 @@ def find_header_row(df: pd.DataFrame) -> int:
                 return idx
     return -1
 
-# ==================== УЛУЧШЕННЫЙ ПАРСЕР UNICREDIT B1 ====================
+# ==================== ПАРСЕР UNICREDIT B1 (ИСПРАВЛЕННЫЙ) ====================
 
 def parse_unicredit_b1(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """Специальный парсер для файла B1_Estate_CZK_UC"""
     transactions = []
     
-    # Показываем структуру файла для отладки
-    st.write(f"📄 Файл: {account_name}")
-    st.write(f"📊 Всего строк: {len(df)}")
-    
     # Ищем строку с "From Account" и "Amount"
     header_row = -1
     for idx in range(min(20, len(df))):
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-        st.write(f"Строка {idx}: {row_text[:100]}...")
         if 'from account' in row_text and 'amount' in row_text:
             header_row = idx
-            st.write(f"✅ Найдена строка заголовков: {idx}")
             break
     
     if header_row == -1:
-        st.error("❌ Строка с 'From Account' не найдена!")
         return []
     
     # Получаем заголовки
     headers = []
-    for idx, val in enumerate(df.iloc[header_row].values):
+    for val in df.iloc[header_row].values:
         if pd.isna(val):
-            headers.append(f'col_{idx}')
+            headers.append('')
         else:
             headers.append(str(val).strip())
-    
-    st.write(f"📋 Заголовки: {headers[:10]}...")
     
     # Получаем данные
     data_rows = []
@@ -221,55 +212,48 @@ def parse_unicredit_b1(df: pd.DataFrame, account_name: str) -> List[Dict]:
         data_rows.append(row[:len(headers)])
     
     if not data_rows:
-        st.error("❌ Нет данных после заголовков!")
         return []
     
+    # Создаем DataFrame с данными
     df_data = pd.DataFrame(data_rows, columns=headers)
-    st.write(f"📊 Данных строк: {len(df_data)}")
     
-    # Определяем колонки
-    date_col = None
+    # Ищем колонки по названиям
     amount_col = None
+    date_col = None
     desc_col = None
-    counterparty_col = None
+    name_col = None
     
     for col in df_data.columns:
         col_lower = str(col).lower()
-        if 'booking date' in col_lower or 'value date' in col_lower:
-            date_col = col
-            st.write(f"✅ Найдена колонка даты: {col}")
-        elif 'amount' in col_lower:
+        if col_lower == 'amount':
             amount_col = col
-            st.write(f"✅ Найдена колонка суммы: {col}")
-        elif 'transaction details' in col_lower:
+        elif col_lower == 'booking date':
+            date_col = col
+        elif col_lower == 'transaction details':
             desc_col = col
-            st.write(f"✅ Найдена колонка описания: {col}")
-        elif 'name' in col_lower:
-            counterparty_col = col
-            st.write(f"✅ Найдена колонка контрагента: {col}")
+        elif col_lower == 'name':
+            name_col = col
     
-    # Если не нашли, пробуем по индексам
-    if date_col is None and len(df_data.columns) > 3:
-        date_col = df_data.columns[3]
-        st.write(f"⚠️ Используем колонку {date_col} как дату")
+    # Если колонки не найдены, ищем по индексам
     if amount_col is None and len(df_data.columns) > 1:
-        amount_col = df_data.columns[1]
-        st.write(f"⚠️ Используем колонку {amount_col} как сумму")
+        amount_col = df_data.columns[1]  # Amount
+    
+    if date_col is None and len(df_data.columns) > 3:
+        date_col = df_data.columns[3]  # Booking Date
+    
     if desc_col is None and len(df_data.columns) > 12:
-        desc_col = df_data.columns[12]
-        st.write(f"⚠️ Используем колонку {desc_col} как описание")
+        desc_col = df_data.columns[12]  # Transaction Details
     
-    if date_col is None:
-        st.error("❌ Колонка даты не найдена!")
-        return []
+    if name_col is None and len(df_data.columns) > 9:
+        name_col = df_data.columns[9]  # Name
     
-    if amount_col is None:
-        st.error("❌ Колонка суммы не найдена!")
+    if amount_col is None or date_col is None:
         return []
     
     # Парсим транзакции
     for idx, row in df_data.iterrows():
         try:
+            # Дата
             if date_col not in row:
                 continue
             date_val = row[date_col]
@@ -279,6 +263,7 @@ def parse_unicredit_b1(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if not date:
                 continue
             
+            # Сумма
             if amount_col not in row:
                 continue
             amount_val = row[amount_col]
@@ -289,18 +274,20 @@ def parse_unicredit_b1(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if amount == 0.0:
                 continue
             
+            # Описание
             description = ''
             if desc_col and desc_col in row and pd.notna(row[desc_col]):
                 description = str(row[desc_col])
             
+            # Контрагент
             counterparty = ''
-            if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
-                counterparty = str(row[counterparty_col])
+            if name_col and name_col in row and pd.notna(row[name_col]):
+                counterparty = str(row[name_col])
             
             if not description:
                 desc_parts = []
                 for col in df_data.columns:
-                    if col not in [date_col, amount_col, counterparty_col]:
+                    if col not in [date_col, amount_col, name_col]:
                         val = row[col]
                         if pd.notna(val) and str(val).strip():
                             desc_parts.append(str(val))
@@ -317,7 +304,6 @@ def parse_unicredit_b1(df: pd.DataFrame, account_name: str) -> List[Dict]:
         except Exception as e:
             continue
     
-    st.write(f"✅ Найдено транзакций: {len(transactions)}")
     return transactions
 
 # ==================== ПАРСЕР EXCEL ====================
@@ -337,8 +323,6 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             if df.empty:
                 continue
             
-            st.write(f"📄 Лист: {sheet_name}")
-            
             # Проверяем на специальный файл B1_Estate_CZK_UC
             is_b1_unicredit = False
             for idx in range(min(10, len(df))):
@@ -348,7 +332,6 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                     break
             
             if is_b1_unicredit:
-                st.write("🔍 Обнаружен формат B1_Estate_CZK_UC")
                 transactions = parse_unicredit_b1(df, account_name)
                 all_transactions.extend(transactions)
                 continue
@@ -362,13 +345,11 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                     break
             
             if is_unicredit:
-                st.write("🔍 Обнаружен формат UniCredit")
                 transactions = parse_unicredit_b1(df, account_name)
                 all_transactions.extend(transactions)
                 continue
             
             # Универсальный парсер
-            st.write("🔍 Используем универсальный парсер")
             transactions = parse_generic_excel(df, account_name)
             all_transactions.extend(transactions)
         
