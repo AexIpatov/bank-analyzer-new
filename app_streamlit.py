@@ -72,6 +72,10 @@ def parse_date(date_str: str) -> str:
     if 'T' in date_str:
         date_str = date_str.split('T')[0]
     
+    # Удаляем .0 в конце (формат 20260828.0)
+    if date_str.endswith('.0'):
+        date_str = date_str[:-2]
+    
     if date_str.isdigit() and len(date_str) == 8:
         try:
             year = date_str[:4]
@@ -445,7 +449,7 @@ def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
     transactions = []
     
     header_row = -1
-    for idx in range(min(20, len(df))):
+    for idx in range(min(30, len(df))):
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
         if 'sorszám' in row_text and 'értéknap' in row_text:
             header_row = idx
@@ -489,9 +493,13 @@ def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
             amount_col = col
         elif 'közlemény' in col_lower:
             desc_col = col
-        elif 'kezdeményezett neve' in col_lower or 'kedvezményezett neve' in col_lower:
-            if counterparty_col is None:
-                counterparty_col = col
+        elif 'kezdeményezett neve' in col_lower:
+            counterparty_col = col
+    
+    if date_col is None and len(df_clean.columns) > 1:
+        date_col = df_clean.columns[1]
+    if amount_col is None and len(df_clean.columns) > 9:
+        amount_col = df_clean.columns[9]
     
     if date_col is None or amount_col is None:
         return []
@@ -538,48 +546,6 @@ def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
                 'Наименование счета': account_name,
                 'Описание': description[:500]
             })
-        except Exception as e:
-            continue
-    
-    return transactions
-
-# ==================== УНИВЕРСАЛЬНЫЙ ПАРСЕР ====================
-
-def parse_generic(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    transactions = []
-    
-    for idx, row in df.iterrows():
-        try:
-            date = None
-            amount = 0.0
-            description = ''
-            
-            for col in range(len(row)):
-                val = str(row.iloc[col]) if pd.notna(row.iloc[col]) else ''
-                if not val:
-                    continue
-                
-                parsed_date = parse_date(val)
-                if parsed_date and parsed_date != val:
-                    date = parsed_date
-                    continue
-                
-                parsed_amount = parse_amount(val)
-                if parsed_amount != 0.0:
-                    amount = parsed_amount
-                    continue
-                
-                if val and len(val) > 2:
-                    description += val + ' '
-            
-            if date and amount != 0.0:
-                transactions.append({
-                    'Дата': date,
-                    'Сумма': amount,
-                    'Контрагент': '',
-                    'Наименование счета': account_name,
-                    'Описание': description[:500]
-                })
         except Exception as e:
             continue
     
@@ -697,6 +663,156 @@ def parse_paysera(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
+# ==================== УНИВЕРСАЛЬНЫЙ ПАРСЕР ====================
+
+def parse_generic(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    transactions = []
+    
+    for idx, row in df.iterrows():
+        try:
+            date = None
+            amount = 0.0
+            description = ''
+            
+            for col in range(len(row)):
+                val = str(row.iloc[col]) if pd.notna(row.iloc[col]) else ''
+                if not val:
+                    continue
+                
+                parsed_date = parse_date(val)
+                if parsed_date and parsed_date != val:
+                    date = parsed_date
+                    continue
+                
+                parsed_amount = parse_amount(val)
+                if parsed_amount != 0.0:
+                    amount = parsed_amount
+                    continue
+                
+                if val and len(val) > 2:
+                    description += val + ' '
+            
+            if date and amount != 0.0:
+                transactions.append({
+                    'Дата': date,
+                    'Сумма': amount,
+                    'Контрагент': '',
+                    'Наименование счета': account_name,
+                    'Описание': description[:500]
+                })
+        except Exception as e:
+            continue
+    
+    return transactions
+
+# ==================== ПАРСЕР CSOB ====================
+
+def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    transactions = []
+    
+    header_row = -1
+    for idx in range(min(30, len(df))):
+        row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+        if 'account number' in row_text and 'account currency' in row_text:
+            header_row = idx
+            break
+    
+    if header_row == -1:
+        return []
+    
+    headers = []
+    for val in df.iloc[header_row].values:
+        if pd.isna(val):
+            headers.append('')
+        else:
+            headers.append(str(val).strip())
+    
+    while headers and headers[-1] == '':
+        headers.pop()
+    
+    data_rows = []
+    for idx in range(header_row + 1, len(df)):
+        row = list(df.iloc[idx].values)
+        if len(row) < len(headers):
+            row.extend([''] * (len(headers) - len(row)))
+        data_rows.append(row[:len(headers)])
+    
+    if not data_rows:
+        return []
+    
+    df_clean = pd.DataFrame(data_rows, columns=headers)
+    
+    date_col = None
+    amount_col = None
+    desc_col = None
+    counterparty_col = None
+    
+    for col in df_clean.columns:
+        col_lower = str(col).lower()
+        if 'posting date' in col_lower:
+            date_col = col
+        elif 'payment amount' in col_lower:
+            amount_col = col
+        elif 'message to beneficiary' in col_lower or 'note' in col_lower:
+            desc_col = col
+        elif 'counterparty' in col_lower:
+            counterparty_col = col
+    
+    if date_col is None and len(df_clean.columns) > 4:
+        date_col = df_clean.columns[4]
+    if amount_col is None and len(df_clean.columns) > 6:
+        amount_col = df_clean.columns[6]
+    
+    if date_col is None or amount_col is None:
+        return []
+    
+    for idx, row in df_clean.iterrows():
+        try:
+            if date_col not in row:
+                continue
+            date_val = row[date_col]
+            if pd.isna(date_val):
+                continue
+            date = parse_date(str(date_val))
+            if not date:
+                continue
+            
+            if amount_col not in row:
+                continue
+            amount = parse_amount(row[amount_col])
+            if amount == 0.0:
+                continue
+            
+            description = ''
+            if desc_col and desc_col in row and pd.notna(row[desc_col]):
+                description = str(row[desc_col])
+            
+            counterparty = ''
+            if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
+                counterparty = str(row[counterparty_col])
+            
+            if not description:
+                desc_parts = []
+                for col in df_clean.columns:
+                    if col not in [date_col, amount_col, counterparty_col]:
+                        val = row[col]
+                        if pd.notna(val) and str(val).strip():
+                            desc_parts.append(str(val))
+                if desc_parts:
+                    description = ' '.join(desc_parts)
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty[:200] if counterparty else '',
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+        except Exception as e:
+            continue
+    
+    return transactions
+
 # ==================== ОСНОВНОЙ ПАРСЕР EXCEL ====================
 
 def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
@@ -740,6 +856,14 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                         file_type = 'revolut'
                         break
             
+            # Проверка на CSOB
+            if file_type == 'unknown':
+                for idx in range(min(10, len(df))):
+                    row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+                    if 'account number' in row_text and 'account currency' in row_text:
+                        file_type = 'csob'
+                        break
+            
             # Проверка на BluOr
             if file_type == 'unknown' and 'bluor' in filename_lower:
                 file_type = 'bluor'
@@ -760,6 +884,9 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                 all_transactions.extend(transactions)
             elif file_type == 'revolut':
                 transactions = parse_revolut(df, account_name)
+                all_transactions.extend(transactions)
+            elif file_type == 'csob':
+                transactions = parse_csob(df, account_name)
                 all_transactions.extend(transactions)
             elif file_type == 'bluor':
                 transactions = parse_bluor(df, account_name)
