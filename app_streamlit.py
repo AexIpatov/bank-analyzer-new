@@ -163,7 +163,7 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР BLUOR EXCEL (ИСПРАВЛЕННЫЙ) ====================
+# ==================== ПАРСЕР BLUOR EXCEL ====================
 
 def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """Парсер для выписок BluOr Bank (формат с Дебет/Кредит)"""
@@ -183,6 +183,10 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             
             # Пропускаем пустые строки
             if not date_str:
+                continue
+            
+            # Пропускаем строки с текстом в первой колонке
+            if any(kw in date_str.lower() for kw in ['per-on', 'дебетовый', 'кредитовый', 'выписка', 'счет', 'период']):
                 continue
             
             # Проверяем, что это дата в формате ДД.ММ.ГГГГ
@@ -220,10 +224,6 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             ]):
                 continue
             
-            # Пропускаем строки, где описание начинается с "Кредитовый" или "Дебетовый"
-            if description.lower().startswith('кредитовый') or description.lower().startswith('дебетовый'):
-                continue
-            
             # Сумма: проверяем колонку 2 (Дебет) и колонку 3 (Кредит)
             amount = 0.0
             
@@ -231,18 +231,13 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if len(row) > 2:
                 debit_val = row.iloc[2]
                 if pd.notna(debit_val) and str(debit_val).strip():
-                    debit_str = str(debit_val).strip()
-                    # Пропускаем очень большие числа (начальные остатки)
-                    if debit_str and '130' not in debit_str and '523' not in debit_str:
-                        amount = parse_amount(debit_str)
+                    amount = parse_amount(str(debit_val))
             
             # Если в дебете 0, проверяем Кредит (колонка 3)
             if amount == 0.0 and len(row) > 3:
                 credit_val = row.iloc[3]
                 if pd.notna(credit_val) and str(credit_val).strip():
-                    credit_str = str(credit_val).strip()
-                    if credit_str and '130' not in credit_str and '523' not in credit_str:
-                        amount = parse_amount(credit_str)
+                    amount = parse_amount(str(credit_val))
             
             if amount == 0.0:
                 continue
