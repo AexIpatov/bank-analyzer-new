@@ -294,18 +294,26 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
-# ==================== ПАРСЕР CSOB (Чехия) ====================
+# ==================== ПАРСЕР CSOB (ИСПРАВЛЕННЫЙ) ====================
 
 def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     transactions = []
     
-    # Ищем строку с заголовками
+    # Ищем строку с заголовками по всему файлу
     header_row = -1
-    for idx in range(min(30, len(df))):
+    for idx in range(min(50, len(df))):
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
         if 'account number' in row_text and 'account currency' in row_text:
             header_row = idx
             break
+    
+    if header_row == -1:
+        # Пробуем найти по ключевым словам
+        for idx in range(min(50, len(df))):
+            row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+            if 'posting date' in row_text and 'payment amount' in row_text:
+                header_row = idx
+                break
     
     if header_row == -1:
         return []
@@ -321,10 +329,12 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     while headers and headers[-1] == '':
         headers.pop()
     
-    # Получаем данные
+    # Получаем данные (все строки после заголовков)
     data_rows = []
     for idx in range(header_row + 1, len(df)):
         row = list(df.iloc[idx].values)
+        if all(pd.isna(x) or str(x).strip() == '' for x in row):
+            continue
         if len(row) < len(headers):
             row.extend([''] * (len(headers) - len(row)))
         data_rows.append(row[:len(headers)])
@@ -858,12 +868,20 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             
             file_type = 'unknown'
             
-            # Проверка на MKB
+            # Проверка на CSOB
             for idx in range(min(50, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-                if 'sorszám' in row_text and 'értéknap' in row_text:
-                    file_type = 'mkb'
+                if 'account number' in row_text and 'account currency' in row_text:
+                    file_type = 'csob'
                     break
+            
+            # Проверка на MKB
+            if file_type == 'unknown':
+                for idx in range(min(50, len(df))):
+                    row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+                    if 'sorszám' in row_text and 'értéknap' in row_text:
+                        file_type = 'mkb'
+                        break
             
             # Проверка на Paysera
             if file_type == 'unknown':
@@ -881,14 +899,6 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                         file_type = 'revolut'
                         break
             
-            # Проверка на CSOB
-            if file_type == 'unknown':
-                for idx in range(min(10, len(df))):
-                    row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-                    if 'account number' in row_text and 'account currency' in row_text:
-                        file_type = 'csob'
-                        break
-            
             # Проверка на BluOr
             if file_type == 'unknown' and 'bluor' in filename_lower:
                 file_type = 'bluor'
@@ -901,7 +911,10 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                         file_type = 'b1_estate'
                         break
             
-            if file_type == 'mkb':
+            if file_type == 'csob':
+                transactions = parse_csob(df, account_name)
+                all_transactions.extend(transactions)
+            elif file_type == 'mkb':
                 transactions = parse_mkb(df, account_name)
                 all_transactions.extend(transactions)
             elif file_type == 'paysera':
@@ -909,9 +922,6 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                 all_transactions.extend(transactions)
             elif file_type == 'revolut':
                 transactions = parse_revolut(df, account_name)
-                all_transactions.extend(transactions)
-            elif file_type == 'csob':
-                transactions = parse_csob(df, account_name)
                 all_transactions.extend(transactions)
             elif file_type == 'bluor':
                 transactions = parse_bluor(df, account_name)
