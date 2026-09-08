@@ -84,18 +84,7 @@ def parse_date(date_str: str) -> str:
         except:
             pass
     
-    # Формат MM/DD/YYYY
-    if '/' in date_str and len(date_str.split('/')) == 3:
-        parts = date_str.split('/')
-        try:
-            # Проверяем, что это MM/DD/YYYY
-            if len(parts[0]) == 2 and len(parts[1]) == 2:
-                month, day, year = parts
-                if len(year) == 4:
-                    return f"{day.zfill(2)}-{month.zfill(2)}-{year}"
-        except:
-            pass
-    
+    # Формат ДД.ММ.ГГГГ
     if '.' in date_str and len(date_str.split('.')) == 3:
         parts = date_str.split('.')
         try:
@@ -106,6 +95,7 @@ def parse_date(date_str: str) -> str:
         except:
             pass
     
+    # Формат ДД/ММ/ГГГГ
     if '/' in date_str and len(date_str.split('/')) == 3:
         parts = date_str.split('/')
         try:
@@ -141,6 +131,9 @@ def parse_amount(amount_str) -> float:
     if amount_str in ['', 'nan', '-', 'None', 'null', 'NaN', 'N/A', 'n/a', '0', '0.0']:
         return 0.0
     
+    # Убираем пробелы в числах (например "130 523.99")
+    amount_str = amount_str.replace(' ', '')
+    
     is_negative = False
     if amount_str.startswith('-'):
         is_negative = True
@@ -151,7 +144,6 @@ def parse_amount(amount_str) -> float:
     
     amount_str = re.sub(r'\s*[A-Z]{3}\s*$', '', amount_str)
     amount_str = re.sub(r'^\s*[A-Z]{3}\s*', '', amount_str)
-    amount_str = amount_str.replace(' ', '').replace('\xa0', '')
     amount_str = amount_str.replace(',', '.')
     amount_str = re.sub(r'[^\d.\-]', '', amount_str)
     
@@ -185,13 +177,71 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
+# ==================== ПАРСЕР BLUOR (НОВЫЙ) ====================
+
+def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    """Парсер для выписок BluOr Bank (формат с Дебет/Кредит)"""
+    transactions = []
+    
+    # Ищем строки с транзакциями
+    for idx, row in df.iterrows():
+        try:
+            if len(row) < 4:
+                continue
+            
+            # Проверяем, что это строка с транзакцией
+            date_val = row.iloc[0] if len(row) > 0 else None
+            if pd.isna(date_val):
+                continue
+            
+            # Пропускаем заголовки
+            date_str = str(date_val).strip()
+            if any(kw in date_str.lower() for kw in ['дата', 'вид операций', 'дебет', 'кредит', 'кредитовый', 'дебетовый', 'конечный']):
+                continue
+            
+            date = parse_date(date_str)
+            if not date:
+                continue
+            
+            # Описание (колонка 1)
+            desc_val = row.iloc[1] if len(row) > 1 else ''
+            description = str(desc_val) if pd.notna(desc_val) else ''
+            
+            # Сумма (колонка 2 - Дебет или колонка 3 - Кредит)
+            amount = 0.0
+            
+            # Проверяем Дебет (колонка 2)
+            if len(row) > 2:
+                debit_val = row.iloc[2]
+                if pd.notna(debit_val) and str(debit_val).strip():
+                    amount = parse_amount(debit_val)
+            
+            # Если в дебете 0, проверяем Кредит (колонка 3)
+            if amount == 0.0 and len(row) > 3:
+                credit_val = row.iloc[3]
+                if pd.notna(credit_val) and str(credit_val).strip():
+                    amount = parse_amount(credit_val)
+            
+            if amount == 0.0:
+                continue
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': '',
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+        except Exception as e:
+            continue
+    
+    return transactions
+
 # ==================== ПАРСЕР FIO ====================
 
 def parse_fio(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    """Парсер для выписок FIO Banka (Чехия)"""
     transactions = []
     
-    # Ищем строку с заголовками
     header_row = -1
     for idx in range(min(10, len(df))):
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
@@ -202,7 +252,6 @@ def parse_fio(df: pd.DataFrame, account_name: str) -> List[Dict]:
     if header_row == -1:
         return []
     
-    # Получаем заголовки
     headers = []
     for val in df.iloc[header_row].values:
         if pd.isna(val):
@@ -210,7 +259,6 @@ def parse_fio(df: pd.DataFrame, account_name: str) -> List[Dict]:
         else:
             headers.append(str(val).strip())
     
-    # Получаем данные
     data_rows = []
     for idx in range(header_row + 1, len(df)):
         row = list(df.iloc[idx].values)
@@ -225,7 +273,6 @@ def parse_fio(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     df_clean = pd.DataFrame(data_rows, columns=headers)
     
-    # Находим нужные колонки
     date_col = None
     amount_col = None
     desc_col = None
@@ -518,54 +565,6 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
                 'Контрагент': counterparty[:200] if counterparty else '',
                 'Наименование счета': account_name,
                 'Описание': description[:500]
-            })
-        except Exception as e:
-            continue
-    
-    return transactions
-
-# ==================== ПАРСЕР BLUOR ====================
-
-def parse_bluor(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    transactions = []
-    
-    for idx, row in df.iterrows():
-        try:
-            if len(row) < 4:
-                continue
-            
-            date_val = row.iloc[1] if len(row) > 1 else None
-            if pd.isna(date_val):
-                continue
-            
-            date = parse_date(str(date_val))
-            if not date:
-                continue
-            
-            desc_val = row.iloc[3] if len(row) > 3 else ''
-            if pd.isna(desc_val):
-                continue
-            desc = str(desc_val).strip()
-            
-            skip_keywords = ['начальный остаток', 'конечный остаток', 'дебет (d)', 'кредит (c)', 'дебет', 'кредит']
-            if any(kw in desc.lower() for kw in skip_keywords):
-                continue
-            
-            amount = 0.0
-            if len(row) > 4:
-                amount = parse_amount(row.iloc[4])
-            if amount == 0.0 and len(row) > 5:
-                amount = parse_amount(row.iloc[5])
-            
-            if amount == 0.0:
-                continue
-            
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': '',
-                'Наименование счета': account_name,
-                'Описание': desc[:500]
             })
         except Exception as e:
             continue
@@ -976,12 +975,20 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             
             file_type = 'unknown'
             
-            # Проверка на FIO
+            # Проверка на BluOr (счет с LV)
             for idx in range(min(10, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-                if 'date' in row_text and 'volume' in row_text and 'currency' in row_text:
-                    file_type = 'fio'
+                if 'счет' in row_text and 'lv' in row_text:
+                    file_type = 'bluor_excel'
                     break
+            
+            # Проверка на FIO
+            if file_type == 'unknown':
+                for idx in range(min(10, len(df))):
+                    row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+                    if 'date' in row_text and 'volume' in row_text and 'currency' in row_text:
+                        file_type = 'fio'
+                        break
             
             # Проверка на CSOB
             if file_type == 'unknown':
@@ -1015,10 +1022,6 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                         file_type = 'revolut'
                         break
             
-            # Проверка на BluOr
-            if file_type == 'unknown' and 'bluor' in filename_lower:
-                file_type = 'bluor'
-            
             # Проверка на B1 Estate (UniCredit)
             if file_type == 'unknown':
                 for idx in range(min(10, len(df))):
@@ -1027,7 +1030,10 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                         file_type = 'b1_estate'
                         break
             
-            if file_type == 'fio':
+            if file_type == 'bluor_excel':
+                transactions = parse_bluor_excel(df, account_name)
+                all_transactions.extend(transactions)
+            elif file_type == 'fio':
                 transactions = parse_fio(df, account_name)
                 all_transactions.extend(transactions)
             elif file_type == 'csob':
@@ -1041,9 +1047,6 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                 all_transactions.extend(transactions)
             elif file_type == 'revolut':
                 transactions = parse_revolut(df, account_name)
-                all_transactions.extend(transactions)
-            elif file_type == 'bluor':
-                transactions = parse_bluor(df, account_name)
                 all_transactions.extend(transactions)
             elif file_type == 'b1_estate':
                 transactions = parse_b1_estate(df, account_name)
