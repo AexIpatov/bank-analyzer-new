@@ -472,7 +472,7 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
 def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """
     Правильный парсер для CSOB Bank.
-    Использует заголовки для определения колонок.
+    Обрабатывает все строки с данными.
     """
     transactions = []
     
@@ -495,7 +495,7 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
         else:
             headers.append(str(val).strip())
     
-    # Определяем индексы нужных колонок
+    # Определяем индексы нужных колонок по названиям
     date_col_idx = None
     amount_col_idx = None
     counterparty_col_idx = None
@@ -512,23 +512,29 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
         elif 'message to beneficiary' in col_lower:
             desc_col_idx = i
     
-    # Если не нашли - используем позиции из структуры файла
+    # Используем точные индексы из структуры файла
+    # 4 - posting date, 6 - payment amount, 13 - counterparty, 15 - message to beneficiary
     if date_col_idx is None:
-        date_col_idx = 4  # posting date
+        date_col_idx = 4
     if amount_col_idx is None:
-        amount_col_idx = 6  # payment amount
+        amount_col_idx = 6
     if counterparty_col_idx is None:
-        counterparty_col_idx = 13  # counterparty
+        counterparty_col_idx = 13
     if desc_col_idx is None:
-        desc_col_idx = 15  # message to beneficiary
+        desc_col_idx = 15
     
     # Проходим по строкам после заголовка
     for idx in range(header_row + 1, len(df)):
         try:
             row = df.iloc[idx]
             
-            # Пропускаем пустые строки
+            # Пропускаем полностью пустые строки
             if all(pd.isna(x) or str(x).strip() == '' for x in row):
+                continue
+            
+            # Проверяем, что это строка с данными (первая колонка должна содержать номер счета)
+            first_val = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ''
+            if not first_val or 'account number' in first_val.lower():
                 continue
             
             # Получаем дату
