@@ -163,7 +163,7 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР BLUOR EXCEL (ГАРАНТИРОВАННО РАБОТАЮЩИЙ) ====================
+# ==================== ПАРСЕР BLUOR EXCEL ====================
 
 def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """Парсер для выписок BluOr Bank (формат с Дебет/Кредит)"""
@@ -183,20 +183,12 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if not date_str:
                 continue
             
-            # Пропускаем строки, которые точно не являются датами
-            skip_patterns = [
-                'per-on', 'дебетовый', 'кредитовый', 'выписка', 
-                'счет', 'период', 'b/n', 'b/n)', '(b/n'
-            ]
-            if any(p in date_str.lower() for p in skip_patterns):
-                continue
-            
-            # Проверяем, что это дата в формате ДД.ММ.ГГГГ
+            # Строго проверяем, что это дата в формате ДД.ММ.ГГГГ
             date_parts = date_str.split('.')
             if len(date_parts) != 3:
                 continue
             
-            # Проверяем, что все части - числа
+            # Проверяем, что все части - числа и дата корректна
             try:
                 day = int(date_parts[0])
                 month = int(date_parts[1])
@@ -219,11 +211,6 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if not description:
                 continue
             
-            # Пропускаем строки с итогами
-            skip_words = ['кредитовый оборот', 'дебетовый оборот', 'конечный остаток', 'начальный остаток']
-            if any(kw in description.lower() for kw in skip_words):
-                continue
-            
             # Сумма
             amount = 0.0
             
@@ -243,12 +230,7 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
                     if credit_str:
                         amount = parse_amount(credit_str)
             
-            # Пропускаем нулевые суммы
             if amount == 0.0:
-                continue
-            
-            # Пропускаем очень большие суммы (остатки)
-            if abs(amount) > 1000000:
                 continue
             
             transactions.append({
