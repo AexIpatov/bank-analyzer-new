@@ -161,13 +161,12 @@ def parse_amount(amount_str) -> float:
         value = float(amount_str)
         return -abs(value) if is_negative else abs(value)
     except:
+        # Пробуем убрать разделители тысяч
         try:
-            # Пробуем убрать разделители тысяч (точки)
             cleaned = amount_str.replace('.', '')
             if cleaned:
                 value = float(cleaned)
                 if '.' in amount_str:
-                    # Если была точка как разделитель, восстанавливаем
                     parts = amount_str.split('.')
                     if len(parts) == 2:
                         value = float(parts[0] + '.' + parts[1])
