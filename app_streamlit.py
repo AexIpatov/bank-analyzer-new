@@ -33,7 +33,6 @@ st.markdown('<div class="main-header"><h1>🏦 Аналитик банковск
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
 def detect_file_encoding(file_path: str) -> str:
-    """Определяет кодировку файла"""
     try:
         with open(file_path, 'rb') as f:
             raw_data = f.read(10000)
@@ -43,23 +42,19 @@ def detect_file_encoding(file_path: str) -> str:
         return 'utf-8'
 
 def detect_csv_delimiter(file_path: str) -> str:
-    """Определяет разделитель в CSV файле"""
     delimiters = [';', ',', '\t', '|']
     try:
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             first_line = f.readline()
-        
         counts = {}
         for delim in delimiters:
             counts[delim] = first_line.count(delim)
-        
         max_delim = max(counts, key=counts.get)
         return max_delim if counts[max_delim] > 0 else ';'
     except:
         return ';'
 
 def clean_account_name(filename: str) -> str:
-    """Очищает имя файла для получения наименования счета"""
     name = os.path.splitext(filename)[0]
     name = re.sub(r'\d{4}-\d{2}-\d{2}', '', name)
     name = re.sub(r'[_-]', ' ', name).strip()
@@ -67,13 +62,18 @@ def clean_account_name(filename: str) -> str:
     return name if name else 'Неизвестный счет'
 
 def parse_date(date_str: str) -> str:
-    """Парсинг даты и возврат в формате ДД-ММ-ГГГГ"""
     if not date_str or pd.isna(date_str):
         return ''
     
     date_str = str(date_str).strip()
     
-    # Если это число (например 20260803), пробуем распарсить
+    # Формат YYYY-MM-DD HH:MM:SS (Revolut)
+    if ' ' in date_str:
+        date_str = date_str.split(' ')[0]
+    if 'T' in date_str:
+        date_str = date_str.split('T')[0]
+    
+    # Числовой формат YYYYMMDD
     if date_str.isdigit() and len(date_str) == 8:
         try:
             year = date_str[:4]
@@ -83,7 +83,6 @@ def parse_date(date_str: str) -> str:
         except:
             pass
     
-    # Если это число с точкой (20260803.0)
     if '.' in date_str and date_str.split('.')[0].isdigit():
         date_str = date_str.split('.')[0]
         if len(date_str) == 8:
@@ -94,11 +93,6 @@ def parse_date(date_str: str) -> str:
                 return f"{day}-{month}-{year}"
             except:
                 pass
-    
-    if ' ' in date_str:
-        date_str = date_str.split(' ')[0]
-    if 'T' in date_str:
-        date_str = date_str.split('T')[0]
     
     # Формат ДД.ММ.ГГГГ
     if '.' in date_str and len(date_str.split('.')) == 3:
@@ -139,7 +133,6 @@ def parse_date(date_str: str) -> str:
     return date_str
 
 def parse_amount(amount_str) -> float:
-    """Парсинг суммы из строки"""
     if amount_str is None or pd.isna(amount_str):
         return 0.0
     
@@ -172,7 +165,6 @@ def parse_amount(amount_str) -> float:
         return 0.0
 
 def format_amount(amount: float) -> str:
-    """Форматирует сумму с запятой как разделителем"""
     if amount is None or pd.isna(amount):
         return "0,00"
     formatted = f"{amount:.2f}".replace('.', ',')
@@ -183,13 +175,105 @@ def format_amount(amount: float) -> str:
     return formatted
 
 def find_header_row(df: pd.DataFrame) -> int:
-    """Находит строку с заголовками в DataFrame"""
     for idx in range(min(30, len(df))):
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
         if any(kw in row_text for kw in ['дата', 'date', 'datum']):
-            if any(kw in row_text for kw in ['дебет', 'debit', 'кредит', 'credit']):
+            if any(kw in row_text for kw in ['дебет', 'debit', 'кредит', 'credit', 'amount', 'сумма']):
                 return idx
     return -1
+
+# ==================== ПАРСЕР REVOLUT ====================
+
+def parse_revolut(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    """Специальный парсер для выписок Revolut"""
+    transactions = []
+    
+    # Ищем строку с заголовками
+    header_row = -1
+    for idx in range(min(30, len(df))):
+        row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+        if 'date started' in row_text and 'amount' in row_text:
+            header_row = idx
+            break
+    
+    if header_row >= 0:
+        headers = [str(h).strip() if pd.notna(h) else f'col_{i}' for i, h in enumerate(df.iloc[header_row].values)]
+        data_rows = []
+        for idx in range(header_row + 1, len(df)):
+            row = list(df.iloc[idx].values)
+            if len(row) < len(headers):
+                row.extend([''] * (len(headers) - len(row)))
+            data_rows.append(row[:len(headers)])
+        df = pd.DataFrame(data_rows, columns=headers)
+    else:
+        return []
+    
+    # Определяем колонки
+    date_col = None
+    amount_col = None
+    desc_col = None
+    counterparty_col = None
+    
+    for col in df.columns:
+        col_lower = str(col).lower()
+        if 'date started' in col_lower or 'date' in col_lower:
+            date_col = col
+        elif 'amount' in col_lower:
+            amount_col = col
+        elif 'description' in col_lower:
+            desc_col = col
+        elif 'sender name' in col_lower or 'beneficiary name' in col_lower:
+            counterparty_col = col
+    
+    if date_col is None or amount_col is None:
+        return []
+    
+    for idx, row in df.iterrows():
+        try:
+            if date_col not in row:
+                continue
+            date_val = row[date_col]
+            if pd.isna(date_val):
+                continue
+            date = parse_date(str(date_val))
+            if not date:
+                continue
+            
+            if amount_col not in row:
+                continue
+            amount = parse_amount(row[amount_col])
+            if amount == 0.0:
+                continue
+            
+            description = ''
+            if desc_col and desc_col in row and pd.notna(row[desc_col]):
+                description = str(row[desc_col])
+            
+            counterparty = ''
+            if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
+                counterparty = str(row[counterparty_col])
+            
+            if not description:
+                desc_parts = []
+                for col in df.columns:
+                    if col not in [date_col, amount_col, counterparty_col]:
+                        val = row[col]
+                        if pd.notna(val) and str(val).strip():
+                            desc_parts.append(str(val))
+                if desc_parts:
+                    description = ' '.join(desc_parts)
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty[:200] if counterparty else '',
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+        except Exception as e:
+            continue
+    
+    return transactions
 
 # ==================== ПАРСЕР CSOB/INDUSTRA ====================
 
@@ -197,7 +281,6 @@ def parse_csob_industra(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """Специальный парсер для выписок CSOB/Industra с колонками Дебет(D) и Кредит(C)"""
     transactions = []
     
-    # Находим строку с заголовками
     header_row = find_header_row(df)
     
     if header_row >= 0:
@@ -210,10 +293,8 @@ def parse_csob_industra(df: pd.DataFrame, account_name: str) -> List[Dict]:
             data_rows.append(row[:len(headers)])
         df = pd.DataFrame(data_rows, columns=headers)
     else:
-        # Если заголовки не найдены, используем как есть
         df.columns = [f'col_{i}' for i in range(len(df.columns))]
     
-    # Определяем колонки
     date_col = None
     debit_col = None
     credit_col = None
@@ -233,7 +314,6 @@ def parse_csob_industra(df: pd.DataFrame, account_name: str) -> List[Dict]:
         elif any(kw in col_lower for kw in ['получатель', 'плательщик', 'counterparty']):
             counterparty_col = col
     
-    # Если не нашли дебет/кредит, ищем последние колонки с числами
     if debit_col is None and credit_col is None:
         cols = list(df.columns)
         for col in reversed(cols):
@@ -247,14 +327,12 @@ def parse_csob_industra(df: pd.DataFrame, account_name: str) -> List[Dict]:
                         credit_col = col
                     break
     
-    # Если все еще не нашли, берем последние 2 колонки
     if debit_col is None and credit_col is None:
         cols = list(df.columns)
         if len(cols) >= 2:
             credit_col = cols[-1]
             debit_col = cols[-2]
     
-    # Если дата не найдена, ищем первую колонку с датами
     if date_col is None:
         for col in df.columns:
             sample = df[col].dropna()
@@ -266,10 +344,8 @@ def parse_csob_industra(df: pd.DataFrame, account_name: str) -> List[Dict]:
         if date_col is None and len(df.columns) > 0:
             date_col = df.columns[0]
     
-    # Парсим транзакции
     for idx, row in df.iterrows():
         try:
-            # Дата
             if date_col not in row:
                 continue
             date_val = row[date_col]
@@ -279,10 +355,8 @@ def parse_csob_industra(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if not date:
                 continue
             
-            # Сумма
             amount = 0.0
             
-            # Проверяем дебет (отрицательная сумма)
             if debit_col and debit_col in row:
                 val = row[debit_col]
                 if pd.notna(val):
@@ -290,7 +364,6 @@ def parse_csob_industra(df: pd.DataFrame, account_name: str) -> List[Dict]:
                     if parsed != 0:
                         amount = -abs(parsed)
             
-            # Если в дебете 0, проверяем кредит (положительная сумма)
             if amount == 0.0 and credit_col and credit_col in row:
                 val = row[credit_col]
                 if pd.notna(val):
@@ -301,21 +374,18 @@ def parse_csob_industra(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if amount == 0.0:
                 continue
             
-            # Описание
             description = ''
             if desc_col and desc_col in row:
                 val = row[desc_col]
                 if pd.notna(val):
                     description = str(val)
             
-            # Контрагент
             counterparty = ''
             if counterparty_col and counterparty_col in row:
                 val = row[counterparty_col]
                 if pd.notna(val):
                     counterparty = str(val)
             
-            # Если описание пустое, собираем из других колонок
             if not description or len(description) < 3:
                 desc_parts = []
                 for col in df.columns:
@@ -356,7 +426,6 @@ def parse_generic_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             data_rows.append(row[:len(headers)])
         df = pd.DataFrame(data_rows, columns=headers)
     
-    # Ищем колонки
     date_col = None
     amount_col = None
     desc_col = None
@@ -450,18 +519,29 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             if df.empty:
                 continue
             
-            # Проверяем, содержит ли лист дебет/кредит
-            is_csob = False
+            # Проверяем на Revolut
+            is_revolut = False
             for idx in range(min(20, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-                if ('дебет' in row_text or 'debit' in row_text) and ('кредит' in row_text or 'credit' in row_text):
-                    is_csob = True
+                if 'date started' in row_text and 'amount' in row_text:
+                    is_revolut = True
                     break
             
-            if is_csob:
-                transactions = parse_csob_industra(df, account_name)
+            if is_revolut:
+                transactions = parse_revolut(df, account_name)
             else:
-                transactions = parse_generic_excel(df, account_name)
+                # Проверяем на CSOB/Industra
+                is_csob = False
+                for idx in range(min(20, len(df))):
+                    row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+                    if ('дебет' in row_text or 'debit' in row_text) and ('кредит' in row_text or 'credit' in row_text):
+                        is_csob = True
+                        break
+                
+                if is_csob:
+                    transactions = parse_csob_industra(df, account_name)
+                else:
+                    transactions = parse_generic_excel(df, account_name)
             
             all_transactions.extend(transactions)
         
