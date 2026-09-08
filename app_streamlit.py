@@ -162,13 +162,19 @@ def parse_amount(amount_str) -> float:
         return -abs(value) if is_negative else abs(value)
     except:
         try:
-            parts = amount_str.split('.')
-            if len(parts) > 2:
-                amount_str = ''.join(parts[:-1]) + '.' + parts[-1]
-            value = float(amount_str)
-            return -abs(value) if is_negative else abs(value)
+            # Пробуем убрать разделители тысяч (точки)
+            cleaned = amount_str.replace('.', '')
+            if cleaned:
+                value = float(cleaned)
+                if '.' in amount_str:
+                    # Если была точка как разделитель, восстанавливаем
+                    parts = amount_str.split('.')
+                    if len(parts) == 2:
+                        value = float(parts[0] + '.' + parts[1])
+                return -abs(value) if is_negative else abs(value)
         except:
-            return 0.0
+            pass
+        return 0.0
 
 def format_amount(amount: float) -> str:
     if amount is None or pd.isna(amount):
@@ -179,120 +185,6 @@ def format_amount(amount: float) -> str:
         integer_part = re.sub(r'(?<=\d)(?=(\d{3})+(?!\d))', ' ', integer_part)
         return f"{integer_part},{decimal_part}"
     return formatted
-
-# ==================== ПАРСЕР CSOB ====================
-
-def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    transactions = []
-    
-    # Ищем строку с заголовками
-    header_row = -1
-    for idx in range(min(50, len(df))):
-        row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-        if 'account number' in row_text and 'account currency' in row_text:
-            header_row = idx
-            break
-    
-    if header_row == -1:
-        return []
-    
-    # Получаем заголовки
-    headers = []
-    for val in df.iloc[header_row].values:
-        if pd.isna(val):
-            headers.append('')
-        else:
-            headers.append(str(val).strip())
-    
-    while headers and headers[-1] == '':
-        headers.pop()
-    
-    # Получаем данные
-    data_rows = []
-    for idx in range(header_row + 1, len(df)):
-        row = list(df.iloc[idx].values)
-        if all(pd.isna(x) or str(x).strip() == '' for x in row):
-            continue
-        if len(row) < len(headers):
-            row.extend([''] * (len(headers) - len(row)))
-        data_rows.append(row[:len(headers)])
-    
-    if not data_rows:
-        return []
-    
-    df_clean = pd.DataFrame(data_rows, columns=headers)
-    
-    # Находим нужные колонки
-    date_col = None
-    amount_col = None
-    desc_col = None
-    counterparty_col = None
-    
-    for col in df_clean.columns:
-        col_lower = str(col).lower()
-        if 'posting date' in col_lower:
-            date_col = col
-        elif 'payment amount' in col_lower:
-            amount_col = col
-        elif 'message to beneficiary' in col_lower or 'note' in col_lower:
-            desc_col = col
-        elif 'counterparty' in col_lower:
-            counterparty_col = col
-    
-    if date_col is None and len(df_clean.columns) > 4:
-        date_col = df_clean.columns[4]
-    if amount_col is None and len(df_clean.columns) > 6:
-        amount_col = df_clean.columns[6]
-    
-    if date_col is None or amount_col is None:
-        return []
-    
-    for idx, row in df_clean.iterrows():
-        try:
-            if date_col not in row:
-                continue
-            date_val = row[date_col]
-            if pd.isna(date_val):
-                continue
-            date = parse_date(str(date_val))
-            if not date:
-                continue
-            
-            if amount_col not in row:
-                continue
-            amount = parse_amount(row[amount_col])
-            if amount == 0.0:
-                continue
-            
-            description = ''
-            if desc_col and desc_col in row and pd.notna(row[desc_col]):
-                description = str(row[desc_col])
-            
-            counterparty = ''
-            if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
-                counterparty = str(row[counterparty_col])
-            
-            if not description:
-                desc_parts = []
-                for col in df_clean.columns:
-                    if col not in [date_col, amount_col, counterparty_col]:
-                        val = row[col]
-                        if pd.notna(val) and str(val).strip():
-                            desc_parts.append(str(val))
-                if desc_parts:
-                    description = ' '.join(desc_parts)
-            
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': counterparty[:200] if counterparty else '',
-                'Наименование счета': account_name,
-                'Описание': description[:500]
-            })
-        except Exception as e:
-            continue
-    
-    return transactions
 
 # ==================== ПАРСЕР B1 ESTATE (UniCredit) ====================
 
@@ -366,6 +258,120 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
         desc_col = df_clean.columns[12]
     
     if amount_col is None or date_col is None:
+        return []
+    
+    for idx, row in df_clean.iterrows():
+        try:
+            if date_col not in row:
+                continue
+            date_val = row[date_col]
+            if pd.isna(date_val):
+                continue
+            date = parse_date(str(date_val))
+            if not date:
+                continue
+            
+            if amount_col not in row:
+                continue
+            amount = parse_amount(row[amount_col])
+            if amount == 0.0:
+                continue
+            
+            description = ''
+            if desc_col and desc_col in row and pd.notna(row[desc_col]):
+                description = str(row[desc_col])
+            
+            counterparty = ''
+            if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
+                counterparty = str(row[counterparty_col])
+            
+            if not description:
+                desc_parts = []
+                for col in df_clean.columns:
+                    if col not in [date_col, amount_col, counterparty_col]:
+                        val = row[col]
+                        if pd.notna(val) and str(val).strip():
+                            desc_parts.append(str(val))
+                if desc_parts:
+                    description = ' '.join(desc_parts)
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty[:200] if counterparty else '',
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+        except Exception as e:
+            continue
+    
+    return transactions
+
+# ==================== ПАРСЕР CSOB ====================
+
+def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    transactions = []
+    
+    # Ищем строку с заголовками (account number и account currency)
+    header_row = -1
+    for idx in range(min(50, len(df))):
+        row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+        if 'account number' in row_text and 'account currency' in row_text:
+            header_row = idx
+            break
+    
+    if header_row == -1:
+        return []
+    
+    # Получаем заголовки
+    headers = []
+    for val in df.iloc[header_row].values:
+        if pd.isna(val):
+            headers.append('')
+        else:
+            headers.append(str(val).strip())
+    
+    while headers and headers[-1] == '':
+        headers.pop()
+    
+    # Получаем данные (все строки после заголовков)
+    data_rows = []
+    for idx in range(header_row + 1, len(df)):
+        row = list(df.iloc[idx].values)
+        if all(pd.isna(x) or str(x).strip() == '' for x in row):
+            continue
+        if len(row) < len(headers):
+            row.extend([''] * (len(headers) - len(row)))
+        data_rows.append(row[:len(headers)])
+    
+    if not data_rows:
+        return []
+    
+    df_clean = pd.DataFrame(data_rows, columns=headers)
+    
+    # Находим нужные колонки
+    date_col = None
+    amount_col = None
+    desc_col = None
+    counterparty_col = None
+    
+    for col in df_clean.columns:
+        col_lower = str(col).lower()
+        if 'posting date' in col_lower:
+            date_col = col
+        elif 'payment amount' in col_lower:
+            amount_col = col
+        elif 'message to beneficiary' in col_lower or 'note' in col_lower:
+            desc_col = col
+        elif 'counterparty' in col_lower:
+            counterparty_col = col
+    
+    if date_col is None and len(df_clean.columns) > 4:
+        date_col = df_clean.columns[4]
+    if amount_col is None and len(df_clean.columns) > 6:
+        amount_col = df_clean.columns[6]
+    
+    if date_col is None or amount_col is None:
         return []
     
     for idx, row in df_clean.iterrows():
