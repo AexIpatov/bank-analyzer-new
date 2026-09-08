@@ -173,7 +173,6 @@ def format_amount(amount: float) -> str:
         integer_part = re.sub(r'(?<=\d)(?=(\d{3})+(?!\d))', ' ', integer_part)
         return f"{integer_part},{decimal_part}"
     return formatted
-
 # ==================== ПАРСЕР B1 ESTATE (UniCredit) ====================
 
 def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -294,7 +293,6 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
             continue
     
     return transactions
-
 # ==================== ПАРСЕР BLUOR ====================
 
 def parse_bluor(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -342,7 +340,6 @@ def parse_bluor(df: pd.DataFrame, account_name: str) -> List[Dict]:
             continue
     
     return transactions
-
 # ==================== ПАРСЕР REVOLUT ====================
 
 def parse_revolut(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -442,7 +439,6 @@ def parse_revolut(df: pd.DataFrame, account_name: str) -> List[Dict]:
             continue
     
     return transactions
-
 # ==================== ПАРСЕР MKB ====================
 
 def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -511,7 +507,12 @@ def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
             date_val = row[date_col]
             if pd.isna(date_val):
                 continue
-            date = parse_date(str(date_val))
+            
+            date_str = str(date_val).strip()
+            if date_str.endswith('.0'):
+                date_str = date_str[:-2]
+            
+            date = parse_date(date_str)
             if not date:
                 continue
             
@@ -550,7 +551,6 @@ def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
             continue
     
     return transactions
-
 # ==================== ПАРСЕР PAYSERA ====================
 
 def parse_paysera(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -662,49 +662,6 @@ def parse_paysera(df: pd.DataFrame, account_name: str) -> List[Dict]:
             continue
     
     return transactions
-
-# ==================== УНИВЕРСАЛЬНЫЙ ПАРСЕР ====================
-
-def parse_generic(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    transactions = []
-    
-    for idx, row in df.iterrows():
-        try:
-            date = None
-            amount = 0.0
-            description = ''
-            
-            for col in range(len(row)):
-                val = str(row.iloc[col]) if pd.notna(row.iloc[col]) else ''
-                if not val:
-                    continue
-                
-                parsed_date = parse_date(val)
-                if parsed_date and parsed_date != val:
-                    date = parsed_date
-                    continue
-                
-                parsed_amount = parse_amount(val)
-                if parsed_amount != 0.0:
-                    amount = parsed_amount
-                    continue
-                
-                if val and len(val) > 2:
-                    description += val + ' '
-            
-            if date and amount != 0.0:
-                transactions.append({
-                    'Дата': date,
-                    'Сумма': amount,
-                    'Контрагент': '',
-                    'Наименование счета': account_name,
-                    'Описание': description[:500]
-                })
-        except Exception as e:
-            continue
-    
-    return transactions
-
 # ==================== ПАРСЕР CSOB ====================
 
 def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -813,6 +770,48 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
+
+# ==================== УНИВЕРСАЛЬНЫЙ ПАРСЕР ====================
+
+def parse_generic(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    transactions = []
+    
+    for idx, row in df.iterrows():
+        try:
+            date = None
+            amount = 0.0
+            description = ''
+            
+            for col in range(len(row)):
+                val = str(row.iloc[col]) if pd.notna(row.iloc[col]) else ''
+                if not val:
+                    continue
+                
+                parsed_date = parse_date(val)
+                if parsed_date and parsed_date != val:
+                    date = parsed_date
+                    continue
+                
+                parsed_amount = parse_amount(val)
+                if parsed_amount != 0.0:
+                    amount = parsed_amount
+                    continue
+                
+                if val and len(val) > 2:
+                    description += val + ' '
+            
+            if date and amount != 0.0:
+                transactions.append({
+                    'Дата': date,
+                    'Сумма': amount,
+                    'Контрагент': '',
+                    'Наименование счета': account_name,
+                    'Описание': description[:500]
+                })
+        except Exception as e:
+            continue
+    
+    return transactions
 # ==================== ОСНОВНОЙ ПАРСЕР EXCEL ====================
 
 def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
@@ -909,6 +908,7 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
         except:
             pass
 
+
 # ==================== ПАРСЕР CSV ====================
 
 def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
@@ -942,6 +942,7 @@ def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
         except:
             pass
 
+
 # ==================== ГЛАВНАЯ ФУНКЦИЯ ====================
 
 def parse_file(file_content: bytes, filename: str) -> List[Dict]:
@@ -954,6 +955,7 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     else:
         st.warning(f"Неподдерживаемый формат файла: {filename}")
         return []
+
 
 # ==================== ИНТЕРФЕЙС ====================
 
@@ -1050,3 +1052,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
