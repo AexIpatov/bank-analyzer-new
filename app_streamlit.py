@@ -30,62 +30,29 @@ st.markdown("""
 
 st.markdown('<div class="main-header"><h1>🏦 Аналитик банковских выписок</h1><p>Поддержка CSV, XLSX, XLS форматов</p></div>', unsafe_allow_html=True)
 
-# ==================== СПРАВОЧНИК БАНКОВ ====================
-# Загружаем из файла Счета на 08.09.2026.xlsx
-ACCOUNT_REFERENCE = {
-    'B1_Estate_CZK_UC': {'bank': 'UniCredit', 'currency': 'CZK', 'type': 'unicredit_b1'},
-    'Garpiz UniCredit Bank CZK': {'bank': 'UniCredit', 'currency': 'CZK', 'type': 'unicredit'},
-    'Garpiz_Pernink_CZK_UC': {'bank': 'UniCredit', 'currency': 'CZK', 'type': 'unicredit'},
-    'Koruna UniCredit- CZK': {'bank': 'UniCredit', 'currency': 'CZK', 'type': 'unicredit'},
-    'TwoHills_Molly_Unicredit_CZK': {'bank': 'UniCredit', 'currency': 'CZK', 'type': 'unicredit'},
-    'AN14_Estate_EUR_Industra': {'bank': 'Industra', 'currency': 'EUR', 'type': 'industra'},
-    'Plavas1_Estate_EUR_Industra': {'bank': 'Industra', 'currency': 'EUR', 'type': 'industra'},
-    'KL59_Rev_NB_EUR_Industra': {'bank': 'Industra', 'currency': 'EUR', 'type': 'industra'},
-    'BSR_Estate_EUR_BluOr_2': {'bank': 'BluOr', 'currency': 'EUR', 'type': 'bluor'},
-    'BSR_Estate_EUR_BluOr_3': {'bank': 'BluOr', 'currency': 'EUR', 'type': 'bluor'},
-    'KL59_Rev_NB_EUR_BluOR': {'bank': 'BluOr', 'currency': 'EUR', 'type': 'bluor'},
-    'AN14_Estate_EUR_Revolut': {'bank': 'Revolut', 'currency': 'EUR', 'type': 'revolut'},
-    'NB_Rev_EUR_Revolut': {'bank': 'Revolut', 'currency': 'EUR', 'type': 'revolut'},
-    'Revolut_Plavas 1 SIA': {'bank': 'Revolut', 'currency': 'EUR', 'type': 'revolut'},
-    'Paysera Baltic Solutions EUR': {'bank': 'Paysera', 'currency': 'EUR', 'type': 'paysera'},
-    'Paysera Sveciy Namai Lithuania EUR': {'bank': 'Paysera', 'currency': 'EUR', 'type': 'paysera'},
-    'Paysera-BS PROPERTY, SIA': {'bank': 'Paysera', 'currency': 'EUR', 'type': 'paysera'},
-    'Paysera-BS RERUM, SIA': {'bank': 'Paysera', 'currency': 'EUR', 'type': 'paysera'},
-    'MASHREQ BANK-AED-NOMIQA': {'bank': 'Mashreq', 'currency': 'AED', 'type': 'mashreq'},
-    'WIO Business Bank': {'bank': 'WIO', 'currency': 'AED', 'type': 'wio'},
-    'Budapest EUR-MKB': {'bank': 'MKB', 'currency': 'EUR', 'type': 'mkb'},
-    'Budapest HUF-MKB': {'bank': 'MKB', 'currency': 'HUF', 'type': 'mkb'},
-    'BUNDA LLC-Pasha Bank - AED-дирхам': {'bank': 'Pasha', 'currency': 'AED', 'type': 'pasha'},
-    'BUNDA LLC-Pasha Bank-AZN': {'bank': 'Pasha', 'currency': 'AZN', 'type': 'pasha'},
-    'Kapital bank_Saida_AZN': {'bank': 'Kapital', 'currency': 'AZN', 'type': 'kapital'},
-    'Kapital bank_Saida_AZN (бизнес-счет)': {'bank': 'Kapital', 'currency': 'AZN', 'type': 'kapital'},
-    'DŽIBIK Main CSOB CZK': {'bank': 'CSOB', 'currency': 'CZK', 'type': 'csob'},
-    'JENISOV - HORSKA_CSOB_ CZK': {'bank': 'CSOB', 'currency': 'CZK', 'type': 'csob'},
-    'JENISOV - HORSKA S.R EUR': {'bank': 'CSOB', 'currency': 'EUR', 'type': 'csob'},
-    'RR_Strojka_CZK_CSOB': {'bank': 'CSOB', 'currency': 'CZK', 'type': 'csob'},
-    'RR_Strojka_EUR_CSOB': {'bank': 'CSOB', 'currency': 'EUR', 'type': 'csob'},
-    'Koruna_Strojka_CZK_CSOB': {'bank': 'CSOB', 'currency': 'CZK', 'type': 'csob'},
-    'Koruna_Strojka_EUR_CSOB': {'bank': 'CSOB', 'currency': 'EUR', 'type': 'csob'},
-    'Stalkin_ML2_CZK_FIO': {'bank': 'Fio', 'currency': 'CZK', 'type': 'fio'},
-    'Saida_N26': {'bank': 'N26', 'currency': 'EUR', 'type': 'n26'},
-    'Saida_Wise': {'bank': 'Wise', 'currency': 'EUR', 'type': 'wise'},
-    'Regina Alfa-bank_NOMIQA_RUB': {'bank': 'Alfa-Bank', 'currency': 'RUB', 'type': 'alfa'},
-    'Tinkoff RUB': {'bank': 'Tinkoff', 'currency': 'RUB', 'type': 'tinkoff'},
-    'JenHor_Unelma_CZK_CSAS': {'bank': 'CSAS', 'currency': 'CZK', 'type': 'csas'},
-    'RAK BANK Nomiqa клиенты': {'bank': 'RAK Bank', 'currency': 'AED', 'type': 'rak'},
-}
-
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
-def detect_account_type(filename: str) -> str:
-    """Определяет тип счета по имени файла"""
-    filename_lower = filename.lower()
-    
-    for key in ACCOUNT_REFERENCE.keys():
-        if key.lower() in filename_lower:
-            return ACCOUNT_REFERENCE[key]['type']
-    
-    return 'generic'
+def detect_file_encoding(file_path: str) -> str:
+    try:
+        with open(file_path, 'rb') as f:
+            raw_data = f.read(10000)
+        result = chardet.detect(raw_data)
+        return result['encoding'] if result['encoding'] else 'utf-8'
+    except:
+        return 'utf-8'
+
+def detect_csv_delimiter(file_path: str) -> str:
+    delimiters = [';', ',', '\t', '|']
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            first_line = f.readline()
+        counts = {}
+        for delim in delimiters:
+            counts[delim] = first_line.count(delim)
+        max_delim = max(counts, key=counts.get)
+        return max_delim if counts[max_delim] > 0 else ';'
+    except:
+        return ';'
 
 def clean_account_name(filename: str) -> str:
     name = os.path.splitext(filename)[0]
@@ -203,11 +170,19 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР B1 ESTATE (UniCredit B1) ====================
+# ==================== ПАРСЕР B1 ESTATE ====================
 
 def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    """Парсер для файла B1_Estate_CZK_UC"""
+    """Специальный парсер для B1_Estate_CZK_UC"""
     transactions = []
+    
+    st.info("🔍 Начинаем парсинг B1_Estate...")
+    
+    # Показываем первые 5 строк для отладки
+    st.write("📄 Первые 5 строк файла:")
+    for idx in range(min(5, len(df))):
+        row_text = ' '.join(str(v) for v in df.iloc[idx].values if pd.notna(v))
+        st.write(f"Строка {idx}: {row_text[:200]}...")
     
     # Ищем строку с "From Account" и "Amount"
     header_row = -1
@@ -215,33 +190,38 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
         if 'from account' in row_text and 'amount' in row_text:
             header_row = idx
+            st.info(f"✅ Найдена строка заголовков: {idx}")
             break
     
     if header_row == -1:
+        st.error("❌ Строка с 'From Account' не найдена!")
         return []
     
-    # Берем все строки начиная с header_row
-    df_data = df.iloc[header_row:].reset_index(drop=True)
-    
-    # Первая строка - заголовки
+    # Берем строку заголовков
     headers = []
-    for val in df_data.iloc[0].values:
+    for val in df.iloc[header_row].values:
         if pd.isna(val):
             headers.append('')
         else:
             headers.append(str(val).strip())
     
-    # Остальные строки - данные
+    st.write(f"📋 Заголовки: {headers[:10]}...")
+    
+    # Берем данные (начиная со следующей строки)
     data_rows = []
-    for idx in range(1, len(df_data)):
-        row = list(df_data.iloc[idx].values)
+    for idx in range(header_row + 1, len(df)):
+        row = list(df.iloc[idx].values)
         if len(row) < len(headers):
             row.extend([''] * (len(headers) - len(row)))
         data_rows.append(row[:len(headers)])
     
+    st.info(f"📊 Найдено строк данных: {len(data_rows)}")
+    
     if not data_rows:
+        st.error("❌ Нет данных после заголовков!")
         return []
     
+    # Создаем DataFrame с данными
     df_clean = pd.DataFrame(data_rows, columns=headers)
     
     # Находим колонки
@@ -254,21 +234,34 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
         col_lower = str(col).lower()
         if 'amount' in col_lower:
             amount_col = col
+            st.info(f"✅ Найдена колонка суммы: {col}")
         elif 'booking date' in col_lower:
             date_col = col
+            st.info(f"✅ Найдена колонка даты: {col}")
         elif 'transaction details' in col_lower:
             desc_col = col
+            st.info(f"✅ Найдена колонка описания: {col}")
         elif 'name' in col_lower and 'bank' not in col_lower:
             counterparty_col = col
+            st.info(f"✅ Найдена колонка контрагента: {col}")
     
+    # Если не нашли, берем по индексам
     if amount_col is None and len(df_clean.columns) > 1:
         amount_col = df_clean.columns[1]
+        st.warning(f"⚠️ Используем колонку {amount_col} как сумму")
     if date_col is None and len(df_clean.columns) > 3:
         date_col = df_clean.columns[3]
+        st.warning(f"⚠️ Используем колонку {date_col} как дату")
     
     if amount_col is None or date_col is None:
+        st.error("❌ Не найдены колонки даты или суммы!")
         return []
     
+    # Показываем данные
+    st.write("📊 Данные для обработки:")
+    st.dataframe(df_clean)
+    
+    # Парсим транзакции
     for idx, row in df_clean.iterrows():
         try:
             # Дата
@@ -284,7 +277,11 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
             # Сумма
             if amount_col not in row:
                 continue
-            amount = parse_amount(row[amount_col])
+            amount_val = row[amount_col]
+            if pd.isna(amount_val):
+                continue
+            amount = parse_amount(amount_val)
+            
             if amount == 0.0:
                 continue
             
@@ -316,15 +313,16 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
                 'Описание': description[:500]
             })
         except Exception as e:
+            st.warning(f"⚠️ Ошибка в строке {idx}: {str(e)}")
             continue
     
+    st.success(f"✅ Найдено транзакций: {len(transactions)}")
     return transactions
 
 # ==================== ОСНОВНОЙ ПАРСЕР EXCEL ====================
 
 def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
     account_name = clean_account_name(filename)
-    account_type = detect_account_type(filename)
     
     with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
         tmp.write(file_content)
@@ -338,14 +336,22 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             if df.empty:
                 continue
             
-            # Выбираем парсер по типу счета
-            if account_type == 'unicredit_b1':
-                transactions = parse_b1_estate(df, account_name)
-            else:
-                # Временный универсальный парсер
-                transactions = []
+            st.info(f"📄 Обработка листа: {sheet_name}")
             
-            all_transactions.extend(transactions)
+            # Проверяем на B1_Estate
+            is_b1 = False
+            for idx in range(min(5, len(df))):
+                row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+                if 'account title' in row_text and 'business open' in row_text:
+                    is_b1 = True
+                    break
+            
+            if is_b1:
+                st.info("🔍 Обнаружен формат B1_Estate")
+                transactions = parse_b1_estate(df, account_name)
+                all_transactions.extend(transactions)
+            else:
+                st.warning("⚠️ Неизвестный формат файла")
         
         return all_transactions
                 
@@ -380,7 +386,7 @@ def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
             on_bad_lines='skip'
         )
         
-        return []  # Временный возврат
+        return []
                 
     except Exception as e:
         st.error(f"Ошибка при парсинге CSV {filename}: {str(e)}")
