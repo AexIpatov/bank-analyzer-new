@@ -168,13 +168,6 @@ def parse_amount(amount_str) -> float:
             value = float(amount_str)
             return -abs(value) if is_negative else abs(value)
         except:
-            try:
-                cleaned = re.sub(r'[^\d]', '', amount_str)
-                if cleaned:
-                    value = float(cleaned) / 100
-                    return -abs(value) if is_negative else abs(value)
-            except:
-                pass
             return 0.0
 
 def format_amount(amount: float) -> str:
@@ -187,7 +180,7 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР CSOB (ПРЯМОЙ) ====================
+# ==================== ПАРСЕР CSOB ====================
 
 def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     transactions = []
@@ -267,11 +260,7 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
             
             if amount_col not in row:
                 continue
-            amount_val = row[amount_col]
-            if pd.isna(amount_val):
-                continue
-            
-            amount = parse_amount(amount_val)
+            amount = parse_amount(row[amount_col])
             if amount == 0.0:
                 continue
             
@@ -961,7 +950,8 @@ def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
     
     with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp:
         tmp.write(file_content)
-        tmp_path = tmp.name    
+        tmp_path = tmp.name
+    
     try:
         encoding = detect_file_encoding(tmp_path)
         delimiter = detect_csv_delimiter(tmp_path)
