@@ -186,26 +186,35 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if not date_str:
                 continue
             
-            # Пропускаем строки, которые явно не являются транзакциями
-            skip_keywords = [
-                'выписка по счету', 'направления переводов', 'сумма', 'получатель',
-                'информация получателю', 'bs rerum sia', 'рег.№', 'счет',
-                'дата предыдущей операции', 'начальный остаток', 'кредитовый оборот',
-                'дебетовый оборот', 'конечный остаток', 'период', 'подготовлено',
-                'точное совпадение', 'показывать только операции'
+            # Пропускаем строки с текстом (не даты)
+            skip_text = [
+                'выписка', 'направления', 'сумма', 'получатель',
+                'информация', 'bs rerum', 'рег', 'счет', 'период',
+                'подготовлено', 'точное', 'показывать', 'дата предыдущей',
+                'начальный остаток', 'кредитовый оборот', 'дебетовый оборот',
+                'конечный остаток', 'per-on', 'per-on::', 'кредитовый', 'дебетовый'
             ]
             
-            if any(kw in date_str.lower() for kw in skip_keywords):
+            date_lower = date_str.lower()
+            if any(kw in date_lower for kw in skip_text):
                 continue
             
-            # Проверяем, что дата имеет правильный формат (ДД.ММ.ГГГГ)
+            # Проверяем, что это дата в формате ДД.ММ.ГГГГ
             date_parts = date_str.split('.')
-            if len(date_parts) == 3 and len(date_parts[0]) == 2 and len(date_parts[1]) == 2 and len(date_parts[2]) == 4:
-                date = parse_date(date_str)
-                if not date:
+            if len(date_parts) == 3:
+                try:
+                    day = int(date_parts[0])
+                    month = int(date_parts[1])
+                    year = int(date_parts[2])
+                    if 1 <= day <= 31 and 1 <= month <= 12 and 1000 <= year <= 9999:
+                        # Это корректная дата
+                        date = f"{day:02d}-{month:02d}-{year}"
+                    else:
+                        continue
+                except:
                     continue
             else:
-                # Если это не дата, пропускаем
+                # Если это не дата в формате ДД.ММ.ГГГГ, пропускаем
                 continue
             
             # Описание (колонка 1)
