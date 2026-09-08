@@ -305,7 +305,7 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
-# ==================== ПАРСЕР CSOB (ИСПРАВЛЕННЫЙ) ====================
+# ==================== ПАРСЕР CSOB С ОТЛАДКОЙ ====================
 
 def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     transactions = []
@@ -372,51 +372,69 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     if date_col is None or amount_col is None:
         return []
     
-    # Парсим транзакции
+    # Парсим транзакции с отладкой
     for idx, row in df_clean.iterrows():
         try:
+            st.write(f"📌 Обработка строки {idx}")
+            
             # Дата
             if date_col not in row:
+                st.write(f"   ❌ date_col '{date_col}' not in row")
                 continue
             date_val = row[date_col]
+            st.write(f"   Дата: {date_val}")
             if pd.isna(date_val):
+                st.write("   ❌ date_val is NaN")
                 continue
             date = parse_date(str(date_val))
+            st.write(f"   Парсинг даты: {date}")
             if not date:
+                st.write("   ❌ date is empty")
                 continue
             
             # Сумма
             if amount_col not in row:
+                st.write(f"   ❌ amount_col '{amount_col}' not in row")
                 continue
             amount_val = row[amount_col]
+            st.write(f"   Сумма: {amount_val}")
             if pd.isna(amount_val):
+                st.write("   ❌ amount_val is NaN")
                 continue
             
             # Парсим сумму напрямую
             amount = 0.0
             try:
                 amount_str = str(amount_val).strip()
+                st.write(f"   amount_str: {amount_str}")
                 if amount_str:
                     amount = float(amount_str)
-            except:
+                    st.write(f"   amount: {amount}")
+            except Exception as e:
+                st.write(f"   ❌ Ошибка парсинга суммы: {e}")
                 try:
                     amount_str = str(amount_val).strip().replace(',', '.')
                     amount = float(amount_str)
-                except:
+                    st.write(f"   amount (с запятой): {amount}")
+                except Exception as e2:
+                    st.write(f"   ❌ Ошибка парсинга суммы (2): {e2}")
                     pass
             
             if amount == 0.0:
+                st.write("   ❌ amount == 0, пропускаем")
                 continue
             
             # Описание
             description = ''
             if desc_col and desc_col in row and pd.notna(row[desc_col]):
                 description = str(row[desc_col])
+                st.write(f"   Описание: {description[:50]}...")
             
             # Контрагент
             counterparty = ''
             if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
                 counterparty = str(row[counterparty_col])
+                st.write(f"   Контрагент: {counterparty[:50]}...")
             
             if not description:
                 desc_parts = []
@@ -427,6 +445,7 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
                             desc_parts.append(str(val))
                 if desc_parts:
                     description = ' '.join(desc_parts)
+                    st.write(f"   Описание (собранное): {description[:50]}...")
             
             transactions.append({
                 'Дата': date,
@@ -435,9 +454,12 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
                 'Наименование счета': account_name,
                 'Описание': description[:500]
             })
+            st.success(f"✅ Добавлена транзакция: {date} | {amount}")
         except Exception as e:
+            st.write(f"❌ Ошибка в строке {idx}: {str(e)}")
             continue
     
+    st.success(f"✅ Найдено транзакций: {len(transactions)}")
     return transactions
 
 # ==================== ПАРСЕР BLUOR ====================
