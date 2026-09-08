@@ -489,7 +489,7 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     header_row = -1
     for idx in range(min(20, len(df))):
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-        if 'account number' in row_text and 'account currency' in row_text and 'posting date' in row_text:
+        if 'account number' in row_text and 'account currency' in row_text:
             header_row = idx
             break
     
@@ -504,13 +504,16 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
         else:
             headers.append(str(val).strip())
     
-    # Очищаем заголовки от лишних пробелов
+    # Очищаем заголовки от лишних пробелов и пустых
     headers = [h.strip() for h in headers if h.strip()]
     
     # Создаем DataFrame с данными
     data_rows = []
     for idx in range(header_row + 1, len(df)):
         row = list(df.iloc[idx].values)
+        # Проверяем, что строка не пустая
+        if all(pd.isna(x) or str(x).strip() == '' for x in row):
+            continue
         # Обрезаем или дополняем строку до длины заголовков
         if len(row) > len(headers):
             row = row[:len(headers)]
@@ -528,6 +531,7 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     amount_col = None
     counterparty_col = None
     desc_col = None
+    trans_type_col = None
     
     for i, col in enumerate(headers):
         col_lower = str(col).lower()
@@ -537,9 +541,10 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
             amount_col = col
         elif 'counterparty' in col_lower:
             counterparty_col = col
-        elif 'message to beneficiary' in col_lower or 'message to payer' in col_lower:
-            if desc_col is None:
-                desc_col = col
+        elif 'message to beneficiary' in col_lower:
+            desc_col = col
+        elif 'transaction type' in col_lower:
+            trans_type_col = col
     
     # Если не нашли по названиям, ищем по позициям
     if date_col is None and len(headers) > 4:
@@ -548,12 +553,19 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
         amount_col = headers[6]  # payment amount
     if counterparty_col is None and len(headers) > 13:
         counterparty_col = headers[13]  # counterparty
+    if trans_type_col is None and len(headers) > 11:
+        trans_type_col = headers[11]  # transaction type
     
     if date_col is None or amount_col is None:
         return []
     
     for idx, row in df_clean.iterrows():
         try:
+            # Проверяем, что это строка с данными (не заголовок)
+            account_num = str(row.iloc[0]) if len(row) > 0 and pd.notna(row.iloc[0]) else ''
+            if not account_num or 'account number' in account_num.lower():
+                continue
+            
             if date_col not in row:
                 continue
             
@@ -581,6 +593,11 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
                 else:
                     counterparty = ''
             
+            # Получаем тип транзакции
+            trans_type = ''
+            if trans_type_col and trans_type_col in row and pd.notna(row[trans_type_col]):
+                trans_type = str(row[trans_type_col])
+            
             # Получаем описание
             description = ''
             if desc_col and desc_col in row and pd.notna(row[desc_col]):
@@ -590,16 +607,22 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if not description:
                 desc_parts = []
                 for col in headers:
-                    if col not in [date_col, amount_col, counterparty_col, 'account number', 'account currency', 'alias', 'account name']:
+                    if col not in [date_col, amount_col, counterparty_col, 
+                                   'account number', 'account currency', 'alias', 'account name',
+                                   'balance', 'exchange rate', 'BIC/SWIFT']:
                         val = row[col]
                         if pd.notna(val) and str(val).strip() and str(val).strip() != 'nan':
                             desc_parts.append(str(val).strip())
                 if desc_parts:
                     description = ' | '.join(desc_parts)
             
+            # Добавляем тип транзакции в описание
+            if trans_type and trans_type not in description:
+                description = f"{trans_type} | {description}" if description else trans_type
+            
             transactions.append({
                 'Дата': date,
-                'Сумма': amount,
+                'Сумма': amount,  # Сумма уже с правильным знаком из parse_amount
                 'Контрагент': counterparty,
                 'Наименование счета': account_name,
                 'Описание': description[:500]
@@ -952,10 +975,10 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             
             file_type = 'unknown'
             
-            # Проверка на CSOB (должна быть первой, так как файл CSOB специфичный)
+            # Проверка на CSOB
             for idx in range(min(20, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-                if 'account number' in row_text and 'account currency' in row_text and 'posting date' in row_text:
+                if 'account number' in row_text and 'account currency' in row_text:
                     file_type = 'csob'
                     break
             
