@@ -161,7 +161,6 @@ def parse_amount(amount_str) -> float:
         value = float(amount_str)
         return -abs(value) if is_negative else abs(value)
     except:
-        # Пробуем убрать разделители тысяч
         try:
             cleaned = amount_str.replace('.', '')
             if cleaned:
@@ -306,12 +305,12 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
-# ==================== ПАРСЕР CSOB ====================
+# ==================== ПАРСЕР CSOB (УПРОЩЕННЫЙ) ====================
 
 def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     transactions = []
     
-    # Ищем строку с заголовками (account number и account currency)
+    # Ищем строку с заголовками
     header_row = -1
     for idx in range(min(50, len(df))):
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
@@ -333,7 +332,7 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     while headers and headers[-1] == '':
         headers.pop()
     
-    # Получаем данные (все строки после заголовков)
+    # Получаем данные
     data_rows = []
     for idx in range(header_row + 1, len(df)):
         row = list(df.iloc[idx].values)
@@ -386,7 +385,23 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
             
             if amount_col not in row:
                 continue
-            amount = parse_amount(row[amount_col])
+            amount_val = row[amount_col]
+            if pd.isna(amount_val):
+                continue
+            
+            # Пробуем разные способы парсинга суммы
+            amount = 0.0
+            try:
+                amount = parse_amount(amount_val)
+            except:
+                pass
+            
+            if amount == 0.0:
+                try:
+                    amount = float(str(amount_val).replace(',', '.'))
+                except:
+                    pass
+            
             if amount == 0.0:
                 continue
             
