@@ -311,7 +311,6 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
 def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     transactions = []
     
-    # Ищем строку с заголовками (account number и account currency)
     header_row = -1
     for idx in range(min(50, len(df))):
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
@@ -322,7 +321,6 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     if header_row == -1:
         return []
     
-    # Получаем заголовки
     headers = []
     for val in df.iloc[header_row].values:
         if pd.isna(val):
@@ -333,7 +331,6 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     while headers and headers[-1] == '':
         headers.pop()
     
-    # Получаем данные (все строки после заголовков)
     data_rows = []
     for idx in range(header_row + 1, len(df)):
         row = list(df.iloc[idx].values)
@@ -348,7 +345,6 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     df_clean = pd.DataFrame(data_rows, columns=headers)
     
-    # Находим нужные колонки
     date_col = None
     amount_col = None
     desc_col = None
@@ -907,7 +903,7 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             if file_type == 'unknown' and 'bluor' in filename_lower:
                 file_type = 'bluor'
             
-            # Проверка на B1 Estate (UniCredit)
+            # Проверка на B1 Estate (UniCredit) - включая Koruna
             if file_type == 'unknown':
                 for idx in range(min(10, len(df))):
                     row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
