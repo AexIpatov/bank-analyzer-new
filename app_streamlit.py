@@ -169,13 +169,12 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """Парсер для выписок BluOr Bank (формат с Дебет/Кредит)"""
     transactions = []
     
-    # Ищем строки с транзакциями
     for idx, row in df.iterrows():
         try:
             if len(row) < 4:
                 continue
             
-            # Проверяем первую колонку - это должна быть дата
+            # Проверяем первую колонку - должна быть дата
             date_val = row.iloc[0] if len(row) > 0 else None
             if pd.isna(date_val):
                 continue
@@ -186,69 +185,63 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if not date_str:
                 continue
             
-            # Пропускаем строки с текстом (не даты)
-            skip_text = [
-                'выписка', 'направления', 'сумма', 'получатель',
-                'информация', 'bs rerum', 'рег', 'счет', 'период',
-                'подготовлено', 'точное', 'показывать', 'дата предыдущей',
-                'начальный остаток', 'кредитовый оборот', 'дебетовый оборот',
-                'конечный остаток', 'per-on', 'per-on::', 'кредитовый', 'дебетовый',
-                'дебет (d)', 'кредит (c)'
-            ]
-            
-            date_lower = date_str.lower()
-            if any(kw in date_lower for kw in skip_text):
-                continue
-            
             # Проверяем, что это дата в формате ДД.ММ.ГГГГ
             date_parts = date_str.split('.')
-            if len(date_parts) == 3:
-                try:
-                    day = int(date_parts[0])
-                    month = int(date_parts[1])
-                    year = int(date_parts[2])
-                    if 1 <= day <= 31 and 1 <= month <= 12 and 1000 <= year <= 9999:
-                        date = f"{day:02d}-{month:02d}-{year}"
-                    else:
-                        continue
-                except:
-                    continue
-            else:
+            if len(date_parts) != 3:
                 continue
             
-            # Описание (колонка 1)
-            desc_val = row.iloc[1] if len(row) > 1 else ''
-            description = str(desc_val) if pd.notna(desc_val) else ''
+            # Проверяем, что день, месяц и год - числа
+            try:
+                day = int(date_parts[0])
+                month = int(date_parts[1])
+                year = int(date_parts[2])
+                
+                if not (1 <= day <= 31 and 1 <= month <= 12 and 1000 <= year <= 9999):
+                    continue
+            except:
+                continue
             
+            # Формируем дату в нужном формате
+            date = f"{day:02d}-{month:02d}-{year}"
+            
+            # Проверяем вторую колонку - должно быть описание
+            desc_val = row.iloc[1] if len(row) > 1 else ''
+            if pd.isna(desc_val):
+                continue
+            
+            description = str(desc_val).strip()
             if not description:
                 continue
             
-            # Пропускаем строки с итогами в описании
+            # Пропускаем строки с итогами
             if any(kw in description.lower() for kw in [
                 'кредитовый оборот', 'дебетовый оборот', 'конечный остаток',
-                'начальный остаток', 'дебетовый оборот:', 'кредитовый оборот:'
+                'начальный остаток', 'кредитовый', 'дебетовый'
             ]):
                 continue
             
-            # Сумма (колонка 2 - Дебет или колонка 3 - Кредит)
+            # Пропускаем строки, где описание начинается с "Кредитовый" или "Дебетовый"
+            if description.lower().startswith('кредитовый') or description.lower().startswith('дебетовый'):
+                continue
+            
+            # Сумма: проверяем колонку 2 (Дебет) и колонку 3 (Кредит)
             amount = 0.0
             
             # Проверяем Дебет (колонка 2)
             if len(row) > 2:
                 debit_val = row.iloc[2]
-                if pd.notna(debit_val):
+                if pd.notna(debit_val) and str(debit_val).strip():
                     debit_str = str(debit_val).strip()
-                    # Пропускаем очень большие числа (остатки)
-                    if debit_str and '130' not in debit_str:
+                    # Пропускаем очень большие числа (начальные остатки)
+                    if debit_str and '130' not in debit_str and '523' not in debit_str:
                         amount = parse_amount(debit_str)
             
             # Если в дебете 0, проверяем Кредит (колонка 3)
             if amount == 0.0 and len(row) > 3:
                 credit_val = row.iloc[3]
-                if pd.notna(credit_val):
+                if pd.notna(credit_val) and str(credit_val).strip():
                     credit_str = str(credit_val).strip()
-                    # Пропускаем очень большие числа (остатки)
-                    if credit_str and '130' not in credit_str:
+                    if credit_str and '130' not in credit_str and '523' not in credit_str:
                         amount = parse_amount(credit_str)
             
             if amount == 0.0:
