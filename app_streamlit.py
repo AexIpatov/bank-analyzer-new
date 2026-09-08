@@ -119,7 +119,7 @@ def get_bank_name(filename: str) -> str:
     return 'Неизвестный банк'
 
 def parse_date(date_str: str) -> str:
-    """Парсинг даты из разных форматов"""
+    """Парсинг даты из разных форматов и возврат в формате ДД-ММ-ГГГГ"""
     if not date_str or pd.isna(date_str):
         return ''
     
@@ -139,7 +139,8 @@ def parse_date(date_str: str) -> str:
     
     for fmt in formats:
         try:
-            return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
+            date_obj = datetime.strptime(date_str, fmt)
+            return date_obj.strftime("%d-%m-%Y")
         except:
             continue
     
@@ -150,7 +151,18 @@ def parse_date(date_str: str) -> str:
             if len(year) == 2:
                 year = f"20{year}"
             try:
-                return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+                return f"{day.zfill(2)}-{month.zfill(2)}-{year}"
+            except:
+                pass
+    
+    if '/' in date_str:
+        parts = date_str.split('/')
+        if len(parts) == 3:
+            day, month, year = parts
+            if len(year) == 2:
+                year = f"20{year}"
+            try:
+                return f"{day.zfill(2)}-{month.zfill(2)}-{year}"
             except:
                 pass
     
@@ -189,6 +201,21 @@ def parse_amount(amount_str: str) -> float:
     except:
         return 0.0
 
+def format_amount(amount: float) -> str:
+    """Форматирует сумму с запятой как разделителем"""
+    if amount is None or pd.isna(amount):
+        return "0,00"
+    # Форматируем с точкой, затем заменяем на запятую
+    formatted = f"{amount:.2f}".replace('.', ',')
+    # Добавляем пробелы для тысяч (опционально)
+    # Разбиваем на целую и дробную часть
+    if ',' in formatted:
+        integer_part, decimal_part = formatted.split(',')
+        # Добавляем пробелы для тысяч
+        integer_part = re.sub(r'(?<=\d)(?=(\d{3})+(?!\d))', ' ', integer_part)
+        return f"{integer_part},{decimal_part}"
+    return formatted
+
 def find_header_row(df: pd.DataFrame) -> int:
     """Находит строку с заголовками в DataFrame"""
     header_keywords = [
@@ -217,7 +244,6 @@ def find_header_row(df: pd.DataFrame) -> int:
 def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
     """Парсинг CSV файлов"""
     account_name = clean_account_name(filename)
-    bank_name = get_bank_name(filename)
     
     with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp:
         tmp.write(file_content)
@@ -251,7 +277,7 @@ def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
             
             df = pd.DataFrame(data_rows, columns=headers)
         
-        return parse_generic_df(df, account_name, bank_name)
+        return parse_generic_df(df, account_name)
                 
     except Exception as e:
         st.error(f"Ошибка при парсинге CSV {filename}: {str(e)}")
@@ -266,7 +292,6 @@ def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
 def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
     """Парсинг Excel файлов"""
     account_name = clean_account_name(filename)
-    bank_name = get_bank_name(filename)
     
     with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
         tmp.write(file_content)
@@ -290,7 +315,7 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             
             df = pd.DataFrame(data_rows, columns=headers)
         
-        return parse_generic_df(df, account_name, bank_name)
+        return parse_generic_df(df, account_name)
                 
     except Exception as e:
         st.error(f"Ошибка при парсинге Excel {filename}: {str(e)}")
@@ -302,7 +327,7 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             pass
 
 # ==================== УНИВЕРСАЛЬНЫЙ ПАРСЕР ====================
-def parse_generic_df(df: pd.DataFrame, account_name: str, bank_name: str) -> List[Dict]:
+def parse_generic_df(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """Универсальный парсер для DataFrame"""
     transactions = []
     
@@ -370,8 +395,6 @@ def parse_generic_df(df: pd.DataFrame, account_name: str, bank_name: str) -> Lis
                 'Сумма': amount,
                 'Контрагент': counterparty[:200] if counterparty else '',
                 'Наименование счета': account_name,
-                'Наименование банка': bank_name,
-                'Направление': 'Расход' if amount < 0 else 'Доход',
                 'Описание': description[:500]
             })
         except Exception as e:
@@ -433,7 +456,11 @@ def main():
             status_text.text("✅ Обработка завершена!")
             
             if all_transactions:
+                # Создаем DataFrame
                 df = pd.DataFrame(all_transactions)
+                
+                # Форматируем суммы с запятой
+                df['Сумма'] = df['Сумма'].apply(format_amount)
                 
                 st.markdown("---")
                 col1, col2, col3 = st.columns(3)
@@ -441,11 +468,14 @@ def main():
                 with col1:
                     st.metric("📊 Всего операций", len(all_transactions))
                 with col2:
-                    доход = df[df['Сумма'] > 0]['Сумма'].sum()
-                    st.metric("📈 Доходы", f"{доход:,.2f}")
+                    # Для подсчета доходов нужно конвертировать обратно в числа
+                    numeric_amounts = pd.to_numeric(df['Сумма'].str.replace(',', '.').str.replace(' ', ''), errors='coerce')
+                    доход = numeric_amounts[numeric_amounts > 0].sum()
+                    st.metric("📈 Доходы", f"{доход:,.2f}".replace('.', ','))
                 with col3:
-                    расход = abs(df[df['Сумма'] < 0]['Сумма'].sum())
-                    st.metric("📉 Расходы", f"{расход:,.2f}")
+                    numeric_amounts = pd.to_numeric(df['Сумма'].str.replace(',', '.').str.replace(' ', ''), errors='coerce')
+                    расход = abs(numeric_amounts[numeric_amounts < 0].sum())
+                    st.metric("📉 Расходы", f"{расход:,.2f}".replace('.', ','))
                 
                 st.markdown("### 📋 Результат обработки")
                 st.dataframe(df, use_container_width=True, hide_index=True)
@@ -454,11 +484,17 @@ def main():
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df.to_excel(writer, sheet_name='Транзакции', index=False)
                     
-                    # Сводка по счетам
-                    bank_summary = df.groupby('Наименование счета').agg({
-                        'Сумма': ['count', 'sum']
+                    # Сводка по счетам (конвертируем обратно для подсчета)
+                    numeric_amounts = pd.to_numeric(df['Сумма'].str.replace(',', '.').str.replace(' ', ''), errors='coerce')
+                    df_temp = df.copy()
+                    df_temp['Сумма_число'] = numeric_amounts
+                    
+                    bank_summary = df_temp.groupby('Наименование счета').agg({
+                        'Сумма_число': ['count', 'sum']
                     }).round(2)
                     bank_summary.columns = ['Количество операций', 'Сумма']
+                    # Форматируем сумму в сводке
+                    bank_summary['Сумма'] = bank_summary['Сумма'].apply(lambda x: f"{x:,.2f}".replace('.', ','))
                     bank_summary.to_excel(writer, sheet_name='Сводка по счетам')
                 
                 output.seek(0)
