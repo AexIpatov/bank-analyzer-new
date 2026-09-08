@@ -76,6 +76,7 @@ def parse_date(date_str: str) -> str:
     if date_str.endswith('.0'):
         date_str = date_str[:-2]
     
+    # Если дата в формате 20260828
     if date_str.isdigit() and len(date_str) == 8:
         try:
             year = date_str[:4]
@@ -173,6 +174,7 @@ def format_amount(amount: float) -> str:
         integer_part = re.sub(r'(?<=\d)(?=(\d{3})+(?!\d))', ' ', integer_part)
         return f"{integer_part},{decimal_part}"
     return formatted
+
 # ==================== ПАРСЕР B1 ESTATE (UniCredit) ====================
 
 def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -293,6 +295,7 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
             continue
     
     return transactions
+
 # ==================== ПАРСЕР BLUOR ====================
 
 def parse_bluor(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -340,6 +343,7 @@ def parse_bluor(df: pd.DataFrame, account_name: str) -> List[Dict]:
             continue
     
     return transactions
+
 # ==================== ПАРСЕР REVOLUT ====================
 
 def parse_revolut(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -439,21 +443,33 @@ def parse_revolut(df: pd.DataFrame, account_name: str) -> List[Dict]:
             continue
     
     return transactions
-# ==================== ПАРСЕР MKB ====================
+
+# ==================== ПАРСЕР MKB (ИСПРАВЛЕННЫЙ) ====================
 
 def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    """Парсер для выписок MKB Bank (Венгрия)"""
     transactions = []
     
+    # Ищем строку с заголовками по всему файлу
     header_row = -1
-    for idx in range(min(30, len(df))):
+    for idx in range(min(50, len(df))):
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
         if 'sorszám' in row_text and 'értéknap' in row_text:
             header_row = idx
             break
     
     if header_row == -1:
+        # Пробуем найти по ключевым словам
+        for idx in range(min(50, len(df))):
+            row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+            if 'értéknap' in row_text and 'összeg' in row_text:
+                header_row = idx
+                break
+    
+    if header_row == -1:
         return []
     
+    # Получаем заголовки
     headers = []
     for val in df.iloc[header_row].values:
         if pd.isna(val):
@@ -461,12 +477,17 @@ def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
         else:
             headers.append(str(val).strip())
     
+    # Удаляем пустые заголовки в конце
     while headers and headers[-1] == '':
         headers.pop()
     
+    # Получаем данные (все строки после заголовков)
     data_rows = []
     for idx in range(header_row + 1, len(df)):
         row = list(df.iloc[idx].values)
+        # Проверяем, что строка не пустая
+        if all(pd.isna(x) or str(x).strip() == '' for x in row):
+            continue
         if len(row) < len(headers):
             row.extend([''] * (len(headers) - len(row)))
         data_rows.append(row[:len(headers)])
@@ -476,6 +497,7 @@ def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     df_clean = pd.DataFrame(data_rows, columns=headers)
     
+    # Находим нужные колонки
     date_col = None
     amount_col = None
     desc_col = None
@@ -492,6 +514,8 @@ def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
         elif 'kezdeményezett neve' in col_lower:
             counterparty_col = col
     
+    # Если не нашли, пробуем по индексам (из структуры файла)
+    # Sorszám(0) | Értéknap(1) | ... | Összeg(9) | Devizanem(10)
     if date_col is None and len(df_clean.columns) > 1:
         date_col = df_clean.columns[1]
     if amount_col is None and len(df_clean.columns) > 9:
@@ -502,6 +526,7 @@ def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     for idx, row in df_clean.iterrows():
         try:
+            # Дата
             if date_col not in row:
                 continue
             date_val = row[date_col]
@@ -509,23 +534,34 @@ def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
                 continue
             
             date_str = str(date_val).strip()
+            # Удаляем .0 в конце
             if date_str.endswith('.0'):
                 date_str = date_str[:-2]
+            # Если дата в формате 20260828
+            if date_str.isdigit() and len(date_str) == 8:
+                date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
             
             date = parse_date(date_str)
             if not date:
                 continue
             
+            # Сумма
             if amount_col not in row:
                 continue
-            amount = parse_amount(row[amount_col])
+            amount_val = row[amount_col]
+            if pd.isna(amount_val):
+                continue
+            
+            amount = parse_amount(amount_val)
             if amount == 0.0:
                 continue
             
+            # Описание
             description = ''
             if desc_col and desc_col in row and pd.notna(row[desc_col]):
                 description = str(row[desc_col])
             
+            # Контрагент
             counterparty = ''
             if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
                 counterparty = str(row[counterparty_col])
@@ -551,6 +587,7 @@ def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
             continue
     
     return transactions
+
 # ==================== ПАРСЕР PAYSERA ====================
 
 def parse_paysera(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -662,6 +699,7 @@ def parse_paysera(df: pd.DataFrame, account_name: str) -> List[Dict]:
             continue
     
     return transactions
+
 # ==================== ПАРСЕР CSOB ====================
 
 def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -770,7 +808,6 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
-
 # ==================== УНИВЕРСАЛЬНЫЙ ПАРСЕР ====================
 
 def parse_generic(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -812,6 +849,7 @@ def parse_generic(df: pd.DataFrame, account_name: str) -> List[Dict]:
             continue
     
     return transactions
+
 # ==================== ОСНОВНОЙ ПАРСЕР EXCEL ====================
 
 def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
@@ -833,7 +871,7 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             file_type = 'unknown'
             
             # Проверка на MKB
-            for idx in range(min(10, len(df))):
+            for idx in range(min(50, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
                 if 'sorszám' in row_text and 'értéknap' in row_text:
                     file_type = 'mkb'
@@ -908,7 +946,6 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
         except:
             pass
 
-
 # ==================== ПАРСЕР CSV ====================
 
 def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
@@ -942,7 +979,6 @@ def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
         except:
             pass
 
-
 # ==================== ГЛАВНАЯ ФУНКЦИЯ ====================
 
 def parse_file(file_content: bytes, filename: str) -> List[Dict]:
@@ -955,7 +991,6 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     else:
         st.warning(f"Неподдерживаемый формат файла: {filename}")
         return []
-
 
 # ==================== ИНТЕРФЕЙС ====================
 
@@ -1052,5 +1087,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
