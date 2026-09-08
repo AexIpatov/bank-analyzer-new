@@ -192,7 +192,8 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
                 'информация', 'bs rerum', 'рег', 'счет', 'период',
                 'подготовлено', 'точное', 'показывать', 'дата предыдущей',
                 'начальный остаток', 'кредитовый оборот', 'дебетовый оборот',
-                'конечный остаток', 'per-on', 'per-on::', 'кредитовый', 'дебетовый'
+                'конечный остаток', 'per-on', 'per-on::', 'кредитовый', 'дебетовый',
+                'дебет (d)', 'кредит (c)'
             ]
             
             date_lower = date_str.lower()
@@ -207,14 +208,12 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
                     month = int(date_parts[1])
                     year = int(date_parts[2])
                     if 1 <= day <= 31 and 1 <= month <= 12 and 1000 <= year <= 9999:
-                        # Это корректная дата
                         date = f"{day:02d}-{month:02d}-{year}"
                     else:
                         continue
                 except:
                     continue
             else:
-                # Если это не дата в формате ДД.ММ.ГГГГ, пропускаем
                 continue
             
             # Описание (колонка 1)
@@ -224,8 +223,11 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if not description:
                 continue
             
-            # Пропускаем строки с итогами
-            if any(kw in description.lower() for kw in ['кредитовый оборот', 'дебетовый оборот', 'конечный остаток']):
+            # Пропускаем строки с итогами в описании
+            if any(kw in description.lower() for kw in [
+                'кредитовый оборот', 'дебетовый оборот', 'конечный остаток',
+                'начальный остаток', 'дебетовый оборот:', 'кредитовый оборот:'
+            ]):
                 continue
             
             # Сумма (колонка 2 - Дебет или колонка 3 - Кредит)
@@ -234,14 +236,20 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             # Проверяем Дебет (колонка 2)
             if len(row) > 2:
                 debit_val = row.iloc[2]
-                if pd.notna(debit_val) and str(debit_val).strip():
-                    amount = parse_amount(debit_val)
+                if pd.notna(debit_val):
+                    debit_str = str(debit_val).strip()
+                    # Пропускаем очень большие числа (остатки)
+                    if debit_str and '130' not in debit_str:
+                        amount = parse_amount(debit_str)
             
             # Если в дебете 0, проверяем Кредит (колонка 3)
             if amount == 0.0 and len(row) > 3:
                 credit_val = row.iloc[3]
-                if pd.notna(credit_val) and str(credit_val).strip():
-                    amount = parse_amount(credit_val)
+                if pd.notna(credit_val):
+                    credit_str = str(credit_val).strip()
+                    # Пропускаем очень большие числа (остатки)
+                    if credit_str and '130' not in credit_str:
+                        amount = parse_amount(credit_str)
             
             if amount == 0.0:
                 continue
