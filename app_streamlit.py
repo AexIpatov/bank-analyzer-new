@@ -170,13 +170,11 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР B1 ESTATE ====================
+# ==================== ПАРСЕР B1 ESTATE (UniCredit) ====================
 
 def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    """Специальный парсер для B1_Estate_CZK_UC"""
     transactions = []
     
-    # Ищем строку с "From Account" и "Amount"
     header_row = -1
     for idx in range(len(df)):
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
@@ -187,7 +185,6 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
     if header_row == -1:
         return []
     
-    # Получаем заголовки
     headers_raw = []
     for val in df.iloc[header_row].values:
         if pd.isna(val):
@@ -195,7 +192,6 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
         else:
             headers_raw.append(str(val).strip())
     
-    # Обрабатываем дублирующиеся заголовки
     headers = []
     counter = {}
     for h in headers_raw:
@@ -209,7 +205,6 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
             counter[h] = 1
             headers.append(h)
     
-    # Получаем данные
     data_rows = []
     for idx in range(header_row + 1, len(df)):
         row = list(df.iloc[idx].values)
@@ -220,10 +215,8 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
     if not data_rows:
         return []
     
-    # Создаем DataFrame
     df_clean = pd.DataFrame(data_rows, columns=headers)
     
-    # Находим нужные колонки
     amount_col = None
     date_col = None
     desc_col = None
@@ -241,7 +234,6 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
         elif col_lower == 'name':
             counterparty_col = col
     
-    # Если не нашли, берем по индексам
     if amount_col is None and len(df_clean.columns) > 1:
         amount_col = df_clean.columns[1]
     if date_col is None and len(df_clean.columns) > 3:
@@ -252,10 +244,8 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
     if amount_col is None or date_col is None:
         return []
     
-    # Парсим транзакции
     for idx, row in df_clean.iterrows():
         try:
-            # Дата
             if date_col not in row:
                 continue
             date_val = row[date_col]
@@ -265,19 +255,16 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if not date:
                 continue
             
-            # Сумма
             if amount_col not in row:
                 continue
             amount = parse_amount(row[amount_col])
             if amount == 0.0:
                 continue
             
-            # Описание
             description = ''
             if desc_col and desc_col in row and pd.notna(row[desc_col]):
                 description = str(row[desc_col])
             
-            # Контрагент
             counterparty = ''
             if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
                 counterparty = str(row[counterparty_col])
@@ -304,10 +291,61 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
+# ==================== ПАРСЕР BLUOR ====================
+
+def parse_bluor(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    """Парсер для выписок BluOr Bank"""
+    transactions = []
+    
+    # Ищем строки с транзакциями (не начальные остатки)
+    for idx, row in df.iterrows():
+        try:
+            # Проверяем, что это строка с транзакцией (есть дата и сумма)
+            date_val = row.iloc[1] if len(row) > 1 else None
+            if pd.isna(date_val):
+                continue
+            
+            date = parse_date(str(date_val))
+            if not date:
+                continue
+            
+            # Проверяем, что это не строка с остатками
+            desc_val = row.iloc[3] if len(row) > 3 else ''
+            if pd.isna(desc_val):
+                continue
+            desc = str(desc_val).strip()
+            
+            # Пропускаем строки с остатками
+            if any(kw in desc.lower() for kw in ['начальный остаток', 'конечный остаток', 'дебет (d)', 'кредит (c)']):
+                continue
+            
+            # Ищем сумму (в колонке E или F)
+            amount = 0.0
+            if len(row) > 4:
+                amount = parse_amount(row.iloc[4])
+            if amount == 0.0 and len(row) > 5:
+                amount = parse_amount(row.iloc[5])
+            
+            if amount == 0.0:
+                continue
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': '',
+                'Наименование счета': account_name,
+                'Описание': desc[:500]
+            })
+        except Exception as e:
+            continue
+    
+    return transactions
+
 # ==================== ОСНОВНОЙ ПАРСЕР EXCEL ====================
 
 def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
     account_name = clean_account_name(filename)
+    filename_lower = filename.lower()
     
     with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
         tmp.write(file_content)
@@ -321,7 +359,13 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             if df.empty:
                 continue
             
-            # Проверяем, есть ли в файле строка с "From Account"
+            # Определяем тип файла по имени
+            if 'bluor' in filename_lower:
+                transactions = parse_bluor(df, account_name)
+                all_transactions.extend(transactions)
+                continue
+            
+            # Проверяем на B1 Estate (UniCredit)
             has_from_account = False
             for idx in range(min(10, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
@@ -332,9 +376,10 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             if has_from_account:
                 transactions = parse_b1_estate(df, account_name)
                 all_transactions.extend(transactions)
-            else:
-                # Универсальный парсер пока пустой
-                pass
+                continue
+            
+            # Если ничего не подошло - пропускаем
+            pass
         
         return all_transactions
                 
