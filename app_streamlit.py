@@ -185,21 +185,31 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
             break
     
     if header_row == -1:
-        st.error("❌ Строка с 'From Account' не найдена!")
         return []
     
-    # Берем строку заголовков
-    headers = []
+    # Получаем заголовки
+    headers_raw = []
     for val in df.iloc[header_row].values:
         if pd.isna(val):
-            headers.append('')
+            headers_raw.append('')
         else:
-            headers.append(str(val).strip())
+            headers_raw.append(str(val).strip())
     
-    # Очищаем заголовки от пробелов
-    headers = [h.strip() for h in headers]
+    # Обрабатываем дублирующиеся заголовки
+    headers = []
+    counter = {}
+    for h in headers_raw:
+        if h == '':
+            headers.append('col')
+            continue
+        if h in counter:
+            counter[h] += 1
+            headers.append(f"{h}_{counter[h]}")
+        else:
+            counter[h] = 1
+            headers.append(h)
     
-    # Берем данные (начиная со следующей строки)
+    # Получаем данные
     data_rows = []
     for idx in range(header_row + 1, len(df)):
         row = list(df.iloc[idx].values)
@@ -208,59 +218,43 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
         data_rows.append(row[:len(headers)])
     
     if not data_rows:
-        st.error("❌ Нет данных после заголовков!")
         return []
     
-    # Создаем DataFrame с данными
+    # Создаем DataFrame
     df_clean = pd.DataFrame(data_rows, columns=headers)
     
-    st.write("📊 Данные после обработки:")
-    st.dataframe(df_clean)
-    
-    # Находим колонки
+    # Находим нужные колонки
     amount_col = None
     date_col = None
     desc_col = None
     counterparty_col = None
     
     for col in df_clean.columns:
-        col_lower = str(col).lower().strip()
-        st.write(f"🔍 Проверяем колонку: '{col}' -> '{col_lower}'")
+        col_lower = str(col).lower()
         if col_lower == 'amount':
             amount_col = col
-            st.success(f"✅ Найдена колонка суммы: {col}")
         elif col_lower == 'booking date':
             date_col = col
-            st.success(f"✅ Найдена колонка даты: {col}")
         elif col_lower == 'transaction details':
-            desc_col = col
-            st.success(f"✅ Найдена колонка описания: {col}")
+            if desc_col is None:
+                desc_col = col
         elif col_lower == 'name':
             counterparty_col = col
-            st.success(f"✅ Найдена колонка контрагента: {col}")
     
     # Если не нашли, берем по индексам
     if amount_col is None and len(df_clean.columns) > 1:
         amount_col = df_clean.columns[1]
-        st.warning(f"⚠️ Используем колонку {amount_col} как сумму")
     if date_col is None and len(df_clean.columns) > 3:
         date_col = df_clean.columns[3]
-        st.warning(f"⚠️ Используем колонку {date_col} как дату")
     if desc_col is None and len(df_clean.columns) > 12:
         desc_col = df_clean.columns[12]
-        st.warning(f"⚠️ Используем колонку {desc_col} как описание")
     
     if amount_col is None or date_col is None:
-        st.error("❌ Не найдены колонки даты или суммы!")
         return []
     
     # Парсим транзакции
     for idx, row in df_clean.iterrows():
         try:
-            st.write(f"📌 Обработка строки {idx}:")
-            st.write(f"   Дата: {row[date_col] if date_col in row else 'нет'}")
-            st.write(f"   Сумма: {row[amount_col] if amount_col in row else 'нет'}")
-            
             # Дата
             if date_col not in row:
                 continue
@@ -275,7 +269,6 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if amount_col not in row:
                 continue
             amount = parse_amount(row[amount_col])
-            st.write(f"   Парсинг суммы: {amount}")
             if amount == 0.0:
                 continue
             
@@ -306,12 +299,9 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
                 'Наименование счета': account_name,
                 'Описание': description[:500]
             })
-            st.success(f"   ✅ Добавлена транзакция: {date} | {amount}")
         except Exception as e:
-            st.warning(f"⚠️ Ошибка в строке {idx}: {str(e)}")
             continue
     
-    st.success(f"✅ Найдено транзакций: {len(transactions)}")
     return transactions
 
 # ==================== ОСНОВНОЙ ПАРСЕР EXCEL ====================
@@ -331,8 +321,6 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             if df.empty:
                 continue
             
-            st.info(f"📄 Обработка листа: {sheet_name}")
-            
             # Проверяем, есть ли в файле строка с "From Account"
             has_from_account = False
             for idx in range(min(10, len(df))):
@@ -342,11 +330,11 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                     break
             
             if has_from_account:
-                st.info("🔍 Обнаружен формат UniCredit B1")
                 transactions = parse_b1_estate(df, account_name)
                 all_transactions.extend(transactions)
             else:
-                st.warning("⚠️ Неизвестный формат файла")
+                # Универсальный парсер пока пустой
+                pass
         
         return all_transactions
                 
