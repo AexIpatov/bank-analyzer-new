@@ -56,9 +56,7 @@ def detect_csv_delimiter(file_path: str) -> str:
 
 def clean_account_name(filename: str) -> str:
     name = os.path.splitext(filename)[0]
-    # Удаляем даты в формате ГГГГ-ММ-ДД
     name = re.sub(r'\d{4}-\d{2}-\d{2}', '', name)
-    # Удаляем IBAN, если есть
     name = re.sub(r'LV\d{2}[A-Z]{4}\d{13,}', '', name)
     name = re.sub(r'[_\-]', ' ', name).strip()
     name = re.sub(r'\s+', ' ', name)
@@ -69,7 +67,6 @@ def parse_date(date_str: str) -> str:
         return ''
     date_str = str(date_str).strip()
     
-    # Если есть пробел - берем первую часть
     if ' ' in date_str:
         date_str = date_str.split(' ')[0]
     if 'T' in date_str:
@@ -144,14 +141,11 @@ def parse_amount(amount_str) -> float:
     
     amount_str = str(amount_str).strip()
     
-    # Пустые значения
     if amount_str in ['', 'nan', '-', 'None', 'null', 'NaN', 'N/A', 'n/a']:
         return 0.0
     
-    # Убираем пробелы
     amount_str = amount_str.replace(' ', '').replace('\xa0', '')
     
-    # Обработка скобок для отрицательных чисел
     is_negative = False
     if amount_str.startswith('-'):
         is_negative = True
@@ -160,28 +154,22 @@ def parse_amount(amount_str) -> float:
         is_negative = True
         amount_str = amount_str[1:-1]
     
-    # Убираем валюту
     amount_str = re.sub(r'\s*[A-Z]{3}\s*$', '', amount_str)
     amount_str = re.sub(r'^\s*[A-Z]{3}\s*', '', amount_str)
     
-    # Заменяем запятую на точку (европейский формат)
-    # Если есть и запятая и точка, определяем разделитель
+    # Обработка европейского формата чисел
     if ',' in amount_str and '.' in amount_str:
-        # Если точка перед запятой - это тысячи, запятая - десятичный разделитель
         if amount_str.rfind('.') < amount_str.rfind(','):
             amount_str = amount_str.replace('.', '').replace(',', '.')
         else:
             amount_str = amount_str.replace(',', '')
     elif ',' in amount_str:
-        # Проверяем, является ли запятая десятичным разделителем
-        # Если после запятой ровно 2 цифры и это не в конце, то это десятичный разделитель
         parts = amount_str.split(',')
         if len(parts) == 2 and len(parts[1]) == 2:
             amount_str = amount_str.replace(',', '.')
         else:
             amount_str = amount_str.replace(',', '')
     
-    # Убираем все кроме цифр, точки и минуса
     amount_str = re.sub(r'[^\d.\-]', '', amount_str)
     
     if not amount_str or amount_str == '.':
@@ -203,30 +191,24 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР BLUOR EXCEL (ИСПРАВЛЕННЫЙ) ====================
+# ==================== ПАРСЕР BLUOR EXCEL ====================
 
 def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    """
-    Парсер для выписок BluOr Bank.
-    Формат: Дата | Описание | Дебет (отрицательные) | Кредит (положительные)
-    """
     transactions = []
     
+    # Ищем строки с транзакциями (дата в формате ДД.ММ.ГГГГ)
     for idx, row in df.iterrows():
         try:
             if len(row) < 4:
                 continue
             
-            # Первая колонка - дата
             val0 = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ''
             if not val0:
                 continue
             
-            # Проверяем формат даты ДД.ММ.ГГГГ
             if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', val0):
                 continue
             
-            # Проверяем, что дата корректна
             try:
                 day, month, year = map(int, val0.split('.'))
                 if not (1 <= day <= 31 and 1 <= month <= 12 and 1900 <= year <= 2100):
@@ -236,27 +218,22 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             
             date = f"{day:02d}-{month:02d}-{year}"
             
-            # Вторая колонка - описание
             description = str(row.iloc[1]) if pd.notna(row.iloc[1]) else ''
             if not description:
                 continue
             
-            # Третья колонка - Дебет (отрицательные суммы, с минусом)
             amount = 0.0
             if len(row) > 2 and pd.notna(row.iloc[2]):
                 val2 = str(row.iloc[2]).strip()
                 if val2 and val2 not in ['0', '0.0', '0,00']:
                     amount = parse_amount(val2)
-                    # Дебет - это расход, должен быть отрицательным
                     if amount > 0:
                         amount = -amount
             
-            # Если в дебете 0, проверяем Кредит (положительные суммы)
             if amount == 0.0 and len(row) > 3 and pd.notna(row.iloc[3]):
                 val3 = str(row.iloc[3]).strip()
                 if val3 and val3 not in ['0', '0.0', '0,00']:
                     amount = parse_amount(val3)
-                    # Кредит - это доход, должен быть положительным
                     if amount < 0:
                         amount = abs(amount)
             
@@ -821,129 +798,87 @@ def parse_paysera(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
-# ==================== ПАРСЕР MKB ====================
+# ==================== ПАРСЕР MKB (ИСПРАВЛЕННЫЙ) ====================
 
 def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    """
+    Парсер для выписок MKB Bank.
+    Формат: Sorszám | Értéknap | Tranzakció típusa | ... | Összeg | ...
+    """
     transactions = []
     
-    header_row = -1
-    for idx in range(min(50, len(df))):
-        row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-        if 'sorszám' in row_text and 'értéknap' in row_text:
-            header_row = idx
+    # Ищем строку с данными (не заголовки)
+    # В MKB файле данные начинаются со строк, где есть число в первой колонке
+    start_row = -1
+    for idx in range(min(20, len(df))):
+        val0 = str(df.iloc[idx, 0]) if pd.notna(df.iloc[idx, 0]) else ''
+        # Проверяем, что это номер строки (число)
+        if val0 and re.match(r'^\d+\.?$', val0.strip()):
+            start_row = idx
             break
     
-    if header_row == -1:
+    if start_row == -1:
         return []
     
-    headers_raw = []
-    for val in df.iloc[header_row].values:
-        if pd.isna(val):
-            headers_raw.append('')
-        else:
-            headers_raw.append(str(val).strip())
-    
-    while headers_raw and headers_raw[-1] == '':
-        headers_raw.pop()
-    
-    headers = []
-    counter = {}
-    for h in headers_raw:
-        if h == '':
-            headers.append('col')
-            continue
-        if h in counter:
-            counter[h] += 1
-            headers.append(f"{h}_{counter[h]}")
-        else:
-            counter[h] = 1
-            headers.append(h)
-    
-    data_rows = []
-    for idx in range(header_row + 1, len(df)):
-        row = list(df.iloc[idx].values)
-        if all(pd.isna(x) or str(x).strip() == '' for x in row):
-            continue
-        if len(row) < len(headers):
-            row.extend([''] * (len(headers) - len(row)))
-        data_rows.append(row[:len(headers)])
-    
-    if not data_rows:
-        return []
-    
-    df_clean = pd.DataFrame(data_rows, columns=headers)
-    
-    date_col = None
-    amount_col = None
-    desc_col = None
-    counterparty_col = None
-    
-    for col in df_clean.columns:
-        col_lower = str(col).lower()
-        if 'értéknap' in col_lower:
-            date_col = col
-        elif 'összeg' in col_lower:
-            amount_col = col
-        elif 'közlemény' in col_lower:
-            desc_col = col
-        elif 'kezdeményezett neve' in col_lower:
-            counterparty_col = col
-    
-    if date_col is None and len(df_clean.columns) > 1:
-        date_col = df_clean.columns[1]
-    if amount_col is None and len(df_clean.columns) > 9:
-        amount_col = df_clean.columns[9]
-    
-    if date_col is None or amount_col is None:
-        return []
-    
-    for idx, row in df_clean.iterrows():
+    # Проходим по всем строкам, начиная с найденной
+    for idx in range(start_row, len(df)):
         try:
-            if date_col not in row:
+            row = df.iloc[idx]
+            if len(row) < 10:
                 continue
-            date_val = row[date_col]
-            if pd.isna(date_val):
+            
+            # Sorszám - первая колонка
+            sorszam = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ''
+            if not sorszam or not re.match(r'^\d+\.?$', sorszam.strip()):
                 continue
-            date_str = str(date_val).strip()
-            if date_str.endswith('.0'):
-                date_str = date_str[:-2]
-            if date_str.isdigit() and len(date_str) == 8:
-                date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-            date = parse_date(date_str)
+            
+            # Értéknap - вторая колонка (индекс 1)
+            date_val = row.iloc[1] if pd.notna(row.iloc[1]) else ''
+            if not date_val:
+                continue
+            
+            date = parse_date(str(date_val))
             if not date:
                 continue
             
-            if amount_col not in row:
+            # Összeg - десятая колонка (индекс 9)
+            amount_val = row.iloc[9] if len(row) > 9 and pd.notna(row.iloc[9]) else ''
+            if not amount_val:
                 continue
-            amount = parse_amount(row[amount_col])
+            
+            amount = parse_amount(amount_val)
             if amount == 0.0:
                 continue
             
-            description = ''
-            if desc_col and desc_col in row and pd.notna(row[desc_col]):
-                description = str(row[desc_col])
+            # Tranzakció típusa - третья колонка (индекс 2)
+            trans_type = str(row.iloc[2]) if len(row) > 2 and pd.notna(row.iloc[2]) else ''
             
-            counterparty = ''
-            if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
-                counterparty = str(row[counterparty_col])
+            # Kezdeményezett neve - пятая колонка (индекс 4)
+            counterparty = str(row.iloc[4]) if len(row) > 4 and pd.notna(row.iloc[4]) else ''
+            if counterparty and counterparty != 'N/A' and counterparty != 'nan':
+                counterparty = counterparty[:200]
+            else:
+                counterparty = ''
             
-            if not description:
-                desc_parts = []
-                for col in df_clean.columns:
-                    if col not in [date_col, amount_col, counterparty_col]:
-                        val = row[col]
-                        if pd.notna(val) and str(val).strip():
-                            desc_parts.append(str(val))
-                if desc_parts:
-                    description = ' '.join(desc_parts)
+            # Közlemény - двенадцатая колонка (индекс 11)
+            description = str(row.iloc[11]) if len(row) > 11 and pd.notna(row.iloc[11]) else ''
+            
+            # Если нет описания, используем тип транзакции
+            if not description and trans_type:
+                description = trans_type
+            
+            # Формируем полное описание
+            full_description = f"{trans_type} | {counterparty} | {description}" if counterparty else f"{trans_type} | {description}"
+            full_description = full_description[:500]
             
             transactions.append({
                 'Дата': date,
                 'Сумма': amount,
-                'Контрагент': counterparty[:200] if counterparty else '',
+                'Контрагент': counterparty,
                 'Наименование счета': account_name,
-                'Описание': description[:500]
+                'Описание': full_description
             })
+            
         except Exception as e:
             continue
     
@@ -1010,17 +945,30 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             
             file_type = 'unknown'
             
-            # Проверка на BluOr (счет с LV, "Выписка по счету")
+            # Проверка на MKB (должна быть первой, так как файл MKB специфичный)
+            # Ищем строки с "Számlaszám" или "Sorszám"
             for idx in range(min(20, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-                if 'выписка по счету' in row_text or ('счет' in row_text and 'lv' in row_text):
-                    # Проверяем, что есть колонки с датами
+                if 'számlaszám' in row_text or 'sorszám' in row_text:
+                    # Проверяем, есть ли колонка с суммой
                     for check_idx in range(min(20, len(df))):
-                        check_row = ' '.join(str(v) for v in df.iloc[check_idx].values if pd.notna(v))
-                        if re.search(r'\d{2}\.\d{2}\.\d{4}', check_row):
-                            file_type = 'bluor_excel'
+                        check_row = df.iloc[check_idx]
+                        for col in range(min(15, len(check_row))):
+                            val = str(check_row.iloc[col]) if pd.notna(check_row.iloc[col]) else ''
+                            if val and re.search(r'-?\d+\.?\d*', val) and len(val) > 3:
+                                file_type = 'mkb'
+                                break
+                        if file_type == 'mkb':
                             break
-                    if file_type == 'bluor_excel':
+                    if file_type == 'mkb':
+                        break
+            
+            # Проверка на BluOr
+            if file_type == 'unknown':
+                for idx in range(min(20, len(df))):
+                    row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+                    if 'выписка по счету' in row_text:
+                        file_type = 'bluor_excel'
                         break
             
             # Проверка на FIO
@@ -1039,14 +987,6 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                         file_type = 'csob'
                         break
             
-            # Проверка на MKB
-            if file_type == 'unknown':
-                for idx in range(min(50, len(df))):
-                    row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-                    if 'sorszám' in row_text and 'értéknap' in row_text:
-                        file_type = 'mkb'
-                        break
-            
             # Проверка на Paysera
             if file_type == 'unknown':
                 for idx in range(min(10, len(df))):
@@ -1063,7 +1003,7 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                         file_type = 'revolut'
                         break
             
-            # Проверка на B1 Estate (UniCredit)
+            # Проверка на B1 Estate
             if file_type == 'unknown':
                 for idx in range(min(10, len(df))):
                     row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
@@ -1195,10 +1135,7 @@ def main():
             if all_transactions:
                 df = pd.DataFrame(all_transactions)
                 
-                # Сохраняем числовые значения отдельно
                 df['Сумма_число'] = df['Сумма']
-                
-                # Форматируем для отображения
                 df['Сумма'] = df['Сумма'].apply(format_amount)
                 
                 st.markdown("---")
