@@ -173,143 +173,6 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР MKB ====================
-
-def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    """Парсер для выписок MKB Bank (Венгрия)"""
-    transactions = []
-    
-    # Ищем строку с заголовками
-    header_row = -1
-    for idx in range(min(50, len(df))):
-        row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-        if 'sorszám' in row_text and 'értéknap' in row_text:
-            header_row = idx
-            break
-    
-    if header_row == -1:
-        return []
-    
-    # Получаем заголовки
-    headers_raw = []
-    for val in df.iloc[header_row].values:
-        if pd.isna(val):
-            headers_raw.append('')
-        else:
-            headers_raw.append(str(val).strip())
-    
-    # Удаляем пустые заголовки в конце
-    while headers_raw and headers_raw[-1] == '':
-        headers_raw.pop()
-    
-    # Делаем заголовки уникальными
-    headers = []
-    counter = {}
-    for h in headers_raw:
-        if h == '':
-            headers.append('col')
-            continue
-        if h in counter:
-            counter[h] += 1
-            headers.append(f"{h}_{counter[h]}")
-        else:
-            counter[h] = 1
-            headers.append(h)
-    
-    # Получаем данные
-    data_rows = []
-    for idx in range(header_row + 1, len(df)):
-        row = list(df.iloc[idx].values)
-        if all(pd.isna(x) or str(x).strip() == '' for x in row):
-            continue
-        if len(row) < len(headers):
-            row.extend([''] * (len(headers) - len(row)))
-        data_rows.append(row[:len(headers)])
-    
-    if not data_rows:
-        return []
-    
-    df_clean = pd.DataFrame(data_rows, columns=headers)
-    
-    # Находим нужные колонки
-    date_col = None
-    amount_col = None
-    desc_col = None
-    counterparty_col = None
-    
-    for col in df_clean.columns:
-        col_lower = str(col).lower()
-        if 'értéknap' in col_lower:
-            date_col = col
-        elif 'összeg' in col_lower:
-            amount_col = col
-        elif 'közlemény' in col_lower:
-            desc_col = col
-        elif 'kezdeményezett neve' in col_lower:
-            counterparty_col = col
-    
-    if date_col is None and len(df_clean.columns) > 1:
-        date_col = df_clean.columns[1]
-    if amount_col is None and len(df_clean.columns) > 9:
-        amount_col = df_clean.columns[9]
-    
-    if date_col is None or amount_col is None:
-        return []
-    
-    for idx, row in df_clean.iterrows():
-        try:
-            if date_col not in row:
-                continue
-            date_val = row[date_col]
-            if pd.isna(date_val):
-                continue
-            
-            date_str = str(date_val).strip()
-            if date_str.endswith('.0'):
-                date_str = date_str[:-2]
-            if date_str.isdigit() and len(date_str) == 8:
-                date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-            
-            date = parse_date(date_str)
-            if not date:
-                continue
-            
-            if amount_col not in row:
-                continue
-            amount = parse_amount(row[amount_col])
-            if amount == 0.0:
-                continue
-            
-            description = ''
-            if desc_col and desc_col in row and pd.notna(row[desc_col]):
-                description = str(row[desc_col])
-            
-            counterparty = ''
-            if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
-                counterparty = str(row[counterparty_col])
-            
-            if not description:
-                desc_parts = []
-                for col in df_clean.columns:
-                    if col not in [date_col, amount_col, counterparty_col]:
-                        val = row[col]
-                        if pd.notna(val) and str(val).strip():
-                            desc_parts.append(str(val))
-                if desc_parts:
-                    description = ' '.join(desc_parts)
-            
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': counterparty[:200] if counterparty else '',
-                'Наименование счета': account_name,
-                'Описание': description[:500]
-            })
-        except Exception as e:
-            continue
-    
-    return transactions
-
 # ==================== ПАРСЕР B1 ESTATE (UniCredit) ====================
 
 def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -799,6 +662,136 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
+# ==================== ПАРСЕР MKB ====================
+
+def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    transactions = []
+    
+    header_row = -1
+    for idx in range(min(50, len(df))):
+        row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+        if 'sorszám' in row_text and 'értéknap' in row_text:
+            header_row = idx
+            break
+    
+    if header_row == -1:
+        return []
+    
+    headers_raw = []
+    for val in df.iloc[header_row].values:
+        if pd.isna(val):
+            headers_raw.append('')
+        else:
+            headers_raw.append(str(val).strip())
+    
+    while headers_raw and headers_raw[-1] == '':
+        headers_raw.pop()
+    
+    headers = []
+    counter = {}
+    for h in headers_raw:
+        if h == '':
+            headers.append('col')
+            continue
+        if h in counter:
+            counter[h] += 1
+            headers.append(f"{h}_{counter[h]}")
+        else:
+            counter[h] = 1
+            headers.append(h)
+    
+    data_rows = []
+    for idx in range(header_row + 1, len(df)):
+        row = list(df.iloc[idx].values)
+        if all(pd.isna(x) or str(x).strip() == '' for x in row):
+            continue
+        if len(row) < len(headers):
+            row.extend([''] * (len(headers) - len(row)))
+        data_rows.append(row[:len(headers)])
+    
+    if not data_rows:
+        return []
+    
+    df_clean = pd.DataFrame(data_rows, columns=headers)
+    
+    date_col = None
+    amount_col = None
+    desc_col = None
+    counterparty_col = None
+    
+    for col in df_clean.columns:
+        col_lower = str(col).lower()
+        if 'értéknap' in col_lower:
+            date_col = col
+        elif 'összeg' in col_lower:
+            amount_col = col
+        elif 'közlemény' in col_lower:
+            desc_col = col
+        elif 'kezdeményezett neve' in col_lower:
+            counterparty_col = col
+    
+    if date_col is None and len(df_clean.columns) > 1:
+        date_col = df_clean.columns[1]
+    if amount_col is None and len(df_clean.columns) > 9:
+        amount_col = df_clean.columns[9]
+    
+    if date_col is None or amount_col is None:
+        return []
+    
+    for idx, row in df_clean.iterrows():
+        try:
+            if date_col not in row:
+                continue
+            date_val = row[date_col]
+            if pd.isna(date_val):
+                continue
+            
+            date_str = str(date_val).strip()
+            if date_str.endswith('.0'):
+                date_str = date_str[:-2]
+            if date_str.isdigit() and len(date_str) == 8:
+                date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+            
+            date = parse_date(date_str)
+            if not date:
+                continue
+            
+            if amount_col not in row:
+                continue
+            amount = parse_amount(row[amount_col])
+            if amount == 0.0:
+                continue
+            
+            description = ''
+            if desc_col and desc_col in row and pd.notna(row[desc_col]):
+                description = str(row[desc_col])
+            
+            counterparty = ''
+            if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
+                counterparty = str(row[counterparty_col])
+            
+            if not description:
+                desc_parts = []
+                for col in df_clean.columns:
+                    if col not in [date_col, amount_col, counterparty_col]:
+                        val = row[col]
+                        if pd.notna(val) and str(val).strip():
+                            desc_parts.append(str(val))
+                if desc_parts:
+                    description = ' '.join(desc_parts)
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty[:200] if counterparty else '',
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+        except Exception as e:
+            continue
+    
+    return transactions
+
 # ==================== УНИВЕРСАЛЬНЫЙ ПАРСЕР ====================
 
 def parse_generic(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -896,8 +889,16 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             if file_type == 'unknown' and 'bluor' in filename_lower:
                 file_type = 'bluor'
             
-            # Проверка на B1 Estate
+            # Проверка на B1 Estate (UniCredit)
             if file_type == 'unknown':
+                for idx in range(min(10, len(df))):
+                    row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+                    if 'from account' in row_text:
+                        file_type = 'b1_estate'
+                        break
+            
+            # Проверка на Garpiz (UniCredit) - тот же формат
+            if file_type == 'unknown' and 'garpiz' in filename_lower:
                 for idx in range(min(10, len(df))):
                     row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
                     if 'from account' in row_text:
