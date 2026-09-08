@@ -190,7 +190,10 @@ def find_header_row(df: pd.DataFrame) -> int:
             if any(kw in row_text for kw in ['дебет', 'debit', 'кредит', 'credit']):
                 return idx
     return -1
-    def parse_csob_industra(df: pd.DataFrame, account_name: str) -> List[Dict]:
+
+# ==================== ПАРСЕР CSOB/INDUSTRA ====================
+
+def parse_csob_industra(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """Специальный парсер для выписок CSOB/Industra с колонками Дебет(D) и Кредит(C)"""
     transactions = []
     
@@ -334,7 +337,10 @@ def find_header_row(df: pd.DataFrame) -> int:
             continue
     
     return transactions
-    def parse_generic_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
+
+# ==================== УНИВЕРСАЛЬНЫЙ ПАРСЕР ====================
+
+def parse_generic_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """Универсальный парсер для любых выписок"""
     transactions = []
     
@@ -426,6 +432,8 @@ def find_header_row(df: pd.DataFrame) -> int:
     
     return transactions
 
+# ==================== ПАРСЕР EXCEL ====================
+
 def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
     """Парсинг Excel файлов"""
     account_name = clean_account_name(filename)
@@ -467,6 +475,8 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             os.unlink(tmp_path)
         except:
             pass
+
+# ==================== ПАРСЕР CSV ====================
 
 def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
     """Парсинг CSV файлов"""
@@ -511,6 +521,8 @@ def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
         except:
             pass
 
+# ==================== ГЛАВНАЯ ФУНКЦИЯ ====================
+
 def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     """Основная функция парсинга файла"""
     ext = os.path.splitext(filename)[1].lower()
@@ -522,7 +534,10 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     else:
         st.warning(f"Неподдерживаемый формат файла: {filename}")
         return []
-        def main():
+
+# ==================== ИНТЕРФЕЙС ====================
+
+def main():
     st.markdown("### 📂 Загрузите банковские выписки")
     st.markdown("Поддерживаются форматы: **CSV, XLSX, XLS**")
     
