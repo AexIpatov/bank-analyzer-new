@@ -444,13 +444,13 @@ def parse_revolut(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
-# ==================== ПАРСЕР MKB (ИСПРАВЛЕННЫЙ) ====================
+# ==================== ПАРСЕР MKB (ОКОНЧАТЕЛЬНО ИСПРАВЛЕННЫЙ) ====================
 
 def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """Парсер для выписок MKB Bank (Венгрия)"""
     transactions = []
     
-    # Ищем строку с заголовками по всему файлу
+    # Ищем строку с заголовками (без учета регистра)
     header_row = -1
     for idx in range(min(50, len(df))):
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
