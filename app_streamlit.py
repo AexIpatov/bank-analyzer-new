@@ -178,6 +178,112 @@ def find_header_row(df: pd.DataFrame) -> int:
                 return idx
     return -1
 
+# ==================== ПАРСЕР UNICREDIT (специальный) ====================
+
+def parse_unicredit_b1(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    """Специальный парсер для файла B1_Estate_CZK_UC"""
+    transactions = []
+    
+    # В этом файле данные начинаются со строки 3 (индекс 3)
+    # Строка 3 содержит заголовки: From Account | Amount | Currency | Booking Date | ...
+    # Данные начинаются со строки 4
+    
+    if len(df) < 5:
+        return []
+    
+    # Берем строку с заголовками (индекс 3)
+    headers_row = df.iloc[3].values
+    headers = [str(h).strip() if pd.notna(h) else f'col_{i}' for i, h in enumerate(headers_row)]
+    
+    # Берем данные (начиная с индекса 4)
+    data_rows = []
+    for idx in range(4, len(df)):
+        row = list(df.iloc[idx].values)
+        if len(row) < len(headers):
+            row.extend([''] * (len(headers) - len(row)))
+        data_rows.append(row[:len(headers)])
+    
+    if not data_rows:
+        return []
+    
+    df_data = pd.DataFrame(data_rows, columns=headers)
+    
+    # Определяем колонки
+    date_col = None
+    amount_col = None
+    desc_col = None
+    counterparty_col = None
+    
+    for col in df_data.columns:
+        col_lower = str(col).lower()
+        if 'booking date' in col_lower or 'value date' in col_lower:
+            if date_col is None:
+                date_col = col
+        elif 'amount' in col_lower:
+            amount_col = col
+        elif 'transaction details' in col_lower or 'details' in col_lower:
+            desc_col = col
+        elif 'name' in col_lower:
+            counterparty_col = col
+    
+    # Если не нашли, пробуем по индексам
+    if date_col is None and len(df_data.columns) > 3:
+        date_col = df_data.columns[3]  # Booking Date
+    if amount_col is None and len(df_data.columns) > 1:
+        amount_col = df_data.columns[1]  # Amount
+    if desc_col is None and len(df_data.columns) > 12:
+        desc_col = df_data.columns[12]  # Transaction Details
+    
+    if date_col is None or amount_col is None:
+        return []
+    
+    for idx, row in df_data.iterrows():
+        try:
+            if date_col not in row:
+                continue
+            date_val = row[date_col]
+            if pd.isna(date_val):
+                continue
+            date = parse_date(str(date_val))
+            if not date:
+                continue
+            
+            if amount_col not in row:
+                continue
+            amount = parse_amount(row[amount_col])
+            if amount == 0.0:
+                continue
+            
+            description = ''
+            if desc_col and desc_col in row and pd.notna(row[desc_col]):
+                description = str(row[desc_col])
+            
+            counterparty = ''
+            if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
+                counterparty = str(row[counterparty_col])
+            
+            if not description:
+                desc_parts = []
+                for col in df_data.columns:
+                    if col not in [date_col, amount_col, counterparty_col]:
+                        val = row[col]
+                        if pd.notna(val) and str(val).strip():
+                            desc_parts.append(str(val))
+                if desc_parts:
+                    description = ' '.join(desc_parts)
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty[:200] if counterparty else '',
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+        except Exception as e:
+            continue
+    
+    return transactions
+
 # ==================== ПАРСЕР UNICREDIT ====================
 
 def parse_unicredit(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -746,6 +852,20 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             if df.empty:
                 continue
             
+            # Проверяем на специальный файл B1_Estate_CZK_UC
+            is_b1_unicredit = False
+            for idx in range(min(10, len(df))):
+                row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+                if 'account title' in row_text and 'business open' in row_text:
+                    is_b1_unicredit = True
+                    break
+            
+            if is_b1_unicredit:
+                transactions = parse_unicredit_b1(df, account_name)
+                all_transactions.extend(transactions)
+                continue
+            
+            # Проверка на UniCredit
             is_unicredit = False
             for idx in range(min(50, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
@@ -761,6 +881,7 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                 all_transactions.extend(transactions)
                 continue
             
+            # Проверка на Paysera
             is_paysera = False
             for idx in range(min(20, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
@@ -773,6 +894,7 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                 all_transactions.extend(transactions)
                 continue
             
+            # Проверка на Revolut
             is_revolut = False
             for idx in range(min(20, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
@@ -785,6 +907,7 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                 all_transactions.extend(transactions)
                 continue
             
+            # Проверка на CSOB/Industra
             is_csob = False
             for idx in range(min(20, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
