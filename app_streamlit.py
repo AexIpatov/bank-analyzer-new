@@ -84,7 +84,6 @@ def parse_date(date_str: str) -> str:
         except:
             pass
     
-    # Формат ДД.ММ.ГГГГ
     if '.' in date_str and len(date_str.split('.')) == 3:
         parts = date_str.split('.')
         try:
@@ -95,7 +94,6 @@ def parse_date(date_str: str) -> str:
         except:
             pass
     
-    # Формат ДД/ММ/ГГГГ
     if '/' in date_str and len(date_str.split('/')) == 3:
         parts = date_str.split('/')
         try:
@@ -131,7 +129,6 @@ def parse_amount(amount_str) -> float:
     if amount_str in ['', 'nan', '-', 'None', 'null', 'NaN', 'N/A', 'n/a', '0', '0.0']:
         return 0.0
     
-    # Убираем пробелы в числах (например "130 523.99")
     amount_str = amount_str.replace(' ', '')
     
     is_negative = False
@@ -154,17 +151,6 @@ def parse_amount(amount_str) -> float:
         value = float(amount_str)
         return -abs(value) if is_negative else abs(value)
     except:
-        try:
-            cleaned = amount_str.replace('.', '')
-            if cleaned:
-                value = float(cleaned)
-                if '.' in amount_str:
-                    parts = amount_str.split('.')
-                    if len(parts) == 2:
-                        value = float(parts[0] + '.' + parts[1])
-                return -abs(value) if is_negative else abs(value)
-        except:
-            pass
         return 0.0
 
 def format_amount(amount: float) -> str:
@@ -177,7 +163,7 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР BLUOR (НОВЫЙ) ====================
+# ==================== ПАРСЕР BLUOR EXCEL (ИСПРАВЛЕННЫЙ) ====================
 
 def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """Парсер для выписок BluOr Bank (формат с Дебет/Кредит)"""
@@ -189,23 +175,49 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if len(row) < 4:
                 continue
             
-            # Проверяем, что это строка с транзакцией
+            # Проверяем первую колонку - это должна быть дата
             date_val = row.iloc[0] if len(row) > 0 else None
             if pd.isna(date_val):
                 continue
             
-            # Пропускаем заголовки
             date_str = str(date_val).strip()
-            if any(kw in date_str.lower() for kw in ['дата', 'вид операций', 'дебет', 'кредит', 'кредитовый', 'дебетовый', 'конечный']):
+            
+            # Пропускаем пустые строки
+            if not date_str:
                 continue
             
-            date = parse_date(date_str)
-            if not date:
+            # Пропускаем строки, которые явно не являются транзакциями
+            skip_keywords = [
+                'выписка по счету', 'направления переводов', 'сумма', 'получатель',
+                'информация получателю', 'bs rerum sia', 'рег.№', 'счет',
+                'дата предыдущей операции', 'начальный остаток', 'кредитовый оборот',
+                'дебетовый оборот', 'конечный остаток', 'период', 'подготовлено',
+                'точное совпадение', 'показывать только операции'
+            ]
+            
+            if any(kw in date_str.lower() for kw in skip_keywords):
+                continue
+            
+            # Проверяем, что дата имеет правильный формат (ДД.ММ.ГГГГ)
+            date_parts = date_str.split('.')
+            if len(date_parts) == 3 and len(date_parts[0]) == 2 and len(date_parts[1]) == 2 and len(date_parts[2]) == 4:
+                date = parse_date(date_str)
+                if not date:
+                    continue
+            else:
+                # Если это не дата, пропускаем
                 continue
             
             # Описание (колонка 1)
             desc_val = row.iloc[1] if len(row) > 1 else ''
             description = str(desc_val) if pd.notna(desc_val) else ''
+            
+            if not description:
+                continue
+            
+            # Пропускаем строки с итогами
+            if any(kw in description.lower() for kw in ['кредитовый оборот', 'дебетовый оборот', 'конечный остаток']):
+                continue
             
             # Сумма (колонка 2 - Дебет или колонка 3 - Кредит)
             amount = 0.0
