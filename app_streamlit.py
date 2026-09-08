@@ -294,26 +294,19 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
-# ==================== ПАРСЕР CSOB ====================
+# ==================== ПАРСЕР CSOB (ПРЯМОЙ) ====================
 
-def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
+def parse_csob_direct(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    """Парсер CSOB с заголовками в первой строке"""
     transactions = []
     
-    # Ищем строку с заголовками
+    # Проверяем, есть ли заголовки в первой строке
     header_row = -1
-    for idx in range(min(50, len(df))):
+    for idx in range(min(5, len(df))):
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
         if 'account number' in row_text and 'account currency' in row_text:
             header_row = idx
             break
-    
-    if header_row == -1:
-        # Пробуем найти по ключевым словам
-        for idx in range(min(50, len(df))):
-            row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-            if 'posting date' in row_text and 'payment amount' in row_text:
-                header_row = idx
-                break
     
     if header_row == -1:
         return []
@@ -329,7 +322,7 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     while headers and headers[-1] == '':
         headers.pop()
     
-    # Получаем данные
+    # Получаем данные (все строки после заголовков)
     data_rows = []
     for idx in range(header_row + 1, len(df)):
         row = list(df.iloc[idx].values)
@@ -361,10 +354,16 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
         elif 'counterparty' in col_lower:
             counterparty_col = col
     
-    if date_col is None and len(df_clean.columns) > 4:
-        date_col = df_clean.columns[4]
-    if amount_col is None and len(df_clean.columns) > 6:
-        amount_col = df_clean.columns[6]
+    if date_col is None:
+        # Пробуем найти по индексам
+        if len(df_clean.columns) > 4:
+            date_col = df_clean.columns[4]
+    if amount_col is None:
+        if len(df_clean.columns) > 6:
+            amount_col = df_clean.columns[6]
+    if desc_col is None:
+        if len(df_clean.columns) > 15:
+            desc_col = df_clean.columns[15]
     
     if date_col is None or amount_col is None:
         return []
@@ -859,6 +858,19 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
         tmp_path = tmp.name
     
     try:
+        # Пробуем прочитать файл CSOB с заголовками в первой строке
+        try:
+            df_header = pd.read_excel(tmp_path, header=0, dtype=str)
+            # Проверяем, что это CSOB файл
+            col_names = ' '.join(str(c).lower() for c in df_header.columns)
+            if 'account number' in col_names and 'account currency' in col_names:
+                transactions = parse_csob_direct_with_headers(df_header, account_name)
+                if transactions:
+                    return transactions
+        except:
+            pass
+        
+        # Если не получилось, читаем как обычно
         sheets = pd.read_excel(tmp_path, sheet_name=None, header=None, dtype=str)
         all_transactions = []
         
@@ -912,7 +924,7 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                         break
             
             if file_type == 'csob':
-                transactions = parse_csob(df, account_name)
+                transactions = parse_csob_direct(df, account_name)
                 all_transactions.extend(transactions)
             elif file_type == 'mkb':
                 transactions = parse_mkb(df, account_name)
@@ -943,6 +955,83 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             os.unlink(tmp_path)
         except:
             pass
+
+def parse_csob_direct_with_headers(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    """Парсер CSOB когда файл уже прочитан с заголовками"""
+    transactions = []
+    
+    date_col = None
+    amount_col = None
+    desc_col = None
+    counterparty_col = None
+    
+    for col in df.columns:
+        col_lower = str(col).lower()
+        if 'posting date' in col_lower:
+            date_col = col
+        elif 'payment amount' in col_lower:
+            amount_col = col
+        elif 'message to beneficiary' in col_lower or 'note' in col_lower:
+            desc_col = col
+        elif 'counterparty' in col_lower:
+            counterparty_col = col
+    
+    if date_col is None:
+        if len(df.columns) > 4:
+            date_col = df.columns[4]
+    if amount_col is None:
+        if len(df.columns) > 6:
+            amount_col = df.columns[6]
+    
+    if date_col is None or amount_col is None:
+        return []
+    
+    for idx, row in df.iterrows():
+        try:
+            if date_col not in row:
+                continue
+            date_val = row[date_col]
+            if pd.isna(date_val):
+                continue
+            date = parse_date(str(date_val))
+            if not date:
+                continue
+            
+            if amount_col not in row:
+                continue
+            amount = parse_amount(row[amount_col])
+            if amount == 0.0:
+                continue
+            
+            description = ''
+            if desc_col and desc_col in row and pd.notna(row[desc_col]):
+                description = str(row[desc_col])
+            
+            counterparty = ''
+            if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
+                counterparty = str(row[counterparty_col])
+            
+            if not description:
+                desc_parts = []
+                for col in df.columns:
+                    if col not in [date_col, amount_col, counterparty_col]:
+                        val = row[col]
+                        if pd.notna(val) and str(val).strip():
+                            desc_parts.append(str(val))
+                if desc_parts:
+                    description = ' '.join(desc_parts)
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty[:200] if counterparty else '',
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+        except Exception as e:
+            continue
+    
+    return transactions
 
 # ==================== ПАРСЕР CSV ====================
 
