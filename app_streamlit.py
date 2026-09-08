@@ -161,7 +161,21 @@ def parse_amount(amount_str) -> float:
         value = float(amount_str)
         return -abs(value) if is_negative else abs(value)
     except:
-        return 0.0
+        try:
+            parts = amount_str.split('.')
+            if len(parts) > 2:
+                amount_str = ''.join(parts[:-1]) + '.' + parts[-1]
+            value = float(amount_str)
+            return -abs(value) if is_negative else abs(value)
+        except:
+            try:
+                cleaned = re.sub(r'[^\d]', '', amount_str)
+                if cleaned:
+                    value = float(cleaned) / 100
+                    return -abs(value) if is_negative else abs(value)
+            except:
+                pass
+            return 0.0
 
 def format_amount(amount: float) -> str:
     if amount is None or pd.isna(amount):
@@ -173,26 +187,18 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР CSOB ====================
+# ==================== ПАРСЕР CSOB (ПРЯМОЙ) ====================
 
 def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     transactions = []
     
-    # Ищем строку с заголовками (account number и account currency)
+    # Ищем строку с заголовками
     header_row = -1
     for idx in range(min(50, len(df))):
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
         if 'account number' in row_text and 'account currency' in row_text:
             header_row = idx
             break
-    
-    if header_row == -1:
-        # Пробуем найти по ключевым словам
-        for idx in range(min(50, len(df))):
-            row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-            if 'posting date' in row_text and 'payment amount' in row_text:
-                header_row = idx
-                break
     
     if header_row == -1:
         return []
@@ -208,7 +214,7 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     while headers and headers[-1] == '':
         headers.pop()
     
-    # Получаем данные (все строки после заголовков)
+    # Получаем данные
     data_rows = []
     for idx in range(header_row + 1, len(df)):
         row = list(df.iloc[idx].values)
@@ -250,7 +256,6 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     for idx, row in df_clean.iterrows():
         try:
-            # Дата
             if date_col not in row:
                 continue
             date_val = row[date_col]
@@ -260,7 +265,6 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if not date:
                 continue
             
-            # Сумма
             if amount_col not in row:
                 continue
             amount_val = row[amount_col]
@@ -271,12 +275,10 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if amount == 0.0:
                 continue
             
-            # Описание
             description = ''
             if desc_col and desc_col in row and pd.notna(row[desc_col]):
                 description = str(row[desc_col])
             
-            # Контрагент
             counterparty = ''
             if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
                 counterparty = str(row[counterparty_col])
@@ -959,8 +961,7 @@ def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
     
     with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp:
         tmp.write(file_content)
-        tmp_path = tmp.name
-    
+        tmp_path = tmp.name    
     try:
         encoding = detect_file_encoding(tmp_path)
         delimiter = detect_csv_delimiter(tmp_path)
