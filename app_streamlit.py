@@ -297,10 +297,14 @@ def parse_bluor(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """Парсер для выписок BluOr Bank"""
     transactions = []
     
-    # Ищем строки с транзакциями (не начальные остатки)
+    # Ищем строки с транзакциями
     for idx, row in df.iterrows():
         try:
-            # Проверяем, что это строка с транзакцией (есть дата и сумма)
+            # Проверяем, что это строка с транзакцией
+            if len(row) < 4:
+                continue
+            
+            # Дата во второй колонке
             date_val = row.iloc[1] if len(row) > 1 else None
             if pd.isna(date_val):
                 continue
@@ -309,17 +313,18 @@ def parse_bluor(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if not date:
                 continue
             
-            # Проверяем, что это не строка с остатками
+            # Описание в четвертой колонке
             desc_val = row.iloc[3] if len(row) > 3 else ''
             if pd.isna(desc_val):
                 continue
             desc = str(desc_val).strip()
             
             # Пропускаем строки с остатками
-            if any(kw in desc.lower() for kw in ['начальный остаток', 'конечный остаток', 'дебет (d)', 'кредит (c)']):
+            skip_keywords = ['начальный остаток', 'конечный остаток', 'дебет (d)', 'кредит (c)', 'дебет', 'кредит']
+            if any(kw in desc.lower() for kw in skip_keywords):
                 continue
             
-            # Ищем сумму (в колонке E или F)
+            # Ищем сумму (в колонке D или E)
             amount = 0.0
             if len(row) > 4:
                 amount = parse_amount(row.iloc[4])
@@ -341,6 +346,108 @@ def parse_bluor(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
+# ==================== ПАРСЕР REVOLUT ====================
+
+def parse_revolut(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    """Парсер для выписок Revolut"""
+    transactions = []
+    
+    # Ищем строку с заголовками
+    header_row = -1
+    for idx in range(min(30, len(df))):
+        row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+        if 'date started' in row_text and 'amount' in row_text:
+            header_row = idx
+            break
+    
+    if header_row == -1:
+        return []
+    
+    headers = []
+    for val in df.iloc[header_row].values:
+        if pd.isna(val):
+            headers.append('')
+        else:
+            headers.append(str(val).strip())
+    
+    data_rows = []
+    for idx in range(header_row + 1, len(df)):
+        row = list(df.iloc[idx].values)
+        if len(row) < len(headers):
+            row.extend([''] * (len(headers) - len(row)))
+        data_rows.append(row[:len(headers)])
+    
+    if not data_rows:
+        return []
+    
+    df_clean = pd.DataFrame(data_rows, columns=headers)
+    
+    date_col = None
+    amount_col = None
+    desc_col = None
+    counterparty_col = None
+    
+    for col in df_clean.columns:
+        col_lower = str(col).lower()
+        if 'date started' in col_lower:
+            date_col = col
+        elif 'amount' in col_lower:
+            amount_col = col
+        elif 'description' in col_lower:
+            desc_col = col
+        elif 'beneficiary name' in col_lower or 'sender name' in col_lower:
+            counterparty_col = col
+    
+    if date_col is None or amount_col is None:
+        return []
+    
+    for idx, row in df_clean.iterrows():
+        try:
+            if date_col not in row:
+                continue
+            date_val = row[date_col]
+            if pd.isna(date_val):
+                continue
+            date = parse_date(str(date_val))
+            if not date:
+                continue
+            
+            if amount_col not in row:
+                continue
+            amount = parse_amount(row[amount_col])
+            if amount == 0.0:
+                continue
+            
+            description = ''
+            if desc_col and desc_col in row and pd.notna(row[desc_col]):
+                description = str(row[desc_col])
+            
+            counterparty = ''
+            if counterparty_col and counterparty_col in row and pd.notna(row[counterparty_col]):
+                counterparty = str(row[counterparty_col])
+            
+            if not description:
+                desc_parts = []
+                for col in df_clean.columns:
+                    if col not in [date_col, amount_col, counterparty_col]:
+                        val = row[col]
+                        if pd.notna(val) and str(val).strip():
+                            desc_parts.append(str(val))
+                if desc_parts:
+                    description = ' '.join(desc_parts)
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty[:200] if counterparty else '',
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+        except Exception as e:
+            continue
+    
+    return transactions
+
 # ==================== ОСНОВНОЙ ПАРСЕР EXCEL ====================
 
 def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
@@ -354,33 +461,55 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
     try:
         sheets = pd.read_excel(tmp_path, sheet_name=None, header=None, dtype=str)
         all_transactions = []
+        found_transactions = False
         
         for sheet_name, df in sheets.items():
             if df.empty:
                 continue
             
-            # Определяем тип файла по имени
-            if 'bluor' in filename_lower:
-                transactions = parse_bluor(df, account_name)
-                all_transactions.extend(transactions)
-                continue
+            # Определяем тип файла
+            file_type = 'unknown'
             
-            # Проверяем на B1 Estate (UniCredit)
-            has_from_account = False
+            # Проверка на Revolut
             for idx in range(min(10, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-                if 'from account' in row_text:
-                    has_from_account = True
+                if 'date started' in row_text and 'amount' in row_text:
+                    file_type = 'revolut'
                     break
             
-            if has_from_account:
-                transactions = parse_b1_estate(df, account_name)
-                all_transactions.extend(transactions)
-                continue
+            # Проверка на BluOr
+            if file_type == 'unknown' and 'bluor' in filename_lower:
+                file_type = 'bluor'
             
-            # Если ничего не подошло - пропускаем
-            pass
+            # Проверка на B1 Estate (UniCredit)
+            if file_type == 'unknown':
+                for idx in range(min(10, len(df))):
+                    row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+                    if 'from account' in row_text:
+                        file_type = 'b1_estate'
+                        break
+            
+            # Применяем парсер
+            if file_type == 'revolut':
+                transactions = parse_revolut(df, account_name)
+                if transactions:
+                    found_transactions = True
+                    all_transactions.extend(transactions)
+            elif file_type == 'bluor':
+                transactions = parse_bluor(df, account_name)
+                if transactions:
+                    found_transactions = True
+                    all_transactions.extend(transactions)
+            elif file_type == 'b1_estate':
+                transactions = parse_b1_estate(df, account_name)
+                if transactions:
+                    found_transactions = True
+                    all_transactions.extend(transactions)
+            else:
+                # Неизвестный формат - пропускаем
+                pass
         
+        # Если транзакций нет, но файл был обработан - возвращаем пустой список (не ошибка)
         return all_transactions
                 
     except Exception as e:
@@ -471,7 +600,8 @@ def main():
                         all_transactions.extend(transactions)
                         st.info(f"✅ {uploaded_file.name}: {len(transactions)} операций")
                     else:
-                        failed_files.append(uploaded_file.name)
+                        # Если транзакций нет, но файл был обработан - показываем как успешно
+                        st.info(f"ℹ️ {uploaded_file.name}: транзакций не найдено")
                 except Exception as e:
                     failed_files.append(f"{uploaded_file.name} (ошибка: {str(e)})")
                 
