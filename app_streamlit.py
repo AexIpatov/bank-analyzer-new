@@ -56,25 +56,28 @@ def detect_csv_delimiter(file_path: str) -> str:
 
 def clean_account_name(filename: str) -> str:
     name = os.path.splitext(filename)[0]
+    # Удаляем даты в формате ГГГГ-ММ-ДД
     name = re.sub(r'\d{4}-\d{2}-\d{2}', '', name)
-    name = re.sub(r'[_-]', ' ', name).strip()
+    # Удаляем IBAN, если есть
+    name = re.sub(r'LV\d{2}[A-Z]{4}\d{13,}', '', name)
+    name = re.sub(r'[_\-]', ' ', name).strip()
     name = re.sub(r'\s+', ' ', name)
     return name if name else 'Неизвестный счет'
 
 def parse_date(date_str: str) -> str:
     if not date_str or pd.isna(date_str):
         return ''
-    
     date_str = str(date_str).strip()
     
+    # Если есть пробел - берем первую часть
     if ' ' in date_str:
         date_str = date_str.split(' ')[0]
     if 'T' in date_str:
         date_str = date_str.split('T')[0]
-    
     if date_str.endswith('.0'):
         date_str = date_str[:-2]
     
+    # Формат ГГГГММДД
     if date_str.isdigit() and len(date_str) == 8:
         try:
             year = date_str[:4]
@@ -84,6 +87,7 @@ def parse_date(date_str: str) -> str:
         except:
             pass
     
+    # Формат ДД.ММ.ГГГГ
     if '.' in date_str and len(date_str.split('.')) == 3:
         parts = date_str.split('.')
         try:
@@ -94,10 +98,22 @@ def parse_date(date_str: str) -> str:
         except:
             pass
     
+    # Формат ДД/ММ/ГГГГ
     if '/' in date_str and len(date_str.split('/')) == 3:
         parts = date_str.split('/')
         try:
             day, month, year = parts
+            if len(year) == 2:
+                year = f"20{year}"
+            return f"{day.zfill(2)}-{month.zfill(2)}-{year}"
+        except:
+            pass
+    
+    # Формат ГГГГ-ММ-ДД
+    if '-' in date_str and len(date_str.split('-')) == 3:
+        parts = date_str.split('-')
+        try:
+            year, month, day = parts
             if len(year) == 2:
                 year = f"20{year}"
             return f"{day.zfill(2)}-{month.zfill(2)}-{year}"
@@ -110,27 +126,32 @@ def parse_date(date_str: str) -> str:
         "%d/%m/%y", "%y-%m-%d", "%d-%b-%y", "%d-%b-%Y",
         "%b %d, %Y", "%d %b %Y"
     ]
-    
     for fmt in formats:
         try:
             date_obj = datetime.strptime(date_str, fmt)
             return date_obj.strftime("%d-%m-%Y")
         except:
             continue
-    
     return date_str
 
 def parse_amount(amount_str) -> float:
+    """
+    Парсит сумму из строки.
+    Возвращает число с правильным знаком.
+    """
     if amount_str is None or pd.isna(amount_str):
         return 0.0
     
     amount_str = str(amount_str).strip()
     
-    if amount_str in ['', 'nan', '-', 'None', 'null', 'NaN', 'N/A', 'n/a', '0', '0.0']:
+    # Пустые значения
+    if amount_str in ['', 'nan', '-', 'None', 'null', 'NaN', 'N/A', 'n/a']:
         return 0.0
     
-    amount_str = amount_str.replace(' ', '')
+    # Убираем пробелы
+    amount_str = amount_str.replace(' ', '').replace('\xa0', '')
     
+    # Обработка скобок для отрицательных чисел
     is_negative = False
     if amount_str.startswith('-'):
         is_negative = True
@@ -139,9 +160,28 @@ def parse_amount(amount_str) -> float:
         is_negative = True
         amount_str = amount_str[1:-1]
     
+    # Убираем валюту
     amount_str = re.sub(r'\s*[A-Z]{3}\s*$', '', amount_str)
     amount_str = re.sub(r'^\s*[A-Z]{3}\s*', '', amount_str)
-    amount_str = amount_str.replace(',', '.')
+    
+    # Заменяем запятую на точку (европейский формат)
+    # Если есть и запятая и точка, определяем разделитель
+    if ',' in amount_str and '.' in amount_str:
+        # Если точка перед запятой - это тысячи, запятая - десятичный разделитель
+        if amount_str.rfind('.') < amount_str.rfind(','):
+            amount_str = amount_str.replace('.', '').replace(',', '.')
+        else:
+            amount_str = amount_str.replace(',', '')
+    elif ',' in amount_str:
+        # Проверяем, является ли запятая десятичным разделителем
+        # Если после запятой ровно 2 цифры и это не в конце, то это десятичный разделитель
+        parts = amount_str.split(',')
+        if len(parts) == 2 and len(parts[1]) == 2:
+            amount_str = amount_str.replace(',', '.')
+        else:
+            amount_str = amount_str.replace(',', '')
+    
+    # Убираем все кроме цифр, точки и минуса
     amount_str = re.sub(r'[^\d.\-]', '', amount_str)
     
     if not amount_str or amount_str == '.':
@@ -163,19 +203,21 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР BLUOR EXCEL (ПРОСТОЙ И НАДЕЖНЫЙ) ====================
+# ==================== ПАРСЕР BLUOR EXCEL (ИСПРАВЛЕННЫЙ) ====================
 
 def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    """Парсер для выписок BluOr Bank"""
+    """
+    Парсер для выписок BluOr Bank.
+    Формат: Дата | Описание | Дебет (отрицательные) | Кредит (положительные)
+    """
     transactions = []
     
-    # Проходим по всем строкам
     for idx, row in df.iterrows():
         try:
             if len(row) < 4:
                 continue
             
-            # Первая колонка - должна быть дата
+            # Первая колонка - дата
             val0 = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ''
             if not val0:
                 continue
@@ -199,20 +241,24 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if not description:
                 continue
             
-            # Сумма из третьей колонки (Дебет) или четвертой (Кредит)
+            # Третья колонка - Дебет (отрицательные суммы, с минусом)
             amount = 0.0
-            
-            # Проверяем Дебет (колонка 2, индекс 2)
             if len(row) > 2 and pd.notna(row.iloc[2]):
                 val2 = str(row.iloc[2]).strip()
-                if val2 and val2 != '0' and val2 != '0.0':
+                if val2 and val2 not in ['0', '0.0', '0,00']:
                     amount = parse_amount(val2)
+                    # Дебет - это расход, должен быть отрицательным
+                    if amount > 0:
+                        amount = -amount
             
-            # Если в дебете 0, проверяем Кредит (колонка 3, индекс 3)
+            # Если в дебете 0, проверяем Кредит (положительные суммы)
             if amount == 0.0 and len(row) > 3 and pd.notna(row.iloc[3]):
                 val3 = str(row.iloc[3]).strip()
-                if val3 and val3 != '0' and val3 != '0.0':
+                if val3 and val3 not in ['0', '0.0', '0,00']:
                     amount = parse_amount(val3)
+                    # Кредит - это доход, должен быть положительным
+                    if amount < 0:
+                        amount = abs(amount)
             
             if amount == 0.0:
                 continue
@@ -224,6 +270,7 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
                 'Наименование счета': account_name,
                 'Описание': description[:500]
             })
+            
         except Exception as e:
             continue
     
@@ -732,7 +779,6 @@ def parse_paysera(df: pd.DataFrame, account_name: str) -> List[Dict]:
             
             if amount_col not in row:
                 continue
-            
             amount = parse_amount(row[amount_col])
             
             if credit_debit_col and credit_debit_col in row:
@@ -858,13 +904,11 @@ def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
             date_val = row[date_col]
             if pd.isna(date_val):
                 continue
-            
             date_str = str(date_val).strip()
             if date_str.endswith('.0'):
                 date_str = date_str[:-2]
             if date_str.isdigit() and len(date_str) == 8:
                 date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-            
             date = parse_date(date_str)
             if not date:
                 continue
@@ -951,7 +995,6 @@ def parse_generic(df: pd.DataFrame, account_name: str) -> List[Dict]:
 
 def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
     account_name = clean_account_name(filename)
-    filename_lower = filename.lower()
     
     with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
         tmp.write(file_content)
@@ -967,12 +1010,18 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             
             file_type = 'unknown'
             
-            # Проверка на BluOr (счет с LV)
-            for idx in range(min(10, len(df))):
+            # Проверка на BluOr (счет с LV, "Выписка по счету")
+            for idx in range(min(20, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-                if 'счет' in row_text and 'lv' in row_text:
-                    file_type = 'bluor_excel'
-                    break
+                if 'выписка по счету' in row_text or ('счет' in row_text and 'lv' in row_text):
+                    # Проверяем, что есть колонки с датами
+                    for check_idx in range(min(20, len(df))):
+                        check_row = ' '.join(str(v) for v in df.iloc[check_idx].values if pd.notna(v))
+                        if re.search(r'\d{2}\.\d{2}\.\d{4}', check_row):
+                            file_type = 'bluor_excel'
+                            break
+                    if file_type == 'bluor_excel':
+                        break
             
             # Проверка на FIO
             if file_type == 'unknown':
@@ -1048,7 +1097,7 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                 all_transactions.extend(transactions)
         
         return all_transactions
-                
+        
     except Exception as e:
         st.error(f"Ошибка при парсинге Excel {filename}: {str(e)}")
         return []
@@ -1081,7 +1130,7 @@ def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
         )
         
         return parse_generic(df, account_name)
-                
+        
     except Exception as e:
         st.error(f"Ошибка при парсинге CSV {filename}: {str(e)}")
         return []
@@ -1095,7 +1144,6 @@ def parse_csv(file_content: bytes, filename: str) -> List[Dict]:
 
 def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     ext = os.path.splitext(filename)[1].lower()
-    
     if ext == '.csv':
         return parse_csv(file_content, filename)
     elif ext in ['.xlsx', '.xls']:
@@ -1128,7 +1176,6 @@ def main():
             
             for i, uploaded_file in enumerate(uploaded_files):
                 status_text.text(f"Обработка: {uploaded_file.name}")
-                
                 try:
                     content = uploaded_file.read()
                     transactions = parse_file(content, uploaded_file.name)
@@ -1147,35 +1194,36 @@ def main():
             
             if all_transactions:
                 df = pd.DataFrame(all_transactions)
+                
+                # Сохраняем числовые значения отдельно
+                df['Сумма_число'] = df['Сумма']
+                
+                # Форматируем для отображения
                 df['Сумма'] = df['Сумма'].apply(format_amount)
-                numeric_amounts = pd.to_numeric(
-                    df['Сумма'].str.replace(',', '.').str.replace(' ', ''), 
-                    errors='coerce'
-                )
                 
                 st.markdown("---")
                 col1, col2, col3 = st.columns(3)
                 
+                total_sum = df['Сумма_число'].sum()
+                income = df['Сумма_число'][df['Сумма_число'] > 0].sum()
+                expense = abs(df['Сумма_число'][df['Сумма_число'] < 0].sum())
+                
                 with col1:
                     st.metric("📊 Всего операций", len(all_transactions))
                 with col2:
-                    доход = numeric_amounts[numeric_amounts > 0].sum()
-                    st.metric("📈 Доходы", f"{доход:,.2f}".replace('.', ','))
+                    st.metric("📈 Доходы", f"{income:,.2f}".replace('.', ','))
                 with col3:
-                    расход = abs(numeric_amounts[numeric_amounts < 0].sum())
-                    st.metric("📉 Расходы", f"{расход:,.2f}".replace('.', ','))
+                    st.metric("📉 Расходы", f"{expense:,.2f}".replace('.', ','))
                 
                 st.markdown("### 📋 Результат обработки")
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(df.drop(columns=['Сумма_число']), use_container_width=True, hide_index=True)
                 
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df.to_excel(writer, sheet_name='Транзакции', index=False)
+                    df_display = df.drop(columns=['Сумма_число'])
+                    df_display.to_excel(writer, sheet_name='Транзакции', index=False)
                     
-                    df_temp = df.copy()
-                    df_temp['Сумма_число'] = numeric_amounts
-                    
-                    bank_summary = df_temp.groupby('Наименование счета').agg({
+                    bank_summary = df.groupby('Наименование счета').agg({
                         'Сумма_число': ['count', 'sum']
                     }).round(2)
                     bank_summary.columns = ['Количество операций', 'Сумма']
