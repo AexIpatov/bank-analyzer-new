@@ -163,72 +163,56 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР BLUOR EXCEL ====================
+# ==================== ПАРСЕР BLUOR EXCEL (ПРОСТОЙ И НАДЕЖНЫЙ) ====================
 
 def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    """Парсер для выписок BluOr Bank (формат с Дебет/Кредит)"""
+    """Парсер для выписок BluOr Bank"""
     transactions = []
     
+    # Проходим по всем строкам
     for idx, row in df.iterrows():
         try:
             if len(row) < 4:
                 continue
             
-            # Проверяем первую колонку
-            date_val = row.iloc[0] if len(row) > 0 else None
-            if pd.isna(date_val):
+            # Первая колонка - должна быть дата
+            val0 = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ''
+            if not val0:
                 continue
             
-            date_str = str(date_val).strip()
-            if not date_str:
+            # Проверяем формат даты ДД.ММ.ГГГГ
+            if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', val0):
                 continue
             
-            # Строго проверяем, что это дата в формате ДД.ММ.ГГГГ
-            date_parts = date_str.split('.')
-            if len(date_parts) != 3:
-                continue
-            
-            # Проверяем, что все части - числа и дата корректна
+            # Проверяем, что дата корректна
             try:
-                day = int(date_parts[0])
-                month = int(date_parts[1])
-                year = int(date_parts[2])
-                
+                day, month, year = map(int, val0.split('.'))
                 if not (1 <= day <= 31 and 1 <= month <= 12 and 1900 <= year <= 2100):
                     continue
             except:
                 continue
             
-            # Формируем дату
             date = f"{day:02d}-{month:02d}-{year}"
             
-            # Проверяем вторую колонку - описание
-            desc_val = row.iloc[1] if len(row) > 1 else ''
-            if pd.isna(desc_val):
-                continue
-            
-            description = str(desc_val).strip()
+            # Вторая колонка - описание
+            description = str(row.iloc[1]) if pd.notna(row.iloc[1]) else ''
             if not description:
                 continue
             
-            # Сумма
+            # Сумма из третьей колонки (Дебет) или четвертой (Кредит)
             amount = 0.0
             
-            # Проверяем Дебет (колонка 2)
-            if len(row) > 2:
-                debit_val = row.iloc[2]
-                if pd.notna(debit_val):
-                    debit_str = str(debit_val).strip()
-                    if debit_str:
-                        amount = parse_amount(debit_str)
+            # Проверяем Дебет (колонка 2, индекс 2)
+            if len(row) > 2 and pd.notna(row.iloc[2]):
+                val2 = str(row.iloc[2]).strip()
+                if val2 and val2 != '0' and val2 != '0.0':
+                    amount = parse_amount(val2)
             
-            # Если в дебете 0, проверяем Кредит (колонка 3)
-            if amount == 0.0 and len(row) > 3:
-                credit_val = row.iloc[3]
-                if pd.notna(credit_val):
-                    credit_str = str(credit_val).strip()
-                    if credit_str:
-                        amount = parse_amount(credit_str)
+            # Если в дебете 0, проверяем Кредит (колонка 3, индекс 3)
+            if amount == 0.0 and len(row) > 3 and pd.notna(row.iloc[3]):
+                val3 = str(row.iloc[3]).strip()
+                if val3 and val3 != '0' and val3 != '0.0':
+                    amount = parse_amount(val3)
             
             if amount == 0.0:
                 continue
