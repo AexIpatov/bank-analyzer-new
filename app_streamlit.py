@@ -74,7 +74,6 @@ def parse_date(date_str: str) -> str:
     if date_str.endswith('.0'):
         date_str = date_str[:-2]
     
-    # Формат ГГГГММДД
     if date_str.isdigit() and len(date_str) == 8:
         try:
             year = date_str[:4]
@@ -84,7 +83,6 @@ def parse_date(date_str: str) -> str:
         except:
             pass
     
-    # Формат ДД.ММ.ГГГГ
     if '.' in date_str and len(date_str.split('.')) == 3:
         parts = date_str.split('.')
         try:
@@ -95,7 +93,6 @@ def parse_date(date_str: str) -> str:
         except:
             pass
     
-    # Формат ДД/ММ/ГГГГ
     if '/' in date_str and len(date_str.split('/')) == 3:
         parts = date_str.split('/')
         try:
@@ -106,7 +103,6 @@ def parse_date(date_str: str) -> str:
         except:
             pass
     
-    # Формат ГГГГ-ММ-ДД
     if '-' in date_str and len(date_str.split('-')) == 3:
         parts = date_str.split('-')
         try:
@@ -132,10 +128,6 @@ def parse_date(date_str: str) -> str:
     return date_str
 
 def parse_amount(amount_str) -> float:
-    """
-    Парсит сумму из строки.
-    Возвращает число с правильным знаком.
-    """
     if amount_str is None or pd.isna(amount_str):
         return 0.0
     
@@ -157,7 +149,6 @@ def parse_amount(amount_str) -> float:
     amount_str = re.sub(r'\s*[A-Z]{3}\s*$', '', amount_str)
     amount_str = re.sub(r'^\s*[A-Z]{3}\s*', '', amount_str)
     
-    # Обработка европейского формата чисел
     if ',' in amount_str and '.' in amount_str:
         if amount_str.rfind('.') < amount_str.rfind(','):
             amount_str = amount_str.replace('.', '').replace(',', '.')
@@ -476,76 +467,124 @@ def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
-# ==================== ПАРСЕР CSOB (НОВАЯ ВЕРСИЯ - ПРОСТАЯ И НАДЕЖНАЯ) ====================
+# ==================== ПАРСЕР CSOB (ИСПРАВЛЕННЫЙ) ====================
 
 def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """
     Парсер для выписок CSOB Bank.
-    Проходит по всем строкам и ищет даты и суммы.
+    Правильно находит суммы в колонке payment amount.
     """
     transactions = []
     
-    # Проходим по всем строкам
-    for idx, row in df.iterrows():
+    # Находим строку с заголовками
+    header_row = -1
+    for idx in range(min(30, len(df))):
+        row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+        if 'account number' in row_text and 'account currency' in row_text:
+            header_row = idx
+            break
+    
+    if header_row == -1:
+        return []
+    
+    # Получаем заголовки
+    headers = []
+    for val in df.iloc[header_row].values:
+        if pd.isna(val):
+            headers.append('')
+        else:
+            headers.append(str(val).strip())
+    
+    # Находим индексы нужных колонок по названиям
+    date_col_idx = None
+    amount_col_idx = None
+    counterparty_col_idx = None
+    desc_col_idx = None
+    
+    for i, col in enumerate(headers):
+        col_lower = str(col).lower()
+        if 'posting date' in col_lower:
+            date_col_idx = i
+        elif 'payment amount' in col_lower:
+            amount_col_idx = i
+        elif 'counterparty' in col_lower:
+            counterparty_col_idx = i
+        elif 'message to beneficiary' in col_lower:
+            desc_col_idx = i
+    
+    # Если не нашли по названиям, используем позиции из примера
+    if date_col_idx is None:
+        date_col_idx = 4  # posting date
+    if amount_col_idx is None:
+        amount_col_idx = 6  # payment amount
+    if counterparty_col_idx is None:
+        counterparty_col_idx = 13  # counterparty
+    if desc_col_idx is None:
+        desc_col_idx = 15  # message to beneficiary
+    
+    # Проходим по строкам, начиная со строки после заголовка
+    for idx in range(header_row + 1, len(df)):
         try:
-            # Ищем дату в формате ГГГГ-ММ-ДД
-            date = None
-            amount = 0.0
-            description_parts = []
+            row = df.iloc[idx]
+            
+            # Проверяем, что это не пустая строка
+            if all(pd.isna(x) or str(x).strip() == '' for x in row):
+                continue
+            
+            # Получаем дату
+            if len(row) <= date_col_idx:
+                continue
+            date_val = row.iloc[date_col_idx]
+            if pd.isna(date_val):
+                continue
+            
+            date = parse_date(str(date_val))
+            if not date:
+                continue
+            
+            # Получаем сумму
+            if len(row) <= amount_col_idx:
+                continue
+            amount_val = row.iloc[amount_col_idx]
+            if pd.isna(amount_val):
+                continue
+            
+            amount = parse_amount(amount_val)
+            if amount == 0.0:
+                continue
+            
+            # Получаем контрагента
             counterparty = ''
+            if counterparty_col_idx is not None and len(row) > counterparty_col_idx:
+                val = row.iloc[counterparty_col_idx]
+                if pd.notna(val) and str(val).strip() and str(val).strip() != 'nan':
+                    counterparty = str(val).strip()[:200]
             
-            # Проходим по всем колонкам в строке
-            for col_idx, val in enumerate(row):
-                val_str = str(val) if pd.notna(val) else ''
-                if not val_str:
-                    continue
-                
-                val_str = val_str.strip()
-                
-                # Проверяем, не является ли это датой
-                if re.match(r'^\d{4}-\d{2}-\d{2}', val_str):
-                    date = parse_date(val_str)
-                    continue
-                
-                # Проверяем, не является ли это суммой (число с возможным минусом)
-                # Ищем числа, которые могут быть суммами
-                amount_match = re.search(r'^-?\d+[\.,]?\d*$', val_str)
-                if amount_match:
-                    # Проверяем, что это не слишком короткое число (не ID)
-                    if len(val_str) > 3:
-                        parsed = parse_amount(val_str)
-                        if parsed != 0.0:
-                            amount = parsed
-                            continue
-                
-                # Если это не дата и не сумма - добавляем в описание
-                if len(val_str) > 2 and val_str not in ['nan', 'N/A', 'null']:
-                    description_parts.append(val_str)
+            # Получаем описание
+            description = ''
+            if desc_col_idx is not None and len(row) > desc_col_idx:
+                val = row.iloc[desc_col_idx]
+                if pd.notna(val) and str(val).strip() and str(val).strip() != 'nan':
+                    description = str(val).strip()
             
-            # Если нашли дату и сумму
-            if date and amount != 0.0:
-                # Ищем контрагента в описании (обычно это название компании)
-                description = ' | '.join(description_parts) if description_parts else ''
-                
-                # Пытаемся найти контрагента в описании
-                # Часто контрагент идет после "Counterparty" или в определенном формате
-                for part in description_parts:
-                    if 'counterparty' in part.lower() or 'DZIBIK' in part or 'DNS' in part or 'Bilych' in part:
-                        counterparty = part
-                        break
-                
-                # Если есть описание и оно содержит информацию о транзакции
-                if not description:
-                    description = ' | '.join([str(v) for v in row if pd.notna(v) and str(v).strip()])
-                
-                transactions.append({
-                    'Дата': date,
-                    'Сумма': amount,
-                    'Контрагент': counterparty[:200] if counterparty else '',
-                    'Наименование счета': account_name,
-                    'Описание': description[:500]
-                })
-                
+            # Если нет описания, собираем из других колонок
+            if not description:
+                desc_parts = []
+                for i, val in enumerate(row):
+                    if i not in [date_col_idx, amount_col_idx, counterparty_col_idx, 0, 1, 2, 3, 8, 9, 10, 11]:
+                        if pd.notna(val) and str(val).strip() and str(val).strip() != 'nan':
+                            desc_parts.append(str(val).strip())
+                if desc_parts:
+                    description = ' | '.join(desc_parts)
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty,
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+            
         except Exception as e:
             continue
     
@@ -884,12 +923,10 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
         tmp_path = tmp.name
     
     try:
-        # Читаем все листы
         xl = pd.ExcelFile(tmp_path)
         all_transactions = []
         
         for sheet_name in xl.sheet_names:
-            # Читаем без заголовков
             df = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, dtype=str)
             
             if df.empty:
@@ -897,7 +934,7 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             
             file_type = 'unknown'
             
-            # Проверка на CSOB - ищем строку с account number
+            # Проверка на CSOB
             for idx in range(min(30, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
                 if 'account number' in row_text and 'account currency' in row_text:
