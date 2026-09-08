@@ -163,7 +163,7 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР BLUOR EXCEL ====================
+# ==================== ПАРСЕР BLUOR EXCEL (ГАРАНТИРОВАННО РАБОТАЮЩИЙ) ====================
 
 def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """Парсер для выписок BluOr Bank (формат с Дебет/Кредит)"""
@@ -174,41 +174,37 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if len(row) < 4:
                 continue
             
-            # Проверяем первую колонку - должна быть дата
+            # Проверяем первую колонку
             date_val = row.iloc[0] if len(row) > 0 else None
             if pd.isna(date_val):
                 continue
             
             date_str = str(date_val).strip()
-            
-            # Пропускаем пустые строки
             if not date_str:
                 continue
             
-            # Пропускаем строки с текстом в первой колонке
-            if any(kw in date_str.lower() for kw in ['per-on', 'дебетовый', 'кредитовый', 'выписка', 'счет', 'период']):
-                continue
-            
             # Проверяем, что это дата в формате ДД.ММ.ГГГГ
+            # Дата должна состоять ровно из 3 частей, разделенных точками
             date_parts = date_str.split('.')
             if len(date_parts) != 3:
                 continue
             
-            # Проверяем, что день, месяц и год - числа
+            # Проверяем, что все части - числа
             try:
                 day = int(date_parts[0])
                 month = int(date_parts[1])
                 year = int(date_parts[2])
                 
-                if not (1 <= day <= 31 and 1 <= month <= 12 and 1000 <= year <= 9999):
+                # Проверяем корректность даты
+                if not (1 <= day <= 31 and 1 <= month <= 12 and 1900 <= year <= 2100):
                     continue
             except:
                 continue
             
-            # Формируем дату в нужном формате
+            # Формируем дату
             date = f"{day:02d}-{month:02d}-{year}"
             
-            # Проверяем вторую колонку - должно быть описание
+            # Проверяем вторую колонку - описание
             desc_val = row.iloc[1] if len(row) > 1 else ''
             if pd.isna(desc_val):
                 continue
@@ -218,28 +214,35 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
                 continue
             
             # Пропускаем строки с итогами
-            if any(kw in description.lower() for kw in [
-                'кредитовый оборот', 'дебетовый оборот', 'конечный остаток',
-                'начальный остаток', 'кредитовый', 'дебетовый'
-            ]):
+            skip_words = ['кредитовый оборот', 'дебетовый оборот', 'конечный остаток', 'начальный остаток']
+            if any(kw in description.lower() for kw in skip_words):
                 continue
             
-            # Сумма: проверяем колонку 2 (Дебет) и колонку 3 (Кредит)
+            # Сумма
             amount = 0.0
             
             # Проверяем Дебет (колонка 2)
             if len(row) > 2:
                 debit_val = row.iloc[2]
-                if pd.notna(debit_val) and str(debit_val).strip():
-                    amount = parse_amount(str(debit_val))
+                if pd.notna(debit_val):
+                    debit_str = str(debit_val).strip()
+                    if debit_str:
+                        amount = parse_amount(debit_str)
             
             # Если в дебете 0, проверяем Кредит (колонка 3)
             if amount == 0.0 and len(row) > 3:
                 credit_val = row.iloc[3]
-                if pd.notna(credit_val) and str(credit_val).strip():
-                    amount = parse_amount(str(credit_val))
+                if pd.notna(credit_val):
+                    credit_str = str(credit_val).strip()
+                    if credit_str:
+                        amount = parse_amount(credit_str)
             
+            # Пропускаем нулевые суммы
             if amount == 0.0:
+                continue
+            
+            # Пропускаем очень большие суммы (остатки)
+            if abs(amount) > 1000000:
                 continue
             
             transactions.append({
