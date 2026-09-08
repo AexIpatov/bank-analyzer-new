@@ -183,8 +183,15 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if not date_str:
                 continue
             
+            # Пропускаем строки, которые точно не являются датами
+            skip_patterns = [
+                'per-on', 'дебетовый', 'кредитовый', 'выписка', 
+                'счет', 'период', 'b/n', 'b/n)', '(b/n'
+            ]
+            if any(p in date_str.lower() for p in skip_patterns):
+                continue
+            
             # Проверяем, что это дата в формате ДД.ММ.ГГГГ
-            # Дата должна состоять ровно из 3 частей, разделенных точками
             date_parts = date_str.split('.')
             if len(date_parts) != 3:
                 continue
@@ -195,7 +202,6 @@ def parse_bluor_excel(df: pd.DataFrame, account_name: str) -> List[Dict]:
                 month = int(date_parts[1])
                 year = int(date_parts[2])
                 
-                # Проверяем корректность даты
                 if not (1 <= day <= 31 and 1 <= month <= 12 and 1900 <= year <= 2100):
                     continue
             except:
