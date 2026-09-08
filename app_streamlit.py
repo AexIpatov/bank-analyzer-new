@@ -170,13 +170,13 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР UNICREDIT B1 (СПЕЦИАЛЬНЫЙ) ====================
+# ==================== ПАРСЕР B1 ESTATE (СПЕЦИАЛЬНЫЙ) ====================
 
-def parse_unicredit_b1(df: pd.DataFrame, account_name: str) -> List[Dict]:
+def parse_b1_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """Специальный парсер для файла B1_Estate_CZK_UC"""
     transactions = []
     
-    # Ищем строку с "From Account" и "Amount"
+    # Ищем строку с "From Account" в любом месте
     header_row = -1
     for idx in range(len(df)):
         row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
@@ -187,18 +187,21 @@ def parse_unicredit_b1(df: pd.DataFrame, account_name: str) -> List[Dict]:
     if header_row == -1:
         return []
     
-    # Получаем заголовки из строки header_row
+    # Берем все строки начиная с header_row
+    df_data = df.iloc[header_row:].reset_index(drop=True)
+    
+    # Первая строка - заголовки
     headers = []
-    for val in df.iloc[header_row].values:
+    for val in df_data.iloc[0].values:
         if pd.isna(val):
             headers.append('')
         else:
             headers.append(str(val).strip())
     
-    # Получаем данные из строк после header_row
+    # Остальные строки - данные
     data_rows = []
-    for idx in range(header_row + 1, len(df)):
-        row = list(df.iloc[idx].values)
+    for idx in range(1, len(df_data)):
+        row = list(df_data.iloc[idx].values)
         if len(row) < len(headers):
             row.extend([''] * (len(headers) - len(row)))
         data_rows.append(row[:len(headers)])
@@ -206,41 +209,37 @@ def parse_unicredit_b1(df: pd.DataFrame, account_name: str) -> List[Dict]:
     if not data_rows:
         return []
     
-    # Создаем DataFrame с данными
-    df_data = pd.DataFrame(data_rows, columns=headers)
+    df_clean = pd.DataFrame(data_rows, columns=headers)
     
-    # Находим колонки по точным названиям
+    # Находим колонки
     amount_col = None
     date_col = None
     desc_col = None
     counterparty_col = None
     
-    for col in df_data.columns:
-        col_clean = str(col).strip()
-        if col_clean == 'Amount':
+    for col in df_clean.columns:
+        col_lower = str(col).lower()
+        if 'amount' in col_lower:
             amount_col = col
-        elif col_clean == 'Booking Date':
+        elif 'booking date' in col_lower:
             date_col = col
-        elif col_clean == 'Transaction Details':
+        elif 'value date' in col_lower:
+            if date_col is None:
+                date_col = col
+        elif 'transaction details' in col_lower:
             desc_col = col
-        elif col_clean == 'Name':
+        elif 'name' in col_lower and 'bank' not in col_lower:
             counterparty_col = col
     
-    # Если не нашли, ищем по индексам
-    if amount_col is None and len(df_data.columns) > 1:
-        amount_col = df_data.columns[1]
-    if date_col is None and len(df_data.columns) > 3:
-        date_col = df_data.columns[3]
-    if desc_col is None and len(df_data.columns) > 12:
-        desc_col = df_data.columns[12]
-    if counterparty_col is None and len(df_data.columns) > 9:
-        counterparty_col = df_data.columns[9]
+    if amount_col is None and len(df_clean.columns) > 1:
+        amount_col = df_clean.columns[1]
+    if date_col is None and len(df_clean.columns) > 3:
+        date_col = df_clean.columns[3]
     
     if amount_col is None or date_col is None:
         return []
     
-    # Парсим транзакции
-    for idx, row in df_data.iterrows():
+    for idx, row in df_clean.iterrows():
         try:
             # Дата
             if date_col not in row:
@@ -255,11 +254,7 @@ def parse_unicredit_b1(df: pd.DataFrame, account_name: str) -> List[Dict]:
             # Сумма
             if amount_col not in row:
                 continue
-            amount_val = row[amount_col]
-            if pd.isna(amount_val):
-                continue
-            amount = parse_amount(amount_val)
-            
+            amount = parse_amount(row[amount_col])
             if amount == 0.0:
                 continue
             
@@ -275,7 +270,7 @@ def parse_unicredit_b1(df: pd.DataFrame, account_name: str) -> List[Dict]:
             
             if not description:
                 desc_parts = []
-                for col in df_data.columns:
+                for col in df_clean.columns:
                     if col not in [date_col, amount_col, counterparty_col]:
                         val = row[col]
                         if pd.notna(val) and str(val).strip():
@@ -707,7 +702,7 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
             if df.empty:
                 continue
             
-            # Проверяем на B1_Estate_CZK_UC (Account Title, Business Open)
+            # Проверяем на B1_Estate (Account Title + Business Open)
             is_b1 = False
             for idx in range(min(5, len(df))):
                 row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
@@ -716,7 +711,7 @@ def parse_excel(file_content: bytes, filename: str) -> List[Dict]:
                     break
             
             if is_b1:
-                transactions = parse_unicredit_b1(df, account_name)
+                transactions = parse_b1_estate(df, account_name)
                 all_transactions.extend(transactions)
                 continue
             
