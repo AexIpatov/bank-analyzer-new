@@ -52,6 +52,7 @@ def clean_account_name(filename: str) -> str:
     name = re.sub(r'[_\-]', ' ', name).strip()
     name = re.sub(r'\s+', ' ', name)
     name = re.sub(r'\d{1,2}-\d{1,2}$', '', name)
+    name = re.sub(r' 2026$', '', name)
     return name.strip() if name else 'Неизвестный счет'
 
 def parse_date(date_str: str) -> str:
@@ -424,12 +425,12 @@ def parse_jenhor_unelma(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return transactions
 
-# ==================== ПАРСЕР CSOB (ОБЩИЙ ДЛЯ ВСЕХ CSOB СЧЕТОВ) ====================
+# ==================== ПАРСЕР CSOB (ОБЩИЙ ДЛЯ ВСЕХ CSOB СЧЕТОВ) - ИСПРАВЛЕННЫЙ ====================
 
 def parse_csob_general(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    Универсальный парсер для CSOB формата:
-    account number;account currency;alias;account name;posting date;value date;payment amount;payment currency;balance;constant code/fee code;variable code/reference;specific code;transaction type;counterparty;counterparty's account;message to beneficiary and payer;identification;sent payment amount;sent payment currency;note;name of 3rd party;3rd party identifier;ultimate debtor;ultimate beneficiary;counterparty's bank;exchange rate;BIC/SWIFT;bank's reference;purpose of payment;message to payer
+    Универсальный парсер для CSOB формата.
+    Ищет данные по заголовку или по позициям.
     """
     transactions = []
     
@@ -444,20 +445,207 @@ def parse_csob_general(file_content: bytes, account_name: str) -> List[Dict]:
     lines = content.split('\n')
     lines = [line.strip() for line in lines if line.strip()]
     
-    if len(lines) < 3:
+    if len(lines) < 2:
         return []
     
+    # Показываем содержимое файла для отладки
+    st.write(f"📄 Всего строк в файле: {len(lines)}")
+    st.write(f"📄 Первая строка: {lines[0][:200]}...")
+    
+    # Проверяем наличие заголовка
     header_idx = -1
     for i, line in enumerate(lines):
         if 'account number' in line.lower() and 'posting date' in line.lower():
             header_idx = i
             break
+        if 'account number' in line.lower() and 'payment amount' in line.lower():
+            header_idx = i
+            break
     
     if header_idx == -1:
-        return []
+        st.write("⚠️ Заголовок не найден, пробуем парсить по позициям")
+        # Пробуем парсить без заголовка
+        return parse_csob_by_position(file_content, account_name)
     
+    st.write(f"✅ Заголовок найден на строке {header_idx}")
+    
+    # Определяем индексы полей
+    header_parts = lines[header_idx].split(';')
+    date_idx = -1
+    amount_idx = -1
+    counterparty_idx = -1
+    description_idx = -1
+    
+    for i, col in enumerate(header_parts):
+        col_lower = col.lower().strip()
+        if 'posting date' in col_lower:
+            date_idx = i
+        elif 'payment amount' in col_lower:
+            amount_idx = i
+        elif 'counterparty' in col_lower and 'account' not in col_lower:
+            counterparty_idx = i
+        elif 'message to beneficiary' in col_lower:
+            description_idx = i
+    
+    # Если не нашли по точным названиям, используем индексы по умолчанию
+    if date_idx == -1:
+        date_idx = 4
+    if amount_idx == -1:
+        amount_idx = 6
+    if counterparty_idx == -1:
+        counterparty_idx = 13
+    if description_idx == -1:
+        description_idx = 16
+    
+    st.write(f"📌 Индексы: дата={date_idx}, сумма={amount_idx}, контрагент={counterparty_idx}, описание={description_idx}")
+    
+    # Парсим данные
     for line_idx in range(header_idx + 1, len(lines)):
         line = lines[line_idx]
+        if not line:
+            continue
+        
+        parts = line.split(';')
+        while parts and parts[-1] == '':
+            parts.pop()
+        
+        if len(parts) < 7:
+            st.write(f"⚠️ Строка {line_idx} имеет {len(parts)} полей, пропускаем")
+            continue
+        
+        try:
+            # ДАТА
+            date_str = ''
+            if date_idx < len(parts):
+                date_str = parts[date_idx].strip()
+            
+            if not date_str or date_str in ['', 'nan']:
+                continue
+            
+            date = parse_date(date_str)
+            if not date:
+                st.write(f"⚠️ Не удалось распарсить дату: '{date_str}'")
+                continue
+            
+            # СУММА
+            amount = 0.0
+            amount_found = False
+            
+            if amount_idx < len(parts):
+                amt_str = parts[amount_idx].strip()
+                if amt_str and amt_str not in ['', 'nan']:
+                    # Проверяем, что это не номер счета
+                    if not re.match(r'^\d+\/\d+$', amt_str):
+                        if not re.match(r'^\d{7,}$', amt_str):
+                            parsed = parse_amount(amt_str)
+                            if parsed != 0.0:
+                                amount = parsed
+                                amount_found = True
+            
+            # Если не нашли по индексу, ищем по всем полям
+            if not amount_found:
+                for part in parts:
+                    part_clean = part.strip()
+                    if not part_clean or part_clean in ['', 'nan']:
+                        continue
+                    
+                    # Пропускаем номер счета
+                    if re.match(r'^\d+\/\d+$', part_clean):
+                        continue
+                    if re.match(r'^\d{7,}$', part_clean):
+                        continue
+                    
+                    # Проверяем признаки суммы
+                    is_amount = False
+                    if ',' in part_clean or '.' in part_clean:
+                        is_amount = True
+                    if part_clean.startswith('-'):
+                        is_amount = True
+                    if part_clean.startswith('(') and part_clean.endswith(')'):
+                        is_amount = True
+                    
+                    if is_amount:
+                        parsed = parse_amount(part_clean)
+                        if parsed != 0.0:
+                            amount = parsed
+                            amount_found = True
+                            break
+            
+            if not amount_found or amount == 0.0:
+                continue
+            
+            # КОНТРАГЕНТ
+            counterparty = ''
+            if counterparty_idx < len(parts):
+                counterparty = parts[counterparty_idx].strip()
+                if counterparty in ['', 'nan']:
+                    counterparty = ''
+            
+            if not counterparty:
+                for idx in [3, 2, 8, 9]:
+                    if idx < len(parts):
+                        val = parts[idx].strip()
+                        if val and val not in ['', 'nan', 'CZK', 'EUR', 'USD']:
+                            if len(val) > 1 and not re.match(r'^[\d.,\-]+$', val):
+                                counterparty = val[:200]
+                                break
+            
+            # ОПИСАНИЕ
+            description = ''
+            if description_idx < len(parts):
+                description = parts[description_idx].strip()
+                if description in ['', 'nan']:
+                    description = ''
+            
+            if not description:
+                for idx in [28, 15, 12, 11, 10, 19, 20]:
+                    if idx < len(parts):
+                        val = parts[idx].strip()
+                        if val and val not in ['', 'nan'] and len(val) > 5:
+                            if not re.match(r'^[\d.,\-]+$', val):
+                                if not re.match(r'^\d+\.?\d*$', val):
+                                    description = val[:500]
+                                    break
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty,
+                'Наименование счета': account_name,
+                'Описание': description
+            })
+            
+        except Exception as e:
+            st.write(f"⚠️ Ошибка в строке {line_idx}: {str(e)}")
+            continue
+    
+    return transactions
+
+# ==================== ПАРСЕР CSOB ПО ПОЗИЦИЯМ (БЕЗ ЗАГОЛОВКА) ====================
+
+def parse_csob_by_position(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер CSOB без заголовка - по позициям в строке.
+    """
+    transactions = []
+    
+    try:
+        content = file_content.decode('utf-8')
+    except:
+        try:
+            content = file_content.decode('cp1250')
+        except:
+            content = file_content.decode('latin-1')
+    
+    lines = content.split('\n')
+    lines = [line.strip() for line in lines if line.strip()]
+    
+    if len(lines) < 1:
+        return []
+    
+    st.write("📄 Парсинг без заголовка по позициям")
+    
+    for line_idx, line in enumerate(lines):
         if not line:
             continue
         
@@ -469,91 +657,116 @@ def parse_csob_general(file_content: bytes, account_name: str) -> List[Dict]:
             continue
         
         try:
-            # Номер счета - индекс 0 (пропускаем)
-            account_num = parts[0].strip() if len(parts) > 0 else ''
+            # ДАТА - ищем в строке
+            date = None
+            date_str = ''
+            for part in parts:
+                part_clean = part.strip()
+                if re.match(r'^\d{1,2}\.\d{1,2}\.\d{4}$', part_clean):
+                    date_str = part_clean
+                    break
+                elif re.match(r'^\d{4}-\d{2}-\d{2}$', part_clean):
+                    date_str = part_clean
+                    break
             
-            # Дата - posting date (индекс 4)
-            date_str = parts[4].strip() if len(parts) > 4 else ''
+            if not date_str:
+                # Пробуем взять 5-й элемент (индекс 4)
+                if len(parts) > 4:
+                    date_str = parts[4].strip()
+            
             date = parse_date(date_str)
             if not date:
                 continue
             
-            # Сумма - payment amount (индекс 6)
-            amount_str = parts[6].strip() if len(parts) > 6 else ''
+            # СУММА - ищем в строке
+            amount = 0.0
+            amount_found = False
             
-            # Проверяем, что это действительно сумма
-            if not amount_str:
+            # Сначала проверяем индекс 6 (payment amount)
+            if len(parts) > 6:
+                amt_str = parts[6].strip()
+                if amt_str and amt_str not in ['', 'nan']:
+                    if not re.match(r'^\d+\/\d+$', amt_str):
+                        if not re.match(r'^\d{7,}$', amt_str):
+                            parsed = parse_amount(amt_str)
+                            if parsed != 0.0:
+                                amount = parsed
+                                amount_found = True
+            
+            # Если не нашли, ищем по всем полям
+            if not amount_found:
+                for part in parts:
+                    part_clean = part.strip()
+                    if not part_clean or part_clean in ['', 'nan']:
+                        continue
+                    
+                    if re.match(r'^\d+\/\d+$', part_clean):
+                        continue
+                    if re.match(r'^\d{7,}$', part_clean):
+                        continue
+                    
+                    is_amount = False
+                    if ',' in part_clean or '.' in part_clean:
+                        is_amount = True
+                    if part_clean.startswith('-'):
+                        is_amount = True
+                    if part_clean.startswith('(') and part_clean.endswith(')'):
+                        is_amount = True
+                    
+                    if is_amount:
+                        parsed = parse_amount(part_clean)
+                        if parsed != 0.0:
+                            amount = parsed
+                            amount_found = True
+                            break
+            
+            if not amount_found or amount == 0.0:
                 continue
             
-            # Проверяем, что это не номер счета
-            if re.match(r'^\d{7,}$', amount_str):
-                continue
-            if re.match(r'^\d+\/\d+$', amount_str):
-                continue
-            
-            # Проверяем, что это сумма (содержит запятую, точку, минус или скобки)
-            is_amount = False
-            if ',' in amount_str or '.' in amount_str:
-                is_amount = True
-            elif amount_str.startswith('-'):
-                is_amount = True
-            elif amount_str.startswith('(') and amount_str.endswith(')'):
-                is_amount = True
-            elif re.search(r'[\d,.]+\s*[A-Z]{3}$', amount_str):
-                is_amount = True
-            
-            if not is_amount:
-                continue
-            
-            amount = parse_amount(amount_str)
-            if amount == 0.0:
-                continue
-            
-            # Контрагент - counterparty (индекс 13)
+            # КОНТРАГЕНТ - индекс 13 или 3
             counterparty = ''
             if len(parts) > 13:
                 counterparty = parts[13].strip()
-                if counterparty and counterparty != 'nan':
-                    counterparty = counterparty[:200]
+                if counterparty in ['', 'nan']:
+                    counterparty = ''
             
-            # Если контрагент пустой, пробуем account name (индекс 3)
             if not counterparty and len(parts) > 3:
                 counterparty = parts[3].strip()
-                if counterparty and counterparty != 'nan':
-                    counterparty = counterparty[:200]
+                if counterparty in ['', 'nan']:
+                    counterparty = ''
             
-            # Описание - message to beneficiary and payer (индекс 16)
+            if not counterparty:
+                for idx in [2, 8, 9]:
+                    if idx < len(parts):
+                        val = parts[idx].strip()
+                        if val and val not in ['', 'nan', 'CZK', 'EUR', 'USD']:
+                            if len(val) > 1 and not re.match(r'^[\d.,\-]+$', val):
+                                counterparty = val[:200]
+                                break
+            
+            # ОПИСАНИЕ - индекс 16
             description = ''
             if len(parts) > 16:
                 description = parts[16].strip()
-                if description and description != 'nan':
-                    description = description
+                if description in ['', 'nan']:
+                    description = ''
             
-            # Если нет описания, пробуем purpose of payment (индекс 28)
-            if not description and len(parts) > 28:
-                description = parts[28].strip()
-                if description and description != 'nan':
-                    description = description
-            
-            # Если все еще нет, собираем из других полей
             if not description:
-                desc_parts = []
-                potential_desc_indices = [2, 10, 11, 12, 15, 19, 20, 21, 22, 23, 28, 29]
-                for idx in potential_desc_indices:
+                for idx in [28, 15, 12, 11, 10, 19, 20]:
                     if idx < len(parts):
-                        part = parts[idx].strip()
-                        if part and part != 'nan' and len(part) > 1:
-                            if not re.match(r'^[\d.,\-]+$', part):
-                                desc_parts.append(part)
-                if desc_parts:
-                    description = ' | '.join(desc_parts[:5])
+                        val = parts[idx].strip()
+                        if val and val not in ['', 'nan'] and len(val) > 5:
+                            if not re.match(r'^[\d.,\-]+$', val):
+                                if not re.match(r'^\d+\.?\d*$', val):
+                                    description = val[:500]
+                                    break
             
             transactions.append({
                 'Дата': date,
                 'Сумма': amount,
                 'Контрагент': counterparty,
                 'Наименование счета': account_name,
-                'Описание': description[:500]
+                'Описание': description
             })
             
         except Exception as e:
@@ -678,82 +891,12 @@ def parse_industra_an14(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== ПАРСЕР ДЛЯ Plavas1_Estate_EUR_Industra ====================
 
 def parse_industra_plavas1(file_content: bytes, account_name: str) -> List[Dict]:
-    transactions = []
-    try:
-        content = file_content.decode('utf-8')
-    except:
-        try:
-            content = file_content.decode('cp1250')
-        except:
-            content = file_content.decode('latin-1')
-    lines = content.split('\n')
-    lines = [line.strip() for line in lines if line.strip()]
-    for line in lines:
-        parts = line.split(';')
-        if len(parts) < 3:
-            continue
-        try:
-            date_str = parts[0].strip()
-            if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', date_str):
-                continue
-            date = parse_date(date_str)
-            if not date:
-                continue
-            description = parts[1].strip() if len(parts) > 1 else ''
-            amount_str = parts[2].strip().replace(',', '.') if len(parts) > 2 else ''
-            amount = parse_amount(amount_str)
-            if amount == 0.0:
-                continue
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': '',
-                'Наименование счета': account_name,
-                'Описание': description[:500]
-            })
-        except:
-            continue
-    return transactions
+    return parse_industra_an14(file_content, account_name)
 
 # ==================== ПАРСЕР ДЛЯ KL59_Rev_NB_EUR_Industra ====================
 
 def parse_industra_kl59(file_content: bytes, account_name: str) -> List[Dict]:
-    transactions = []
-    try:
-        content = file_content.decode('utf-8')
-    except:
-        try:
-            content = file_content.decode('cp1250')
-        except:
-            content = file_content.decode('latin-1')
-    lines = content.split('\n')
-    lines = [line.strip() for line in lines if line.strip()]
-    for line in lines:
-        parts = line.split(';')
-        if len(parts) < 3:
-            continue
-        try:
-            date_str = parts[0].strip()
-            if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', date_str):
-                continue
-            date = parse_date(date_str)
-            if not date:
-                continue
-            description = parts[1].strip() if len(parts) > 1 else ''
-            amount_str = parts[2].strip().replace(',', '.') if len(parts) > 2 else ''
-            amount = parse_amount(amount_str)
-            if amount == 0.0:
-                continue
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': '',
-                'Наименование счета': account_name,
-                'Описание': description[:500]
-            })
-        except:
-            continue
-    return transactions
+    return parse_industra_an14(file_content, account_name)
 
 # ==================== ПАРСЕР ДЛЯ Kapital bank_Saida_AZN ====================
 
@@ -796,40 +939,7 @@ def parse_kapital_saida_azn(file_content: bytes, account_name: str) -> List[Dict
 # ==================== ПАРСЕР ДЛЯ Kapital bank_Saida_AZN (бизнес-счет) ====================
 
 def parse_kapital_saida_business(file_content: bytes, account_name: str) -> List[Dict]:
-    transactions = []
-    try:
-        content = file_content.decode('utf-8')
-    except:
-        try:
-            content = file_content.decode('cp1250')
-        except:
-            content = file_content.decode('latin-1')
-    lines = content.split('\n')
-    lines = [line.strip() for line in lines if line.strip()]
-    for line in lines:
-        parts = line.split(';')
-        if len(parts) < 3:
-            continue
-        try:
-            date_str = parts[0].strip()
-            date = parse_date(date_str)
-            if not date:
-                continue
-            description = parts[1].strip() if len(parts) > 1 else ''
-            amount_str = parts[2].strip().replace(',', '.') if len(parts) > 2 else ''
-            amount = parse_amount(amount_str)
-            if amount == 0.0:
-                continue
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': '',
-                'Наименование счета': account_name,
-                'Описание': description[:500]
-            })
-        except:
-            continue
-    return transactions
+    return parse_kapital_saida_azn(file_content, account_name)
 
 # ==================== ПАРСЕР ДЛЯ MASHREQ BANK-AED-NOMIQA ====================
 
@@ -1662,11 +1772,9 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     # Если точного совпадения нет, ищем частичное
     if parser_func is None:
         for acc_name, func in account_parsers.items():
-            # Разбиваем на ключевые слова
             acc_keywords = set(acc_name.lower().split())
             file_keywords = set(account_name.lower().split())
             
-            # Проверяем совпадение ключевых слов
             common = acc_keywords.intersection(file_keywords)
             if len(common) >= len(acc_keywords) * 0.6:
                 parser_func = func
@@ -1712,13 +1820,13 @@ def main():
                     if transactions:
                         all_transactions.extend(transactions)
                         file_stats.append(f"✅ {uploaded_file.name}: {len(transactions)} операций")
-                        # Показываем первую транзакцию для проверки
                         st.write(f"📝 Первая транзакция: {transactions[0]}")
                     else:
                         file_stats.append(f"ℹ️ {uploaded_file.name}: транзакций не найдено")
                         
                 except Exception as e:
                     failed_files.append(f"{uploaded_file.name} (ошибка: {str(e)})")
+                    st.write(f"❌ Ошибка: {str(e)}")
                 
                 progress_bar.progress((i + 1) / len(uploaded_files))
             
