@@ -309,6 +309,11 @@ def parse_bsr_bluor_3(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== ПАРСЕР ДЛЯ KL59_Rev_NB_EUR_BluOR (BluOr Bank) ====================
 
 def parse_kl59_rev_nb_bluor(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер для BluOr Bank формата.
+    Правильно определяет знак суммы на основе типа операции.
+    Исключает служебные строки: Starting balance, Total, Debit (D) без описания, Credit (C) без описания
+    """
     transactions = []
     
     try:
@@ -319,6 +324,7 @@ def parse_kl59_rev_nb_bluor(file_content: bytes, account_name: str) -> List[Dict
         except:
             content = file_content.decode('latin-1')
     
+    # Убираем BOM если есть
     if content.startswith('\ufeff'):
         content = content[1:]
     
@@ -332,6 +338,7 @@ def parse_kl59_rev_nb_bluor(file_content: bytes, account_name: str) -> List[Dict
         if not line:
             continue
         
+        # Парсим CSV с учетом кавычек (разделитель - запятая)
         parts = []
         current = ''
         in_quotes = False
@@ -346,46 +353,61 @@ def parse_kl59_rev_nb_bluor(file_content: bytes, account_name: str) -> List[Dict
                 current += char
         parts.append(current.strip())
         
+        # Убираем кавычки с каждого поля
         parts = [p.strip('"') for p in parts]
         
         if len(parts) < 5:
             continue
         
         try:
+            # ОПИСАНИЕ - поле 3
             description = parts[3].strip() if len(parts) > 3 else ''
             
+            # ПРОПУСКАЕМ СЛУЖЕБНЫЕ СТРОКИ
             if 'Starting balance' in description:
                 continue
             if 'Total' in description:
                 continue
+            # Пропускаем Debit (D) и Credit (C) без конкретного описания
             if description in ['Debit (D)', 'Credit (C)']:
                 continue
             
+            # ДАТА - поле 1
             date_str = parts[1].strip() if len(parts) > 1 else ''
             date = parse_date(date_str)
             if not date:
                 continue
             
+            # СУММА - поле 4
             amount_str = parts[4].strip() if len(parts) > 4 else ''
             amount = parse_amount(amount_str)
             if amount == 0.0:
                 continue
             
+            # ОПРЕДЕЛЯЕМ ТИП ОПЕРАЦИИ
             trans_type = ''
+            
+            # Сначала проверяем поле 6 (тип операции)
             if len(parts) > 6:
                 trans_type = parts[6].strip()
             
+            # Если поле 6 пустое, ищем в описании
             if not trans_type or trans_type == '':
                 if 'Debit' in description or 'D)' in description:
                     trans_type = 'D'
                 elif 'Credit' in description or 'C)' in description:
                     trans_type = 'C'
             
+            # Определяем знак суммы
             if trans_type == 'D':
-                amount = -abs(amount)
+                amount = -abs(amount)  # Дебет - отрицательная сумма (расход)
             elif trans_type == 'C':
-                amount = abs(amount)
+                amount = abs(amount)   # Кредит - положительная сумма (доход)
+            else:
+                # Если тип не определен, оставляем как есть
+                pass
             
+            # КОНТРАГЕНТ
             counterparty = ''
             if 'BluOr' in description or 'Bank' in description:
                 counterparty = 'BluOr Bank'
@@ -396,12 +418,15 @@ def parse_kl59_rev_nb_bluor(file_content: bytes, account_name: str) -> List[Dict
             else:
                 counterparty = description[:200]
             
+            # ОПИСАНИЕ
+            full_description = description
+            
             transactions.append({
                 'Дата': date,
                 'Сумма': amount,
                 'Контрагент': counterparty,
                 'Наименование счета': account_name,
-                'Описание': description[:500]
+                'Описание': full_description[:500]
             })
             
         except Exception as e:
@@ -463,6 +488,10 @@ def parse_jenhor_unelma(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== ПАРСЕР CSOB (ОБЩИЙ ДЛЯ ВСЕХ CSOB СЧЕТОВ) ====================
 
 def parse_csob_general(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Универсальный парсер для CSOB формата:
+    account number;account currency;alias;account name;posting date;value date;payment amount;payment currency;balance;constant code/fee code;variable code/reference;specific code;transaction type;counterparty;counterparty's account;message to beneficiary and payer;identification;sent payment amount;sent payment currency;note;name of 3rd party;3rd party identifier;ultimate debtor;ultimate beneficiary;counterparty's bank;exchange rate;BIC/SWIFT;bank's reference;purpose of payment;message to payer
+    """
     transactions = []
     
     try:
@@ -501,21 +530,25 @@ def parse_csob_general(file_content: bytes, account_name: str) -> List[Dict]:
             continue
         
         try:
+            # ДАТА - posting date (индекс 4)
             date_str = parts[4].strip() if len(parts) > 4 else ''
             date = parse_date(date_str)
             if not date:
                 continue
             
+            # СУММА - payment amount (индекс 6)
             amount_str = parts[6].strip() if len(parts) > 6 else ''
             
             if not amount_str:
                 continue
             
+            # Проверяем, что это не номер счета
             if re.match(r'^\d{7,}$', amount_str):
                 continue
             if re.match(r'^\d+\/\d+$', amount_str):
                 continue
             
+            # Проверяем, что это сумма
             is_amount = False
             if ',' in amount_str or '.' in amount_str:
                 is_amount = True
@@ -533,28 +566,33 @@ def parse_csob_general(file_content: bytes, account_name: str) -> List[Dict]:
             if amount == 0.0:
                 continue
             
+            # КОНТРАГЕНТ - counterparty (индекс 13)
             counterparty = ''
             if len(parts) > 13:
                 counterparty = parts[13].strip()
                 if counterparty and counterparty != 'nan':
                     counterparty = counterparty[:200]
             
+            # Если контрагент пустой, пробуем account name (индекс 3)
             if not counterparty and len(parts) > 3:
                 counterparty = parts[3].strip()
                 if counterparty and counterparty != 'nan':
                     counterparty = counterparty[:200]
             
+            # ОПИСАНИЕ - message to beneficiary and payer (индекс 16)
             description = ''
             if len(parts) > 16:
                 description = parts[16].strip()
                 if description and description != 'nan':
                     description = description
             
+            # Если нет описания, пробуем purpose of payment (индекс 28)
             if not description and len(parts) > 28:
                 description = parts[28].strip()
                 if description and description != 'nan':
                     description = description
             
+            # Если все еще нет, собираем из других полей
             if not description:
                 desc_parts = []
                 potential_desc_indices = [2, 10, 11, 12, 15, 19, 20, 21, 22, 23, 28, 29]
@@ -1037,6 +1075,67 @@ def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict]:
     
     return transactions
 
+# ==================== ПАРСЕР ДЛЯ Budapest EUR-MKB ====================
+
+def parse_mkb_budapest_eur(file_content: bytes, account_name: str) -> List[Dict]:
+    transactions = []
+    try:
+        content = file_content.decode('utf-8')
+    except:
+        try:
+            content = file_content.decode('cp1250')
+        except:
+            content = file_content.decode('latin-1')
+    lines = content.split('\n')
+    lines = [line.strip() for line in lines if line.strip()]
+    start_idx = -1
+    for i, line in enumerate(lines):
+        parts = line.split(';')
+        if parts and re.match(r'^\d+\.?$', parts[0].strip()):
+            start_idx = i
+            break
+    if start_idx == -1:
+        return []
+    for line_idx in range(start_idx, len(lines)):
+        line = lines[line_idx]
+        if not line:
+            continue
+        parts = line.split(';')
+        if len(parts) < 10:
+            continue
+        try:
+            if not re.match(r'^\d+\.?$', parts[0].strip()):
+                continue
+            date_str = parts[1].strip() if len(parts) > 1 else ''
+            date = parse_date(date_str)
+            if not date:
+                continue
+            amount_str = parts[9].strip() if len(parts) > 9 else ''
+            amount = parse_amount(amount_str)
+            if amount == 0.0:
+                continue
+            trans_type = parts[2].strip() if len(parts) > 2 else ''
+            counterparty = parts[4].strip() if len(parts) > 4 else ''
+            if counterparty in ['N/A', 'nan', '']:
+                counterparty = ''
+            description = parts[11].strip() if len(parts) > 11 else ''
+            full_description = f"{trans_type} | {counterparty} | {description}" if counterparty else f"{trans_type} | {description}"
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty[:200],
+                'Наименование счета': account_name,
+                'Описание': full_description[:500]
+            })
+        except:
+            continue
+    return transactions
+
+# ==================== ПАРСЕР ДЛЯ Budapest HUF-MKB ====================
+
+def parse_mkb_budapest_huf(file_content: bytes, account_name: str) -> List[Dict]:
+    return parse_mkb_budapest_eur(file_content, account_name)
+
 # ==================== ПАРСЕР ДЛЯ BUNDA LLC-Pasha Bank - AED-дирхам ====================
 
 def parse_bunda_pasha_aed(file_content: bytes, account_name: str) -> List[Dict]:
@@ -1384,6 +1483,11 @@ def parse_revolut_plavas(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== ПАРСЕР ДЛЯ Koruna UniCredit- CZK (UniCredit Bank) ====================
 
 def parse_unicredit_koruna(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер для UniCredit Bank формата (Koruna UniCredit- CZK, TwoHills_Molly_Unicredit_CZK).
+    Формат: Account Title;Account;Currency;Balance
+    Затем заголовок: From Account;Amount;Currency;Booking Date;Value Date;Bank;Bank Name;Bank Name;Account;Name;Address;Address;Address;Transaction Details;...
+    """
     transactions = []
     
     try:
