@@ -128,6 +128,9 @@ def parse_date(date_str: str) -> str:
     return date_str
 
 def parse_amount(amount_str) -> float:
+    """
+    Парсит сумму из строки с учетом знака.
+    """
     if amount_str is None or pd.isna(amount_str):
         return 0.0
     
@@ -136,8 +139,7 @@ def parse_amount(amount_str) -> float:
     if amount_str in ['', 'nan', '-', 'None', 'null', 'NaN', 'N/A', 'n/a']:
         return 0.0
     
-    amount_str = amount_str.replace(' ', '').replace('\xa0', '')
-    
+    # Проверяем знак
     is_negative = False
     if amount_str.startswith('-'):
         is_negative = True
@@ -146,9 +148,14 @@ def parse_amount(amount_str) -> float:
         is_negative = True
         amount_str = amount_str[1:-1]
     
+    # Удаляем валюту
     amount_str = re.sub(r'\s*[A-Z]{3}\s*$', '', amount_str)
     amount_str = re.sub(r'^\s*[A-Z]{3}\s*', '', amount_str)
     
+    # Удаляем пробелы
+    amount_str = amount_str.replace(' ', '').replace('\xa0', '')
+    
+    # Обрабатываем разделители
     if ',' in amount_str and '.' in amount_str:
         if amount_str.rfind('.') < amount_str.rfind(','):
             amount_str = amount_str.replace('.', '').replace(',', '.')
@@ -161,6 +168,7 @@ def parse_amount(amount_str) -> float:
         else:
             amount_str = amount_str.replace(',', '')
     
+    # Удаляем все нечисловые символы кроме точки и минуса
     amount_str = re.sub(r'[^\d.\-]', '', amount_str)
     
     if not amount_str or amount_str == '.':
@@ -168,6 +176,7 @@ def parse_amount(amount_str) -> float:
     
     try:
         value = float(amount_str)
+        # Возвращаем с правильным знаком
         return -abs(value) if is_negative else abs(value)
     except:
         return 0.0
@@ -175,7 +184,7 @@ def parse_amount(amount_str) -> float:
 def format_amount(amount: float) -> str:
     if amount is None or pd.isna(amount):
         return "0,00"
-    formatted = f"{amount:.2f}".replace('.', ',')
+    formatted = f"{abs(amount):.2f}".replace('.', ',')
     if ',' in formatted:
         integer_part, decimal_part = formatted.split(',')
         integer_part = re.sub(r'(?<=\d)(?=(\d{3})+(?!\d))', ' ', integer_part)
@@ -187,7 +196,7 @@ def format_amount(amount: float) -> str:
 def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """
     Исправленный парсер для CSOB Bank.
-    Правильно определяет колонки с суммами и датами.
+    Правильно обрабатывает все транзакции с учетом знака суммы.
     """
     transactions = []
     
@@ -197,19 +206,10 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
         row_values = [str(v).lower().strip() for v in df.iloc[idx].values if pd.notna(v) and str(v).strip()]
         row_text = ' '.join(row_values)
         
-        # Ищем заголовок по ключевым словам
         if ('account number' in row_text and 'account currency' in row_text) or \
            ('posting date' in row_text and 'payment amount' in row_text):
             header_row = idx
             break
-    
-    if header_row == -1:
-        for idx in range(min(30, len(df))):
-            row_values = [str(v).lower().strip() for v in df.iloc[idx].values if pd.notna(v) and str(v).strip()]
-            row_text = ' '.join(row_values)
-            if 'posting date' in row_text and 'payment amount' in row_text:
-                header_row = idx
-                break
     
     if header_row == -1:
         return []
@@ -227,8 +227,6 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     amount_col_idx = None
     counterparty_col_idx = None
     desc_col_idx = None
-    balance_col_idx = None
-    account_num_col_idx = None
     
     for i, col in enumerate(headers):
         if not col:
@@ -243,58 +241,8 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
             counterparty_col_idx = i
         elif 'message to beneficiary' in col_lower:
             desc_col_idx = i
-        elif 'balance' in col_lower:
-            balance_col_idx = i
-        elif 'account number' in col_lower:
-            account_num_col_idx = i
     
-    # Если не нашли по названиям, пробуем по индексам из структуры файла
-    if date_col_idx is None:
-        # Ищем колонку с датами по формату
-        for idx in range(header_row + 1, min(header_row + 10, len(df))):
-            row = df.iloc[idx]
-            for i, val in enumerate(row):
-                if pd.notna(val) and str(val).strip():
-                    date_str = str(val).strip()
-                    # Проверяем формат даты YYYY-MM-DD
-                    if re.match(r'^\d{4}-\d{2}-\d{2}', date_str):
-                        date_col_idx = i
-                        break
-            if date_col_idx is not None:
-                break
-    
-    if amount_col_idx is None:
-        # Ищем колонку с суммами - она должна содержать числа с десятичной точкой
-        for idx in range(header_row + 1, min(header_row + 10, len(df))):
-            row = df.iloc[idx]
-            for i, val in enumerate(row):
-                if pd.notna(val) and str(val).strip():
-                    amount_str = str(val).strip()
-                    # Пропускаем колонки, которые точно не являются суммами
-                    if i == date_col_idx or i == balance_col_idx or i == account_num_col_idx:
-                        continue
-                    # Проверяем, является ли значение числом с десятичной точкой
-                    if re.match(r'^[\-]?\d+\.\d+$', amount_str.replace(',', '.')):
-                        try:
-                            num = float(amount_str.replace(',', '.'))
-                            if num != 0:
-                                amount_col_idx = i
-                                break
-                        except:
-                            pass
-                    # Проверяем значение в формате с запятой
-                    elif re.match(r'^[\-]?\d+,\d+$', amount_str):
-                        try:
-                            num = float(amount_str.replace(',', '.'))
-                            if num != 0:
-                                amount_col_idx = i
-                                break
-                        except:
-                            pass
-            if amount_col_idx is not None:
-                break
-    
-    # Если все еще не нашли, используем индексы из структуры
+    # Если не нашли по названиям, используем индексы из структуры
     if date_col_idx is None:
         date_col_idx = 4
     if amount_col_idx is None:
@@ -309,12 +257,11 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
         try:
             row = df.iloc[idx]
             
-            # Пропускаем полностью пустые строки
+            # Пропускаем пустые строки
             if all(pd.isna(x) or str(x).strip() == '' for x in row):
                 continue
             
             # Проверяем, что это строка с данными
-            # Первая колонка должна содержать номер счета
             first_val = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ''
             if not first_val or first_val.lower() in ['account number', 'nan', '']:
                 continue
@@ -331,25 +278,25 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if not date:
                 continue
             
-            # Получаем сумму - используем точный индекс payment amount
-            if amount_col_idx < len(row):
-                amount_val = row.iloc[amount_col_idx]
-            else:
+            # Получаем сумму - ОБЯЗАТЕЛЬНО сохраняем знак!
+            if amount_col_idx >= len(row):
                 continue
                 
+            amount_val = row.iloc[amount_col_idx]
             if pd.isna(amount_val):
                 continue
                 
             amount_str = str(amount_val).strip()
-            # Парсим сумму
-            amount = parse_amount(amount_str)
             
-            # Проверяем, что сумма не равна номеру счета
-            # Номер счета имеет формат "215410621/0300" или "2154106210300"
+            # Проверяем, не является ли значение номером счета
             account_num = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ''
             account_num_clean = account_num.replace('/', '').replace(' ', '')
             
-            amount_str_clean = str(amount).replace('.', '').replace(',', '')
+            # Парсим сумму с сохранением знака
+            amount = parse_amount(amount_str)
+            
+            # Проверяем, что это не номер счета
+            amount_str_clean = str(abs(amount)).replace('.', '').replace(',', '')
             if amount_str_clean == account_num_clean:
                 continue
             
@@ -373,9 +320,7 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
             # Если нет описания - собираем из других колонок
             if not description:
                 desc_parts = []
-                # Колонки, которые нужно исключить
-                exclude_cols = [date_col_idx, amount_col_idx, balance_col_idx, 
-                               account_num_col_idx, 0, 1, 2, 3, 8, 9, 10, 11]
+                exclude_cols = [date_col_idx, amount_col_idx, 0, 1, 2, 3, 8, 9, 10, 11, 12]
                 for i, val in enumerate(row):
                     if i in exclude_cols:
                         continue
@@ -388,16 +333,12 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
                     description = ' | '.join(desc_parts)
             
             # Если описание все еще пустое, используем тип транзакции
-            if not description:
-                # Проверяем колонку transaction type (индекс 12)
-                if len(row) > 12:
-                    val = row.iloc[12]
-                    if pd.notna(val) and str(val).strip():
-                        val_str = str(val).strip()
-                        if val_str.lower() in ['debit card transaction', 'payment card fee', 'incoming payment', 
-                                               'incoming instant payment', 'noncash transfer eb', 
-                                               'acc. maintenance, statements and trans.', 'el. banking standing order']:
-                            description = val_str
+            if not description and len(row) > 12:
+                val = row.iloc[12]
+                if pd.notna(val) and str(val).strip():
+                    val_str = str(val).strip()
+                    if val_str:
+                        description = val_str
             
             transactions.append({
                 'Дата': date,
