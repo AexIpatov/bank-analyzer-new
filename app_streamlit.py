@@ -357,12 +357,12 @@ def parse_jenhor_unelma(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return transactions
 
-# ==================== ПАРСЕР CSOB (ОБЩИЙ ДЛЯ ВСЕХ CSOB СЧЕТОВ) ====================
+# ==================== ПАРСЕР CSOB (ОБЩИЙ ДЛЯ ВСЕХ CSOB СЧЕТОВ) - ИСПРАВЛЕННЫЙ ====================
 
 def parse_csob_general(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    Универсальный парсер для CSOB формата:
-    account number;account currency;alias;account name;posting date;value date;payment amount;payment currency;balance;constant code/fee code;variable code/reference;specific code;transaction type;counterparty;counterparty's account;message to beneficiary and payer;identification;sent payment amount;sent payment currency;note;name of 3rd party;3rd party identifier;ultimate debtor;ultimate beneficiary;counterparty's bank;exchange rate;BIC/SWIFT;bank's reference;purpose of payment;message to payer
+    Универсальный парсер для CSOB формата.
+    Правильно определяет сумму, исключая номера счетов.
     """
     transactions = []
     
@@ -402,49 +402,71 @@ def parse_csob_general(file_content: bytes, account_name: str) -> List[Dict]:
             continue
         
         try:
-            # Номер счета - индекс 0 (пропускаем)
-            account_num = parts[0].strip() if len(parts) > 0 else ''
-            
             # Дата - posting date (индекс 4)
             date_str = parts[4].strip() if len(parts) > 4 else ''
             date = parse_date(date_str)
             if not date:
                 continue
             
-            # Сумма - payment amount (индекс 6)
-            amount_str = parts[6].strip() if len(parts) > 6 else ''
+            # Ищем сумму в строке - это должно быть поле с запятой или точкой
+            # и не должно быть длинным числом (номер счета)
+            amount = 0.0
+            amount_found = False
             
-            # Проверяем, что это действительно сумма
-            if not amount_str:
+            # Проверяем все поля в поисках суммы
+            for idx, part in enumerate(parts):
+                part = part.strip()
+                if not part:
+                    continue
+                
+                # Пропускаем поле номера счета (индекс 0)
+                if idx == 0:
+                    continue
+                
+                # Проверяем, что это похоже на сумму
+                # Сумма должна содержать запятую или точку как десятичный разделитель
+                # или начинаться с минуса или скобок
+                is_likely_amount = False
+                
+                # Проверяем признаки суммы
+                if ',' in part or '.' in part:
+                    # Если есть запятая или точка, проверяем что это не номер счета
+                    # Номер счета может содержать '/' но не должен содержать запятую как разделитель тысяч
+                    if '/' not in part:
+                        is_likely_amount = True
+                
+                if part.startswith('-'):
+                    is_likely_amount = True
+                
+                if part.startswith('(') and part.endswith(')'):
+                    is_likely_amount = True
+                
+                # Проверяем, что это не номер счета (длинное число без разделителей)
+                if re.match(r'^\d{7,}$', part):
+                    is_likely_amount = False
+                
+                # Проверяем, что это не номер счета с дробью
+                if re.match(r'^\d+\/\d+$', part):
+                    is_likely_amount = False
+                
+                # Проверяем, что это не номер счета с дефисом
+                if re.match(r'^\d{6,}-\d+$', part):
+                    is_likely_amount = False
+                
+                if is_likely_amount:
+                    # Пробуем распарсить как сумму
+                    parsed_amount = parse_amount(part)
+                    if parsed_amount != 0.0:
+                        amount = parsed_amount
+                        amount_found = True
+                        break
+            
+            if not amount_found:
                 continue
             
-            # Проверяем, что это не номер счета
-            # Номер счета - длинное число без запятой/точки
-            if re.match(r'^\d{7,}$', amount_str):
-                continue
-            if re.match(r'^\d+\/\d+$', amount_str):
-                continue
-            
-            # Проверяем, что это сумма (содержит запятую, точку, минус или скобки)
-            is_amount = False
-            if ',' in amount_str or '.' in amount_str:
-                is_amount = True
-            elif amount_str.startswith('-'):
-                is_amount = True
-            elif amount_str.startswith('(') and amount_str.endswith(')'):
-                is_amount = True
-            elif re.search(r'[\d,.]+\s*[A-Z]{3}$', amount_str):
-                is_amount = True
-            
-            if not is_amount:
-                continue
-            
-            amount = parse_amount(amount_str)
-            if amount == 0.0:
-                continue
-            
-            # Контрагент - counterparty (индекс 13)
+            # Контрагент - пытаемся найти в разных полях
             counterparty = ''
+            # Поле counterparty (индекс 13)
             if len(parts) > 13:
                 counterparty = parts[13].strip()
                 if counterparty and counterparty != 'nan':
