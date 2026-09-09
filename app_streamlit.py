@@ -233,13 +233,14 @@ def parse_unicredit_csv(file_content: bytes, account_name: str) -> List[Dict]:
             if not amount_str:
                 continue
             
-            amount = parse_amount(amount_str)
-            if amount == 0.0:
+            # Проверяем, что это не строка с балансом
+            # В строке с балансом нет даты в 4-й колонке
+            date_str = parts[3].strip() if len(parts) > 3 else ''
+            if not date_str or not re.match(r'^\d{4}-\d{2}-\d{2}', date_str):
                 continue
             
-            # Дата (четвертая колонка, индекс 3)
-            date_str = parts[3].strip() if len(parts) > 3 else ''
-            if not date_str:
+            amount = parse_amount(amount_str)
+            if amount == 0.0:
                 continue
             
             date = parse_date(date_str)
@@ -339,6 +340,16 @@ def parse_unicredit_direct(lines: List[str], account_name: str) -> List[Dict]:
             # Проверяем, что первая колонка - номер счета
             first_val = parts[0].strip()
             if not first_val or not re.match(r'^\d+$', first_val):
+                continue
+            
+            # Пропускаем строку с балансом (нет даты)
+            has_date = False
+            for part in parts:
+                if re.match(r'^\d{4}-\d{2}-\d{2}', part.strip()):
+                    has_date = True
+                    break
+            
+            if not has_date:
                 continue
             
             # Ищем дату в строке
