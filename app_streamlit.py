@@ -886,40 +886,7 @@ def parse_kapital_saida_azn(file_content: bytes, account_name: str) -> List[Dict
 # ==================== ПАРСЕР ДЛЯ Kapital bank_Saida_AZN (бизнес-счет) ====================
 
 def parse_kapital_saida_business(file_content: bytes, account_name: str) -> List[Dict]:
-    transactions = []
-    try:
-        content = file_content.decode('utf-8')
-    except:
-        try:
-            content = file_content.decode('cp1250')
-        except:
-            content = file_content.decode('latin-1')
-    lines = content.split('\n')
-    lines = [line.strip() for line in lines if line.strip()]
-    for line in lines:
-        parts = line.split(';')
-        if len(parts) < 3:
-            continue
-        try:
-            date_str = parts[0].strip()
-            date = parse_date(date_str)
-            if not date:
-                continue
-            description = parts[1].strip() if len(parts) > 1 else ''
-            amount_str = parts[2].strip().replace(',', '.') if len(parts) > 2 else ''
-            amount = parse_amount(amount_str)
-            if amount == 0.0:
-                continue
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': '',
-                'Наименование счета': account_name,
-                'Описание': description[:500]
-            })
-        except:
-            continue
-    return transactions
+    return parse_kapital_saida_azn(file_content, account_name)
 
 # ==================== ПАРСЕР ДЛЯ MASHREQ BANK-AED-NOMIQA ====================
 
@@ -1282,7 +1249,7 @@ def parse_revolut_plavas(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_unicredit_koruna(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    Парсер для UniCredit Bank формата (Koruna UniCredit- CZK).
+    Парсер для UniCredit Bank формата (Koruna UniCredit- CZK, TwoHills_Molly_Unicredit_CZK).
     Формат: Account Title;Account;Currency;Balance
     Затем заголовок: From Account;Amount;Currency;Booking Date;Value Date;Bank;Bank Name;Bank Name;Account;Name;Address;Address;Address;Transaction Details;...
     """
