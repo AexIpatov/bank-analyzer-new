@@ -199,6 +199,10 @@ def parse_regina_alfa(file_content: bytes, account_name: str) -> List[Dict]:
     # Собираем все строки данных, включая многострочные описания
     all_data_rows = []
     current_row = None
+    current_date = None
+    current_code = None
+    current_desc = ''
+    current_amount = None
     
     for idx in range(data_start_idx, len(df)):
         row = df.iloc[idx]
@@ -210,143 +214,124 @@ def parse_regina_alfa(file_content: bytes, account_name: str) -> List[Dict]:
         # Проверяем, является ли строка продолжением описания
         row_str = ' '.join([str(x) for x in row.values if pd.notna(x)])
         
-        # Проверяем, что это не подпись и не итоговая строка
-        if 'подпись' in row_str.lower() or 'Уполномоченное лицо' in row_str:
-            break
-        
         # Проверяем, содержит ли строка дату (начало новой записи)
         has_date = False
-        for val in row.values:
+        date_val = None
+        amount_val = None
+        
+        # Проверяем первую колонку на наличие даты
+        if len(row) > 0:
+            val = row.iloc[0]
             if pd.notna(val):
                 val_str = str(val).strip()
                 if re.match(r'^\d{4}-\d{2}-\d{2}', val_str) or re.match(r'^\d{2}\.\d{2}\.\d{4}', val_str):
                     has_date = True
-                    break
+                    date_val = val_str
         
-        if has_date and current_row is not None:
-            all_data_rows.append(current_row)
-            current_row = row.values.tolist()
-        elif current_row is None:
-            current_row = row.values.tolist()
-        else:
-            # Это продолжение описания - объединяем
-            for i, val in enumerate(row.values):
-                if pd.notna(val) and val != '':
-                    if i < len(current_row):
-                        if pd.isna(current_row[i]) or current_row[i] == '':
-                            current_row[i] = val
-                        else:
-                            current_row[i] = str(current_row[i]) + ' ' + str(val)
-                    else:
-                        current_row.append(val)
-    
-    if current_row is not None:
-        all_data_rows.append(current_row)
-    
-    if not all_data_rows:
-        return []
-    
-    # Определяем индексы колонок
-    date_idx = 0
-    code_idx = 1
-    desc_idx = 2
-    amount_idx = 10
-    
-    # Парсим данные
-    for row_data in all_data_rows:
-        try:
-            # ДАТА
-            date_str = ''
-            if date_idx < len(row_data):
-                val = row_data[date_idx]
-                if pd.notna(val):
-                    date_str = str(val).strip()
-                    if date_str == 'nan':
-                        date_str = ''
-            
-            if not date_str:
-                continue
-            
-            # Извлекаем дату из строки (может быть "2026-08-04 00:00:00" или "26.08.2026")
-            date_match = re.search(r'(\d{4}-\d{2}-\d{2})', date_str)
-            if date_match:
-                date_str = date_match.group(1)
-            else:
-                date_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', date_str)
-                if date_match:
-                    date_str = date_match.group(1)
-            
-            date = parse_date(date_str)
-            if not date:
-                continue
-            
-            # СУММА
-            amount = 0.0
-            amount_found = False
-            
-            # Ищем сумму в последних колонках
-            for col_idx in range(len(row_data) - 1, max(0, len(row_data) - 4), -1):
-                val = row_data[col_idx]
+        # Проверяем последние колонки на наличие суммы
+        for col_idx in range(len(row) - 1, max(0, len(row) - 3), -1):
+            if col_idx < len(row):
+                val = row.iloc[col_idx]
                 if pd.notna(val) and val != '':
                     val_str = str(val).strip()
                     if val_str and val_str != 'nan':
                         # Очищаем от пробелов и валюты
-                        val_str = re.sub(r'\s*RUR\s*$', '', val_str)
-                        parsed = parse_amount(val_str)
-                        if parsed != 0.0:
-                            amount = parsed
-                            amount_found = True
+                        val_str_clean = re.sub(r'\s*RUR\s*$', '', val_str)
+                        if re.search(r'[\d,.]', val_str_clean):
+                            amount_val = val_str
                             break
+        
+        if has_date:
+            # Сохраняем предыдущую запись
+            if current_date is not None and current_amount is not None:
+                transactions.append({
+                    'Дата': parse_date(str(current_date)),
+                    'Сумма': parse_amount(str(current_amount)),
+                    'Контрагент': extract_counterparty(current_desc),
+                    'Наименование счета': account_name,
+                    'Описание': current_desc[:500]
+                })
             
-            if not amount_found:
-                continue
+            # Начинаем новую запись
+            current_date = date_val
+            current_desc = ''
+            current_amount = amount_val
             
-            # ОПИСАНИЕ
-            description = ''
-            if desc_idx < len(row_data):
-                val = row_data[desc_idx]
-                if pd.notna(val):
-                    description = str(val).strip()
-                    if description == 'nan':
-                        description = ''
+            # Добавляем описание из текущей строки
+            desc_parts = []
+            for col_idx in range(1, len(row)):
+                val = row.iloc[col_idx]
+                if pd.notna(val) and val != '':
+                    val_str = str(val).strip()
+                    if val_str and val_str != 'nan' and val_str != current_date and val_str != current_amount:
+                        # Пропускаем колонки с суммой
+                        if not re.search(r'[\d,.]\s*RUR', val_str):
+                            desc_parts.append(val_str)
             
-            # КОНТРАГЕНТ
-            counterparty = ''
-            if description:
-                # Ищем контрагента в описании
-                # Перевод через СБП
-                match = re.search(r'от\s+([+\d\s]+)', description)
-                if match:
-                    counterparty = match.group(1).strip()
-                else:
-                    match = re.search(r'на\s+([+\d\s]+)', description)
-                    if match:
-                        counterparty = match.group(1).strip()
-                    else:
-                        # Ищем получателя платежа
-                        match = re.search(r'Пляцевая\s+Регина', description)
-                        if match:
-                            counterparty = 'Пляцевая Регина Николаевна'
-                        else:
-                            # Операция по карте
-                            match = re.search(r'место совершения операции:\s*([^\\]+)', description)
-                            if match:
-                                counterparty = match.group(1).strip()
-                            else:
-                                counterparty = description[:200]
+            if desc_parts:
+                current_desc = ' '.join(desc_parts)
+        else:
+            # Это продолжение описания
+            if current_date is not None:
+                desc_parts = []
+                for val in row.values:
+                    if pd.notna(val) and val != '':
+                        val_str = str(val).strip()
+                        if val_str and val_str != 'nan':
+                            desc_parts.append(val_str)
+                if desc_parts:
+                    current_desc += ' ' + ' '.join(desc_parts)
             
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': counterparty[:200],
-                'Наименование счета': account_name,
-                'Описание': description[:500]
-            })
-            
-        except Exception as e:
-            continue
+            # Если нашли сумму в строке без даты (как на второй странице)
+            if amount_val is not None and current_amount is None:
+                current_amount = amount_val
+    
+    # Сохраняем последнюю запись
+    if current_date is not None and current_amount is not None:
+        transactions.append({
+            'Дата': parse_date(str(current_date)),
+            'Сумма': parse_amount(str(current_amount)),
+            'Контрагент': extract_counterparty(current_desc),
+            'Наименование счета': account_name,
+            'Описание': current_desc[:500]
+        })
     
     return transactions
+
+def extract_counterparty(description: str) -> str:
+    """Извлекает контрагента из описания"""
+    if not description:
+        return ''
+    
+    # Перевод через СБП - ищем отправителя/получателя
+    match = re.search(r'от\s+([+\d\s]+)', description)
+    if match:
+        return match.group(1).strip()
+    
+    match = re.search(r'на\s+([+\d\s]+)', description)
+    if match:
+        return match.group(1).strip()
+    
+    # Пляцевая Регина
+    if 'Пляцевая' in description:
+        return 'Пляцевая Регина Николаевна'
+    
+    # Операция по карте - ищем место совершения
+    match = re.search(r'место совершения операции:\s*([^\\]+)', description)
+    if match:
+        place = match.group(1).strip()
+        # Извлекаем город или название
+        if '\\' in place:
+            parts = place.split('\\')
+            if len(parts) >= 2:
+                return parts[1] if parts[1] else parts[0]
+        return place[:50]
+    
+    # Перевод денежных средств
+    if 'Перевод денежных средств' in description:
+        return 'Перевод'
+    
+    return description[:50]
 
 # ==================== ПАРСЕР ДЛЯ Tinkoff RUB ====================
 
