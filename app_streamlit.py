@@ -304,40 +304,7 @@ def parse_bsr_bluor_2(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== ПАРСЕР ДЛЯ BSR_Estate_EUR_BluOr_3 ====================
 
 def parse_bsr_bluor_3(file_content: bytes, account_name: str) -> List[Dict]:
-    transactions = []
-    try:
-        content = file_content.decode('utf-8')
-    except:
-        try:
-            content = file_content.decode('cp1250')
-        except:
-            content = file_content.decode('latin-1')
-    lines = content.split('\n')
-    lines = [line.strip() for line in lines if line.strip()]
-    for line in lines:
-        parts = line.split(';')
-        if len(parts) < 3:
-            continue
-        try:
-            date_str = parts[0].strip()
-            date = parse_date(date_str)
-            if not date:
-                continue
-            amount_str = parts[1].strip().replace(',', '.')
-            amount = parse_amount(amount_str)
-            if amount == 0.0:
-                continue
-            description = ' '.join(parts[2:]) if len(parts) > 2 else ''
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': '',
-                'Наименование счета': account_name,
-                'Описание': description[:500]
-            })
-        except:
-            continue
-    return transactions
+    return parse_bsr_bluor_2(file_content, account_name)
 
 # ==================== ПАРСЕР ДЛЯ KL59_Rev_NB_EUR_BluOR (BluOr Bank) ====================
 
@@ -768,82 +735,12 @@ def parse_industra_an14(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== ПАРСЕР ДЛЯ Plavas1_Estate_EUR_Industra ====================
 
 def parse_industra_plavas1(file_content: bytes, account_name: str) -> List[Dict]:
-    transactions = []
-    try:
-        content = file_content.decode('utf-8')
-    except:
-        try:
-            content = file_content.decode('cp1250')
-        except:
-            content = file_content.decode('latin-1')
-    lines = content.split('\n')
-    lines = [line.strip() for line in lines if line.strip()]
-    for line in lines:
-        parts = line.split(';')
-        if len(parts) < 3:
-            continue
-        try:
-            date_str = parts[0].strip()
-            if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', date_str):
-                continue
-            date = parse_date(date_str)
-            if not date:
-                continue
-            description = parts[1].strip() if len(parts) > 1 else ''
-            amount_str = parts[2].strip().replace(',', '.') if len(parts) > 2 else ''
-            amount = parse_amount(amount_str)
-            if amount == 0.0:
-                continue
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': '',
-                'Наименование счета': account_name,
-                'Описание': description[:500]
-            })
-        except:
-            continue
-    return transactions
+    return parse_industra_an14(file_content, account_name)
 
 # ==================== ПАРСЕР ДЛЯ KL59_Rev_NB_EUR_Industra ====================
 
 def parse_industra_kl59(file_content: bytes, account_name: str) -> List[Dict]:
-    transactions = []
-    try:
-        content = file_content.decode('utf-8')
-    except:
-        try:
-            content = file_content.decode('cp1250')
-        except:
-            content = file_content.decode('latin-1')
-    lines = content.split('\n')
-    lines = [line.strip() for line in lines if line.strip()]
-    for line in lines:
-        parts = line.split(';')
-        if len(parts) < 3:
-            continue
-        try:
-            date_str = parts[0].strip()
-            if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', date_str):
-                continue
-            date = parse_date(date_str)
-            if not date:
-                continue
-            description = parts[1].strip() if len(parts) > 1 else ''
-            amount_str = parts[2].strip().replace(',', '.') if len(parts) > 2 else ''
-            amount = parse_amount(amount_str)
-            if amount == 0.0:
-                continue
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': '',
-                'Наименование счета': account_name,
-                'Описание': description[:500]
-            })
-        except:
-            continue
-    return transactions
+    return parse_industra_an14(file_content, account_name)
 
 # ==================== ПАРСЕР ДЛЯ Kapital bank_Saida_AZN ====================
 
@@ -1078,7 +975,162 @@ def parse_bunda_pasha_aed(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== ПАРСЕР ДЛЯ BUNDA LLC-Pasha Bank-AZN ====================
 
 def parse_bunda_pasha_azn(file_content: bytes, account_name: str) -> List[Dict]:
-    return parse_bunda_pasha_aed(file_content, account_name)
+    """
+    Парсер для Pasha Bank (Азербайджан) формата AZN.
+    Формат XLSX с заголовками: Əməliyyat tarixi, İcra tarixi, Ödəyən/Benefisiar, Təyinat, İstinad No, Код, Mədaxil (доход), Məxaric (расход), Balans
+    """
+    transactions = []
+    
+    try:
+        # Пробуем прочитать как Excel файл
+        df = pd.read_excel(BytesIO(file_content), sheet_name='Statement', header=None)
+    except Exception as e:
+        try:
+            # Пробуем другие варианты
+            df = pd.read_excel(BytesIO(file_content), header=None)
+        except Exception as e2:
+            return []
+    
+    if df.empty:
+        return []
+    
+    # Ищем строку с заголовками
+    header_row_idx = -1
+    for idx, row in df.iterrows():
+        if idx < 20:
+            row_str = ' '.join([str(x) for x in row.values if pd.notna(x)])
+            if 'Əməliyyat tarixi' in row_str or 'Əməliyyat' in row_str:
+                header_row_idx = idx
+                break
+    
+    if header_row_idx == -1:
+        return []
+    
+    # Определяем индексы колонок
+    header_row = df.iloc[header_row_idx]
+    col_indices = {}
+    
+    for idx, val in enumerate(header_row.values):
+        if pd.isna(val):
+            continue
+        val_str = str(val).strip()
+        if 'Əməliyyat tarixi' in val_str or 'Tarix' in val_str:
+            col_indices['date'] = idx
+        elif 'İcra tarixi' in val_str:
+            col_indices['exec_date'] = idx
+        elif 'Ödəyən' in val_str or 'Benefisiar' in val_str:
+            col_indices['payee'] = idx
+        elif 'Təyinat' in val_str:
+            col_indices['purpose'] = idx
+        elif 'Mədaxil' in val_str:
+            col_indices['income'] = idx
+        elif 'Məxaric' in val_str:
+            col_indices['expense'] = idx
+        elif 'Balans' in val_str:
+            col_indices['balance'] = idx
+    
+    # Если не нашли колонки, пробуем по позициям
+    if 'date' not in col_indices:
+        col_indices['date'] = 0
+    if 'income' not in col_indices:
+        col_indices['income'] = 6
+    if 'expense' not in col_indices:
+        col_indices['expense'] = 7
+    
+    # Парсим данные
+    for idx in range(header_row_idx + 1, len(df)):
+        row = df.iloc[idx]
+        
+        # Проверяем, что строка не пустая
+        row_values = [x for x in row.values if pd.notna(x)]
+        if not row_values:
+            continue
+        
+        # Проверяем, что это не итоговая строка
+        row_str = ' '.join([str(x) for x in row.values if pd.notna(x)])
+        if 'DÖVRÜN SONUNA BALANS' in row_str or 'MÖVCUD BALANS' in row_str:
+            continue
+        
+        try:
+            # ДАТА
+            date_str = ''
+            if 'date' in col_indices and col_indices['date'] < len(row):
+                date_str = str(row.iloc[col_indices['date']]).strip()
+                if date_str == 'nan':
+                    date_str = ''
+            
+            if not date_str:
+                continue
+            
+            date = parse_date(date_str)
+            if not date:
+                continue
+            
+            # СУММА
+            amount = 0.0
+            amount_found = False
+            
+            # Проверяем доход (Mədaxil)
+            if 'income' in col_indices and col_indices['income'] < len(row):
+                income_val = row.iloc[col_indices['income']]
+                if pd.notna(income_val) and income_val != '':
+                    income_str = str(income_val).strip().replace(',', '.').replace(' ', '')
+                    if income_str and income_str != 'nan':
+                        parsed = parse_amount(income_str)
+                        if parsed != 0.0:
+                            amount = parsed
+                            amount_found = True
+            
+            # Проверяем расход (Məxaric)
+            if not amount_found and 'expense' in col_indices and col_indices['expense'] < len(row):
+                expense_val = row.iloc[col_indices['expense']]
+                if pd.notna(expense_val) and expense_val != '':
+                    expense_str = str(expense_val).strip().replace(',', '.').replace(' ', '')
+                    if expense_str and expense_str != 'nan':
+                        parsed = parse_amount(expense_str)
+                        if parsed != 0.0:
+                            amount = -abs(parsed)  # Расход - отрицательная сумма
+                            amount_found = True
+            
+            if not amount_found:
+                continue
+            
+            # КОНТРАГЕНТ
+            counterparty = ''
+            if 'payee' in col_indices and col_indices['payee'] < len(row):
+                counterparty = str(row.iloc[col_indices['payee']]).strip()
+                if counterparty == 'nan':
+                    counterparty = ''
+            
+            # ОПИСАНИЕ
+            description = ''
+            if 'purpose' in col_indices and col_indices['purpose'] < len(row):
+                description = str(row.iloc[col_indices['purpose']]).strip()
+                if description == 'nan':
+                    description = ''
+            
+            # Если описание пустое, пробуем другие поля
+            if not description:
+                desc_fields = ['purpose', 'payee']
+                for field in desc_fields:
+                    if field in col_indices and col_indices[field] < len(row):
+                        val = str(row.iloc[col_indices[field]]).strip()
+                        if val and val != 'nan' and len(val) > 1:
+                            description = val
+                            break
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty[:200],
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+            
+        except Exception as e:
+            continue
+    
+    return transactions
 
 # ==================== ПАРСЕР ДЛЯ Paysera Baltic Solutions EUR ====================
 
