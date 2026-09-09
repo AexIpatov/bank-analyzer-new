@@ -51,7 +51,8 @@ def clean_account_name(filename: str) -> str:
     name = re.sub(r'LV\d{2}[A-Z]{4}\d{13,}', '', name)
     name = re.sub(r'[_\-]', ' ', name).strip()
     name = re.sub(r'\s+', ' ', name)
-    return name if name else 'Неизвестный счет'
+    name = re.sub(r'\d{1,2}-\d{1,2}$', '', name)
+    return name.strip() if name else 'Неизвестный счет'
 
 def parse_date(date_str: str) -> str:
     if not date_str or pd.isna(date_str):
@@ -299,12 +300,78 @@ def parse_bsr_bluor_2(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== ПАРСЕР ДЛЯ BSR_Estate_EUR_BluOr_3 ====================
 
 def parse_bsr_bluor_3(file_content: bytes, account_name: str) -> List[Dict]:
-    return parse_bsr_bluor_2(file_content, account_name)
+    transactions = []
+    try:
+        content = file_content.decode('utf-8')
+    except:
+        try:
+            content = file_content.decode('cp1250')
+        except:
+            content = file_content.decode('latin-1')
+    lines = content.split('\n')
+    lines = [line.strip() for line in lines if line.strip()]
+    for line in lines:
+        parts = line.split(';')
+        if len(parts) < 3:
+            continue
+        try:
+            date_str = parts[0].strip()
+            date = parse_date(date_str)
+            if not date:
+                continue
+            amount_str = parts[1].strip().replace(',', '.')
+            amount = parse_amount(amount_str)
+            if amount == 0.0:
+                continue
+            description = ' '.join(parts[2:]) if len(parts) > 2 else ''
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': '',
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+        except:
+            continue
+    return transactions
 
 # ==================== ПАРСЕР ДЛЯ KL59_Rev_NB_EUR_BluOR ====================
 
 def parse_kl59_rev_nb_bluor(file_content: bytes, account_name: str) -> List[Dict]:
-    return parse_bsr_bluor_2(file_content, account_name)
+    transactions = []
+    try:
+        content = file_content.decode('utf-8')
+    except:
+        try:
+            content = file_content.decode('cp1250')
+        except:
+            content = file_content.decode('latin-1')
+    lines = content.split('\n')
+    lines = [line.strip() for line in lines if line.strip()]
+    for line in lines:
+        parts = line.split(';')
+        if len(parts) < 3:
+            continue
+        try:
+            date_str = parts[0].strip()
+            date = parse_date(date_str)
+            if not date:
+                continue
+            amount_str = parts[1].strip().replace(',', '.')
+            amount = parse_amount(amount_str)
+            if amount == 0.0:
+                continue
+            description = ' '.join(parts[2:]) if len(parts) > 2 else ''
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': '',
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+        except:
+            continue
+    return transactions
 
 # ==================== ПАРСЕР ДЛЯ JenHor_Unelma_CZK_CSAS ====================
 
@@ -357,12 +424,12 @@ def parse_jenhor_unelma(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return transactions
 
-# ==================== ПАРСЕР CSOB (ОБЩИЙ ДЛЯ ВСЕХ CSOB СЧЕТОВ) - ИСПРАВЛЕННЫЙ ====================
+# ==================== ПАРСЕР CSOB (ОБЩИЙ ДЛЯ ВСЕХ CSOB СЧЕТОВ) ====================
 
 def parse_csob_general(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    Универсальный парсер для CSOB формата.
-    Правильно определяет сумму, исключая номера счетов.
+    Универсальный парсер для CSOB формата:
+    account number;account currency;alias;account name;posting date;value date;payment amount;payment currency;balance;constant code/fee code;variable code/reference;specific code;transaction type;counterparty;counterparty's account;message to beneficiary and payer;identification;sent payment amount;sent payment currency;note;name of 3rd party;3rd party identifier;ultimate debtor;ultimate beneficiary;counterparty's bank;exchange rate;BIC/SWIFT;bank's reference;purpose of payment;message to payer
     """
     transactions = []
     
@@ -402,71 +469,48 @@ def parse_csob_general(file_content: bytes, account_name: str) -> List[Dict]:
             continue
         
         try:
+            # Номер счета - индекс 0 (пропускаем)
+            account_num = parts[0].strip() if len(parts) > 0 else ''
+            
             # Дата - posting date (индекс 4)
             date_str = parts[4].strip() if len(parts) > 4 else ''
             date = parse_date(date_str)
             if not date:
                 continue
             
-            # Ищем сумму в строке - это должно быть поле с запятой или точкой
-            # и не должно быть длинным числом (номер счета)
-            amount = 0.0
-            amount_found = False
+            # Сумма - payment amount (индекс 6)
+            amount_str = parts[6].strip() if len(parts) > 6 else ''
             
-            # Проверяем все поля в поисках суммы
-            for idx, part in enumerate(parts):
-                part = part.strip()
-                if not part:
-                    continue
-                
-                # Пропускаем поле номера счета (индекс 0)
-                if idx == 0:
-                    continue
-                
-                # Проверяем, что это похоже на сумму
-                # Сумма должна содержать запятую или точку как десятичный разделитель
-                # или начинаться с минуса или скобок
-                is_likely_amount = False
-                
-                # Проверяем признаки суммы
-                if ',' in part or '.' in part:
-                    # Если есть запятая или точка, проверяем что это не номер счета
-                    # Номер счета может содержать '/' но не должен содержать запятую как разделитель тысяч
-                    if '/' not in part:
-                        is_likely_amount = True
-                
-                if part.startswith('-'):
-                    is_likely_amount = True
-                
-                if part.startswith('(') and part.endswith(')'):
-                    is_likely_amount = True
-                
-                # Проверяем, что это не номер счета (длинное число без разделителей)
-                if re.match(r'^\d{7,}$', part):
-                    is_likely_amount = False
-                
-                # Проверяем, что это не номер счета с дробью
-                if re.match(r'^\d+\/\d+$', part):
-                    is_likely_amount = False
-                
-                # Проверяем, что это не номер счета с дефисом
-                if re.match(r'^\d{6,}-\d+$', part):
-                    is_likely_amount = False
-                
-                if is_likely_amount:
-                    # Пробуем распарсить как сумму
-                    parsed_amount = parse_amount(part)
-                    if parsed_amount != 0.0:
-                        amount = parsed_amount
-                        amount_found = True
-                        break
-            
-            if not amount_found:
+            # Проверяем, что это действительно сумма
+            if not amount_str:
                 continue
             
-            # Контрагент - пытаемся найти в разных полях
+            # Проверяем, что это не номер счета
+            if re.match(r'^\d{7,}$', amount_str):
+                continue
+            if re.match(r'^\d+\/\d+$', amount_str):
+                continue
+            
+            # Проверяем, что это сумма (содержит запятую, точку, минус или скобки)
+            is_amount = False
+            if ',' in amount_str or '.' in amount_str:
+                is_amount = True
+            elif amount_str.startswith('-'):
+                is_amount = True
+            elif amount_str.startswith('(') and amount_str.endswith(')'):
+                is_amount = True
+            elif re.search(r'[\d,.]+\s*[A-Z]{3}$', amount_str):
+                is_amount = True
+            
+            if not is_amount:
+                continue
+            
+            amount = parse_amount(amount_str)
+            if amount == 0.0:
+                continue
+            
+            # Контрагент - counterparty (индекс 13)
             counterparty = ''
-            # Поле counterparty (индекс 13)
             if len(parts) > 13:
                 counterparty = parts[13].strip()
                 if counterparty and counterparty != 'nan':
@@ -634,12 +678,82 @@ def parse_industra_an14(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== ПАРСЕР ДЛЯ Plavas1_Estate_EUR_Industra ====================
 
 def parse_industra_plavas1(file_content: bytes, account_name: str) -> List[Dict]:
-    return parse_industra_an14(file_content, account_name)
+    transactions = []
+    try:
+        content = file_content.decode('utf-8')
+    except:
+        try:
+            content = file_content.decode('cp1250')
+        except:
+            content = file_content.decode('latin-1')
+    lines = content.split('\n')
+    lines = [line.strip() for line in lines if line.strip()]
+    for line in lines:
+        parts = line.split(';')
+        if len(parts) < 3:
+            continue
+        try:
+            date_str = parts[0].strip()
+            if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', date_str):
+                continue
+            date = parse_date(date_str)
+            if not date:
+                continue
+            description = parts[1].strip() if len(parts) > 1 else ''
+            amount_str = parts[2].strip().replace(',', '.') if len(parts) > 2 else ''
+            amount = parse_amount(amount_str)
+            if amount == 0.0:
+                continue
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': '',
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+        except:
+            continue
+    return transactions
 
 # ==================== ПАРСЕР ДЛЯ KL59_Rev_NB_EUR_Industra ====================
 
 def parse_industra_kl59(file_content: bytes, account_name: str) -> List[Dict]:
-    return parse_industra_an14(file_content, account_name)
+    transactions = []
+    try:
+        content = file_content.decode('utf-8')
+    except:
+        try:
+            content = file_content.decode('cp1250')
+        except:
+            content = file_content.decode('latin-1')
+    lines = content.split('\n')
+    lines = [line.strip() for line in lines if line.strip()]
+    for line in lines:
+        parts = line.split(';')
+        if len(parts) < 3:
+            continue
+        try:
+            date_str = parts[0].strip()
+            if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', date_str):
+                continue
+            date = parse_date(date_str)
+            if not date:
+                continue
+            description = parts[1].strip() if len(parts) > 1 else ''
+            amount_str = parts[2].strip().replace(',', '.') if len(parts) > 2 else ''
+            amount = parse_amount(amount_str)
+            if amount == 0.0:
+                continue
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': '',
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+        except:
+            continue
+    return transactions
 
 # ==================== ПАРСЕР ДЛЯ Kapital bank_Saida_AZN ====================
 
@@ -682,7 +796,40 @@ def parse_kapital_saida_azn(file_content: bytes, account_name: str) -> List[Dict
 # ==================== ПАРСЕР ДЛЯ Kapital bank_Saida_AZN (бизнес-счет) ====================
 
 def parse_kapital_saida_business(file_content: bytes, account_name: str) -> List[Dict]:
-    return parse_kapital_saida_azn(file_content, account_name)
+    transactions = []
+    try:
+        content = file_content.decode('utf-8')
+    except:
+        try:
+            content = file_content.decode('cp1250')
+        except:
+            content = file_content.decode('latin-1')
+    lines = content.split('\n')
+    lines = [line.strip() for line in lines if line.strip()]
+    for line in lines:
+        parts = line.split(';')
+        if len(parts) < 3:
+            continue
+        try:
+            date_str = parts[0].strip()
+            date = parse_date(date_str)
+            if not date:
+                continue
+            description = parts[1].strip() if len(parts) > 1 else ''
+            amount_str = parts[2].strip().replace(',', '.') if len(parts) > 2 else ''
+            amount = parse_amount(amount_str)
+            if amount == 0.0:
+                continue
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': '',
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+        except:
+            continue
+    return transactions
 
 # ==================== ПАРСЕР ДЛЯ MASHREQ BANK-AED-NOMIQA ====================
 
@@ -1459,56 +1606,75 @@ def parse_unknown(file_content: bytes, account_name: str) -> List[Dict]:
 def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     account_name = clean_account_name(filename)
     
+    # Выводим для отладки
+    st.write(f"🔍 Имя счета после очистки: '{account_name}'")
+    
     account_parsers = {
-        'Regina Alfa-bank_NOMIQA_RUB': parse_regina_alfa,
+        'Regina Alfa bank NOMIQA RUB': parse_regina_alfa,
         'Tinkoff RUB': parse_tinkoff,
-        'BSR_Estate_EUR_BluOr_2': parse_bsr_bluor_2,
-        'BSR_Estate_EUR_BluOr_3': parse_bsr_bluor_3,
-        'KL59_Rev_NB_EUR_BluOR': parse_kl59_rev_nb_bluor,
-        'JenHor_Unelma_CZK_CSAS': parse_jenhor_unelma,
+        'BSR Estate EUR BluOr 2': parse_bsr_bluor_2,
+        'BSR Estate EUR BluOr 3': parse_bsr_bluor_3,
+        'KL59 Rev NB EUR BluOR': parse_kl59_rev_nb_bluor,
+        'JenHor Unelma CZK CSAS': parse_jenhor_unelma,
         'DŽIBIK Main CSOB CZK': parse_csob_dzibik,
-        'JENISOV - HORSKA_CSOB_ CZK': parse_csob_jenisov_czk,
-        'JENISOV - HORSKA S.R EUR': parse_csob_jenisov_eur,
-        'RR_Strojka_CZK_CSOB': parse_csob_rr_strojka_czk,
-        'RR_Strojka_EUR_CSOB': parse_csob_rr_strojka_eur,
-        'Koruna_Strojka_CZK_CSOB': parse_csob_koruna_strojka_czk,
-        'Koruna_Strojka_EUR_CSOB': parse_csob_koruna_strojka_eur,
-        'Stalkin_ML2_CZK_FIO': parse_fio_stalkin,
-        'AN14_Estate_EUR_Industra': parse_industra_an14,
-        'Plavas1_Estate_EUR_Industra': parse_industra_plavas1,
-        'KL59_Rev_NB_EUR_Industra': parse_industra_kl59,
-        'Kapital bank_Saida_AZN': parse_kapital_saida_azn,
-        'Kapital bank_Saida_AZN (бизнес-счет)': parse_kapital_saida_business,
-        'MASHREQ BANK-AED-NOMIQA': parse_mashreq,
-        'Budapest EUR-MKB': parse_mkb_budapest_eur,
-        'Budapest HUF-MKB': parse_mkb_budapest_huf,
-        'Saida_N26': parse_saida_n26,
-        'BUNDA LLC-Pasha Bank - AED-дирхам': parse_bunda_pasha_aed,
-        'BUNDA LLC-Pasha Bank-AZN': parse_bunda_pasha_azn,
+        'JENISOV HORSKA CSOB CZK': parse_csob_jenisov_czk,
+        'JENISOV HORSKA S R EUR': parse_csob_jenisov_eur,
+        'RR Strojka CZK CSOB': parse_csob_rr_strojka_czk,
+        'RR Strojka EUR CSOB': parse_csob_rr_strojka_eur,
+        'Koruna Strojka CZK CSOB': parse_csob_koruna_strojka_czk,
+        'Koruna Strojka EUR CSOB': parse_csob_koruna_strojka_eur,
+        'Stalkin ML2 CZK FIO': parse_fio_stalkin,
+        'AN14 Estate EUR Industra': parse_industra_an14,
+        'Plavas1 Estate EUR Industra': parse_industra_plavas1,
+        'KL59 Rev NB EUR Industra': parse_industra_kl59,
+        'Kapital bank Saida AZN': parse_kapital_saida_azn,
+        'Kapital bank Saida AZN бизнес счет': parse_kapital_saida_business,
+        'MASHREQ BANK AED NOMIQA': parse_mashreq,
+        'Budapest EUR MKB': parse_mkb_budapest_eur,
+        'Budapest HUF MKB': parse_mkb_budapest_huf,
+        'Saida N26': parse_saida_n26,
+        'BUNDA LLC Pasha Bank AED дирхам': parse_bunda_pasha_aed,
+        'BUNDA LLC Pasha Bank AZN': parse_bunda_pasha_azn,
         'Paysera Baltic Solutions EUR': parse_paysera_baltic,
         'Paysera Sveciy Namai Lithuania EUR': parse_paysera_sveciy,
-        'Paysera-BS PROPERTY, SIA': parse_paysera_property,
-        'Paysera-BS RERUM, SIA': parse_paysera_rerum,
+        'Paysera BS PROPERTY SIA': parse_paysera_property,
+        'Paysera BS RERUM SIA': parse_paysera_rerum,
         'RAK BANK Nomiqa клиенты': parse_rak_bank,
-        'AN14_Estate_EUR_Revolut': parse_revolut_an14,
-        'NB_Rev_EUR_Revolut': parse_revolut_nb,
-        'Revolut_Plavas 1 SIA': parse_revolut_plavas,
-        'B1_Estate_CZK_UC': parse_unicredit_b1_estate,
+        'AN14 Estate EUR Revolut': parse_revolut_an14,
+        'NB Rev EUR Revolut': parse_revolut_nb,
+        'Revolut Plavas 1 SIA': parse_revolut_plavas,
+        'B1 Estate CZK UC': parse_unicredit_b1_estate,
         'Garpiz UniCredit Bank CZK': parse_garpiz_unicredit,
-        'Garpiz_Pernink_CZK_UC': parse_garpiz_pernink,
-        'Koruna UniCredit- CZK': parse_unicredit_koruna,
-        'TwoHills_Molly_Unicredit_CZK': parse_unicredit_twohills,
+        'Garpiz Pernink CZK UC': parse_garpiz_pernink,
+        'Koruna UniCredit CZK': parse_unicredit_koruna,
+        'TwoHills Molly Unicredit CZK': parse_unicredit_twohills,
         'WIO Business Bank': parse_wio_business,
-        'Saida_Wise': parse_saida_wise,
+        'Saida Wise': parse_saida_wise,
     }
     
     parser_func = None
     for acc_name, func in account_parsers.items():
-        if acc_name in account_name:
+        if acc_name == account_name:
             parser_func = func
+            st.write(f"✅ Найден точный парсер: '{acc_name}'")
             break
     
+    # Если точного совпадения нет, ищем частичное
     if parser_func is None:
+        for acc_name, func in account_parsers.items():
+            # Разбиваем на ключевые слова
+            acc_keywords = set(acc_name.lower().split())
+            file_keywords = set(account_name.lower().split())
+            
+            # Проверяем совпадение ключевых слов
+            common = acc_keywords.intersection(file_keywords)
+            if len(common) >= len(acc_keywords) * 0.6:
+                parser_func = func
+                st.write(f"✅ Найден частичный парсер: '{acc_name}' (совпало {len(common)} из {len(acc_keywords)} слов)")
+                break
+    
+    if parser_func is None:
+        st.write("⚠️ Парсер не найден, используется универсальный")
         parser_func = parse_unknown
     
     return parser_func(file_content, account_name)
@@ -1546,6 +1712,8 @@ def main():
                     if transactions:
                         all_transactions.extend(transactions)
                         file_stats.append(f"✅ {uploaded_file.name}: {len(transactions)} операций")
+                        # Показываем первую транзакцию для проверки
+                        st.write(f"📝 Первая транзакция: {transactions[0]}")
                     else:
                         file_stats.append(f"ℹ️ {uploaded_file.name}: транзакций не найдено")
                         
