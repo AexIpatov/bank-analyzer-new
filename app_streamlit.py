@@ -152,14 +152,23 @@ def parse_amount(amount_str) -> float:
         return 0.0
 
 def format_amount(amount: float) -> str:
+    """
+    Форматирует сумму с учетом знака.
+    Отрицательные суммы отображаются с минусом.
+    """
     if amount is None or pd.isna(amount):
         return "0,00"
-    formatted = f"{abs(amount):.2f}".replace('.', ',')
+    
+    # Определяем знак
+    sign = "-" if amount < 0 else ""
+    amount_abs = abs(amount)
+    
+    formatted = f"{amount_abs:.2f}".replace('.', ',')
     if ',' in formatted:
         integer_part, decimal_part = formatted.split(',')
         integer_part = re.sub(r'(?<=\d)(?=(\d{3})+(?!\d))', ' ', integer_part)
-        return f"{integer_part},{decimal_part}"
-    return formatted
+        return f"{sign}{integer_part},{decimal_part}"
+    return f"{sign}{formatted}"
 
 # ==================== ПАРСЕР ДЛЯ Regina Alfa-bank_NOMIQA_RUB ====================
 
@@ -337,7 +346,7 @@ def parse_bsr_bluor_3(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return transactions
 
-# ==================== ПАРСЕР ДЛЯ KL59_Rev_NB_EUR_BluOR (BluOr Bank) - ИСПРАВЛЕННЫЙ ====================
+# ==================== ПАРСЕР ДЛЯ KL59_Rev_NB_EUR_BluOR (BluOr Bank) ====================
 
 def parse_kl59_rev_nb_bluor(file_content: bytes, account_name: str) -> List[Dict]:
     """
@@ -364,8 +373,6 @@ def parse_kl59_rev_nb_bluor(file_content: bytes, account_name: str) -> List[Dict
     
     if len(lines) < 2:
         return []
-    
-    st.write(f"📄 Всего строк в файле: {len(lines)}")
     
     for line_idx, line in enumerate(lines):
         if not line:
@@ -450,7 +457,6 @@ def parse_kl59_rev_nb_bluor(file_content: bytes, account_name: str) -> List[Dict
         except Exception as e:
             continue
     
-    st.write(f"✅ Найдено транзакций: {len(transactions)}")
     return transactions
 
 # ==================== ПАРСЕР ДЛЯ JenHor_Unelma_CZK_CSAS ====================
@@ -1570,8 +1576,6 @@ def parse_unknown(file_content: bytes, account_name: str) -> List[Dict]:
 def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     account_name = clean_account_name(filename)
     
-    st.write(f"🔍 Имя счета после очистки: '{account_name}'")
-    
     account_parsers = {
         'Regina Alfa bank NOMIQA RUB': parse_regina_alfa,
         'Tinkoff RUB': parse_tinkoff,
@@ -1619,7 +1623,6 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     for acc_name, func in account_parsers.items():
         if acc_name == account_name:
             parser_func = func
-            st.write(f"✅ Найден точный парсер: '{acc_name}'")
             break
     
     if parser_func is None:
@@ -1630,11 +1633,9 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
             common = acc_keywords.intersection(file_keywords)
             if len(common) >= len(acc_keywords) * 0.6:
                 parser_func = func
-                st.write(f"✅ Найден частичный парсер: '{acc_name}' (совпало {len(common)} из {len(acc_keywords)} слов)")
                 break
     
     if parser_func is None:
-        st.write("⚠️ Парсер не найден, используется универсальный")
         parser_func = parse_unknown
     
     return parser_func(file_content, account_name)
@@ -1672,13 +1673,11 @@ def main():
                     if transactions:
                         all_transactions.extend(transactions)
                         file_stats.append(f"✅ {uploaded_file.name}: {len(transactions)} операций")
-                        st.write(f"📝 Первая транзакция: {transactions[0]}")
                     else:
                         file_stats.append(f"ℹ️ {uploaded_file.name}: транзакций не найдено")
                         
                 except Exception as e:
                     failed_files.append(f"{uploaded_file.name} (ошибка: {str(e)})")
-                    st.write(f"❌ Ошибка: {str(e)}")
                 
                 progress_bar.progress((i + 1) / len(uploaded_files))
             
