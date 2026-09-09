@@ -182,12 +182,12 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== СПЕЦИАЛЬНЫЙ ПАРСЕР ДЛЯ Garpiz_Pernink_CZK_UC ====================
+# ==================== СПЕЦИАЛЬНЫЙ ПАРСЕР ДЛЯ Garpiz_Pernink_CZK_UC (НОВАЯ ВЕРСИЯ) ====================
 
 def parse_garpiz_pernink_csv(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    Специальный парсер для файлов Garpiz_Pernink_CZK_UC.
-    Правильно обрабатывает строки с пустыми колонками.
+    Улучшенный парсер для файлов Garpiz_Pernink_CZK_UC.
+    Ищет дату и сумму в любых колонках, устойчив к пустым значениям.
     """
     transactions = []
     
@@ -235,77 +235,74 @@ def parse_garpiz_pernink_csv(file_content: bytes, account_name: str) -> List[Dic
             continue
         
         try:
-            # Номер счета (первая колонка) - должен содержать только цифры
-            account_num = parts[0].strip()
-            if not account_num or not re.match(r'^\d+$', account_num):
+            # Ищем дату в формате YYYY-MM-DD в любой колонке
+            date_str = None
+            date_idx = -1
+            for idx, part in enumerate(parts):
+                part_clean = part.strip()
+                if re.match(r'^\d{4}-\d{2}-\d{2}', part_clean):
+                    date_str = part_clean
+                    date_idx = idx
+                    break
+            
+            if not date_str:
                 continue
             
-            # Сумма (вторая колонка)
-            amount_str = parts[1].strip() if len(parts) > 1 else ''
+            # Ищем сумму - число с запятой или точкой, возможно с минусом
+            amount_str = None
+            amount_idx = -1
+            for idx, part in enumerate(parts):
+                if idx == date_idx:
+                    continue
+                part_clean = part.strip()
+                # Проверяем, что это число с десятичной частью
+                if re.match(r'^[\-]?\d+[\.,]\d+$', part_clean) or re.match(r'^[\-]?\d+$', part_clean):
+                    # Проверяем, что это не номер счета (только цифры без разделителей, длинные)
+                    if re.match(r'^\d+$', part_clean) and len(part_clean) > 6:
+                        continue  # возможно это номер счета
+                    amount_str = part_clean
+                    amount_idx = idx
+                    break
+            
             if not amount_str:
                 continue
             
-            # Проверяем, что это не строка с балансом
-            # В строке с балансом нет даты в 4-й колонке
-            date_str = parts[3].strip() if len(parts) > 3 else ''
-            if not date_str or not re.match(r'^\d{4}-\d{2}-\d{2}', date_str):
-                continue
-            
-            # Парсим сумму
             amount = parse_amount(amount_str)
             if amount == 0.0:
                 continue
             
-            # Парсим дату
             date = parse_date(date_str)
             if not date:
                 continue
             
-            # Ищем контрагента
+            # Ищем контрагента - текст, не похожий на числа и даты
             counterparty = ''
-            # Пробуем колонку Name (индекс 9)
-            if len(parts) > 9:
-                val = parts[9].strip()
-                if val and val != 'nan' and len(val) > 1:
-                    counterparty = val[:200]
-            
-            # Если нет, пробуем колонку Account (индекс 8)
-            if not counterparty and len(parts) > 8:
-                val = parts[8].strip()
-                if val and val != 'nan' and len(val) > 1:
-                    counterparty = val[:200]
-            
-            # Если все еще нет, пробуем Bank Name (индекс 6)
-            if not counterparty and len(parts) > 6:
-                val = parts[6].strip()
-                if val and val != 'nan' and len(val) > 1 and 'Bank' not in val:
-                    counterparty = val[:200]
-            
-            # Ищем описание - собираем из всех значимых колонок
-            description = ''
-            desc_parts = []
-            
-            # Проверяем все колонки, кроме служебных
             for idx, part in enumerate(parts):
-                part = part.strip()
-                if not part or part == 'nan' or len(part) <= 1:
+                if idx == date_idx or idx == amount_idx:
                     continue
-                # Пропускаем служебные колонки
-                if idx in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]:
-                    continue
-                # Пропускаем числа
-                if re.match(r'^[\d\.,\-]+$', part):
-                    continue
-                desc_parts.append(part)
+                part_clean = part.strip()
+                if part_clean and len(part_clean) > 2 and not re.match(r'^[\d\.,\-]+$', part_clean) and not re.match(r'^\d{4}-\d{2}-\d{2}', part_clean):
+                    counterparty = part_clean[:200]
+                    break
             
-            if desc_parts:
-                description = ' | '.join(desc_parts[:5])
+            # Собираем описание из всех колонок, кроме даты, суммы, номера счета и пустых
+            description_parts = []
+            # Номер счета обычно в первой колонке
+            account_num = parts[0].strip() if parts else ''
+            for idx, part in enumerate(parts):
+                part_clean = part.strip()
+                if not part_clean or part_clean == 'nan' or len(part_clean) <= 1:
+                    continue
+                if idx == date_idx or idx == amount_idx:
+                    continue
+                if part_clean == account_num:
+                    continue
+                # Пропускаем числа, похожие на суммы или коды (короткие числа)
+                if re.match(r'^[\d\.,\-]+$', part_clean) and len(part_clean) < 10:
+                    continue
+                description_parts.append(part_clean)
             
-            # Если нет описания, используем Bank (индекс 5)
-            if not description and len(parts) > 5:
-                val = parts[5].strip()
-                if val and val != 'nan':
-                    description = val
+            description = ' | '.join(description_parts[:5]) if description_parts else ''
             
             transactions.append({
                 'Дата': date,
