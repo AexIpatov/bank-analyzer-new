@@ -181,31 +181,36 @@ def format_amount(amount: float) -> str:
     return formatted
 
 
-# ==================== СПЕЦИАЛЬНЫЙ ПАРСЕР ДЛЯ Garpiz_Pernink_CZK_UC ====================
+# ==================== ДИАГНОСТИЧЕСКАЯ ФУНКЦИЯ ====================
 
-def parse_garpiz_pernink_special(file_content: bytes, account_name: str) -> List[Dict]:
+def debug_garpiz_pernink_file(file_content: bytes) -> dict:
     """
-    Специальный парсер для Garpiz_Pernink_CZK_UC.
-    Читает файл построчно и ищет данные в правильных колонках.
+    Диагностическая функция для проверки файла Garpiz_Pernink_CZK_UC.
+    Выводит информацию о структуре файла.
     """
-    transactions = []
+    debug_info = {
+        'file_size': len(file_content),
+        'encoding': detect_file_encoding_from_bytes(file_content),
+        'delimiter': detect_csv_delimiter_from_bytes(file_content),
+        'lines': [],
+        'header_row': -1,
+        'data_rows': [],
+        'found_transactions': 0
+    }
     
     # Декодируем содержимое
     try:
-        content = file_content.decode('utf-8')
+        content = file_content.decode(debug_info['encoding'])
     except:
         try:
-            content = file_content.decode('cp1250')
+            content = file_content.decode('utf-8', errors='ignore')
         except:
-            content = file_content.decode('latin-1')
+            content = file_content.decode('latin-1', errors='ignore')
     
     lines = content.split('\n')
-    
-    # Удаляем пустые строки и пробелы по краям
     lines = [line.strip() for line in lines if line.strip()]
     
-    if len(lines) < 3:
-        return []
+    debug_info['total_lines'] = len(lines)
     
     # Находим строку с заголовком
     header_idx = -1
@@ -214,134 +219,33 @@ def parse_garpiz_pernink_special(file_content: bytes, account_name: str) -> List
             header_idx = i
             break
     
+    debug_info['header_row'] = header_idx
+    
     if header_idx == -1:
-        return []
+        debug_info['error'] = 'Заголовок не найден'
+        return debug_info
     
-    # Разбираем заголовок, чтобы определить индексы колонок
+    # Разбираем заголовок
     header_parts = lines[header_idx].split(';')
-    
-    # Удаляем пустые части в конце
     while header_parts and header_parts[-1] == '':
         header_parts.pop()
     
-    # Определяем индексы нужных колонок
-    from_account_idx = None
-    amount_idx = None
-    booking_date_idx = None
-    name_idx = None
-    transaction_details_idx = None
-    account_idx = None
+    debug_info['header_parts'] = header_parts
+    debug_info['header_parts_count'] = len(header_parts)
     
-    for i, part in enumerate(header_parts):
-        part_clean = part.strip().lower()
-        if 'from account' in part_clean:
-            from_account_idx = i
-        elif 'amount' in part_clean and 'currency' not in part_clean:
-            amount_idx = i
-        elif 'booking date' in part_clean:
-            booking_date_idx = i
-        elif 'name' in part_clean and 'bank' not in part_clean:
-            name_idx = i
-        elif 'transaction details' in part_clean:
-            transaction_details_idx = i
-        elif 'account' in part_clean and 'from' not in part_clean:
-            account_idx = i
-    
-    # Проверяем наличие обязательных колонок
-    if from_account_idx is None or amount_idx is None or booking_date_idx is None:
-        return []
-    
-    # Обрабатываем строки после заголовка
-    for line_idx in range(header_idx + 1, len(lines)):
-        line = lines[line_idx]
-        if not line:
-            continue
-        
-        # Разбиваем строку
+    # Показываем первые 5 строк после заголовка
+    for i in range(header_idx + 1, min(header_idx + 6, len(lines))):
+        line = lines[i]
         parts = line.split(';')
-        
-        # Удаляем пустые части в конце
         while parts and parts[-1] == '':
             parts.pop()
-        
-        if len(parts) < 4:
-            continue
-        
-        try:
-            # Получаем номер счета
-            if from_account_idx >= len(parts):
-                continue
-            account_num = parts[from_account_idx].strip()
-            if not account_num or not re.match(r'^\d+$', account_num):
-                continue
-            
-            # Получаем дату
-            if booking_date_idx >= len(parts):
-                continue
-            date_str = parts[booking_date_idx].strip()
-            if not date_str or not re.match(r'^\d{4}-\d{2}-\d{2}', date_str):
-                continue
-            date = parse_date(date_str)
-            if not date:
-                continue
-            
-            # Получаем сумму
-            if amount_idx >= len(parts):
-                continue
-            amt_str = parts[amount_idx].strip()
-            if not amt_str:
-                continue
-            amount = parse_amount(amt_str)
-            if amount == 0.0:
-                continue
-            
-            # Получаем контрагента
-            counterparty = ''
-            if name_idx is not None and name_idx < len(parts):
-                val = parts[name_idx].strip()
-                if val and val != 'nan' and len(val) > 1:
-                    counterparty = val[:200]
-            
-            # Если контрагент не найден, пробуем колонку Account
-            if not counterparty and account_idx is not None and account_idx < len(parts):
-                val = parts[account_idx].strip()
-                if val and val != 'nan' and len(val) > 1:
-                    counterparty = val[:200]
-            
-            # Получаем описание
-            description = ''
-            if transaction_details_idx is not None and transaction_details_idx < len(parts):
-                val = parts[transaction_details_idx].strip()
-                if val and val != 'nan' and len(val) > 1:
-                    description = val
-            
-            # Если нет описания, собираем из других колонок
-            if not description:
-                desc_parts = []
-                exclude_indices = [from_account_idx, amount_idx, booking_date_idx, name_idx, account_idx]
-                for i, part in enumerate(parts):
-                    if i in exclude_indices:
-                        continue
-                    part_clean = part.strip()
-                    if part_clean and part_clean != 'nan' and len(part_clean) > 1:
-                        # Пропускаем числа, похожие на суммы или коды
-                        if not re.match(r'^[\d\.,\-]+$', part_clean):
-                            desc_parts.append(part_clean)
-                if desc_parts:
-                    description = ' | '.join(desc_parts[:5])
-            
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': counterparty,
-                'Наименование счета': account_name,
-                'Описание': description[:500]
-            })
-            
-        except Exception as e:
-            continue
+        debug_info['data_rows'].append({
+            'row_num': i,
+            'parts_count': len(parts),
+            'parts': parts[:10]  # показываем первые 10 частей
+        })
     
-    return transactions
+    return debug_info
 
 
 # ==================== ОСНОВНОЙ УНИВЕРСАЛЬНЫЙ ПАРСЕР ====================
@@ -360,29 +264,24 @@ def robust_parse_csv_or_excel(df: pd.DataFrame, account_name: str) -> List[Dict]
             description_parts = []
             counterparty = ''
             
-            # Проходим по всем колонкам строки
             for col in range(len(row)):
                 val = str(row.iloc[col]) if pd.notna(row.iloc[col]) else ''
                 if not val or val in ['nan', 'None', '']:
                     continue
                 
-                # Проверяем на дату
                 parsed_date = parse_date(val)
                 if parsed_date and parsed_date != val and len(parsed_date) == 10:
-                    if not date:  # берем первую найденную дату
+                    if not date:
                         date = parsed_date
                     continue
                 
-                # Проверяем на сумму
                 parsed_amount = parse_amount(val)
                 if parsed_amount != 0.0:
-                    if amount == 0.0:  # берем первую найденную сумму
+                    if amount == 0.0:
                         amount = parsed_amount
                     continue
                 
-                # Если это не дата и не сумма, добавляем в описание
                 if val and len(val) > 2 and not re.match(r'^[\d\.,\-]+$', val):
-                    # Проверяем, не является ли это контрагентом (длинное слово или имя)
                     if len(val) > 3 and not re.match(r'^[A-Z]{3}$', val):
                         if not counterparty and len(val) < 100:
                             counterparty = val[:200]
@@ -391,7 +290,6 @@ def robust_parse_csv_or_excel(df: pd.DataFrame, account_name: str) -> List[Dict]
                     else:
                         description_parts.append(val)
             
-            # Если нашли дату и сумму - создаем транзакцию
             if date and amount != 0.0:
                 description = ' | '.join(description_parts[:10]) if description_parts else ''
                 transactions.append({
@@ -778,7 +676,6 @@ def parse_garpiz_unicredit(df: pd.DataFrame, account_name: str) -> List[Dict]:
 
 # 36. Garpiz_Pernink_CZK_UC - используем специальный парсер
 def parse_garpiz_pernink_pandas(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    # Этот парсер больше не используется, так как мы используем специальный
     return robust_parse_csv_or_excel(df, account_name)
 
 # 37. Koruna UniCredit- CZK
@@ -1070,6 +967,196 @@ def parse_unicredit_generic(df: pd.DataFrame, account_name: str) -> List[Dict]:
     return transactions
 
 
+# ==================== СПЕЦИАЛЬНЫЙ ПАРСЕР ДЛЯ Garpiz_Pernink_CZK_UC С ОТЛАДКОЙ ====================
+
+def parse_garpiz_pernink_debug(file_content: bytes, account_name: str, debug_mode: bool = False) -> Tuple[List[Dict], dict]:
+    """
+    Парсер для Garpiz_Pernink_CZK_UC с режимом отладки.
+    """
+    transactions = []
+    debug_info = {
+        'lines_processed': 0,
+        'rows_with_data': 0,
+        'rows_with_date': 0,
+        'rows_with_amount': 0,
+        'rows_with_both': 0,
+        'errors': [],
+        'sample_rows': []
+    }
+    
+    # Декодируем содержимое
+    try:
+        content = file_content.decode('utf-8')
+    except:
+        try:
+            content = file_content.decode('cp1250')
+        except:
+            content = file_content.decode('latin-1')
+    
+    lines = content.split('\n')
+    lines = [line.strip() for line in lines if line.strip()]
+    
+    if len(lines) < 3:
+        debug_info['error'] = f'Слишком мало строк: {len(lines)}'
+        return transactions, debug_info
+    
+    # Находим строку с заголовком
+    header_idx = -1
+    for i, line in enumerate(lines):
+        if 'From Account' in line and 'Amount' in line and 'Currency' in line:
+            header_idx = i
+            break
+    
+    if header_idx == -1:
+        debug_info['error'] = 'Заголовок не найден'
+        return transactions, debug_info
+    
+    # Разбираем заголовок
+    header_parts = lines[header_idx].split(';')
+    while header_parts and header_parts[-1] == '':
+        header_parts.pop()
+    
+    # Определяем индексы колонок
+    from_account_idx = None
+    amount_idx = None
+    booking_date_idx = None
+    name_idx = None
+    transaction_details_idx = None
+    account_idx = None
+    
+    for i, part in enumerate(header_parts):
+        part_clean = part.strip().lower()
+        if 'from account' in part_clean:
+            from_account_idx = i
+        elif 'amount' in part_clean and 'currency' not in part_clean:
+            amount_idx = i
+        elif 'booking date' in part_clean:
+            booking_date_idx = i
+        elif 'name' in part_clean and 'bank' not in part_clean:
+            name_idx = i
+        elif 'transaction details' in part_clean:
+            transaction_details_idx = i
+        elif 'account' in part_clean and 'from' not in part_clean:
+            account_idx = i
+    
+    debug_info['header_indices'] = {
+        'from_account': from_account_idx,
+        'amount': amount_idx,
+        'booking_date': booking_date_idx,
+        'name': name_idx,
+        'transaction_details': transaction_details_idx,
+        'account': account_idx
+    }
+    debug_info['header_parts'] = header_parts
+    
+    if from_account_idx is None or amount_idx is None or booking_date_idx is None:
+        debug_info['error'] = f'Не найдены обязательные колонки: from_account={from_account_idx}, amount={amount_idx}, booking_date={booking_date_idx}'
+        return transactions, debug_info
+    
+    # Обрабатываем строки после заголовка
+    for line_idx in range(header_idx + 1, len(lines)):
+        line = lines[line_idx]
+        if not line:
+            continue
+        
+        debug_info['lines_processed'] += 1
+        
+        # Разбиваем строку
+        parts = line.split(';')
+        while parts and parts[-1] == '':
+            parts.pop()
+        
+        if len(parts) < 4:
+            continue
+        
+        try:
+            # Сохраняем образец строки для отладки
+            if len(debug_info['sample_rows']) < 5:
+                debug_info['sample_rows'].append({
+                    'line_idx': line_idx,
+                    'parts_count': len(parts),
+                    'parts': parts[:10]
+                })
+            
+            # Получаем номер счета
+            if from_account_idx >= len(parts):
+                continue
+            account_num = parts[from_account_idx].strip()
+            if not account_num or not re.match(r'^\d+$', account_num):
+                continue
+            
+            # Получаем дату
+            if booking_date_idx >= len(parts):
+                continue
+            date_str = parts[booking_date_idx].strip()
+            if not date_str or not re.match(r'^\d{4}-\d{2}-\d{2}', date_str):
+                continue
+            date = parse_date(date_str)
+            if not date:
+                continue
+            
+            debug_info['rows_with_date'] += 1
+            
+            # Получаем сумму
+            if amount_idx >= len(parts):
+                continue
+            amt_str = parts[amount_idx].strip()
+            if not amt_str:
+                continue
+            amount = parse_amount(amt_str)
+            if amount == 0.0:
+                continue
+            
+            debug_info['rows_with_amount'] += 1
+            debug_info['rows_with_both'] += 1
+            
+            # Получаем контрагента
+            counterparty = ''
+            if name_idx is not None and name_idx < len(parts):
+                val = parts[name_idx].strip()
+                if val and val != 'nan' and len(val) > 1:
+                    counterparty = val[:200]
+            
+            if not counterparty and account_idx is not None and account_idx < len(parts):
+                val = parts[account_idx].strip()
+                if val and val != 'nan' and len(val) > 1:
+                    counterparty = val[:200]
+            
+            # Получаем описание
+            description = ''
+            if transaction_details_idx is not None and transaction_details_idx < len(parts):
+                val = parts[transaction_details_idx].strip()
+                if val and val != 'nan' and len(val) > 1:
+                    description = val
+            
+            if not description:
+                desc_parts = []
+                exclude_indices = [from_account_idx, amount_idx, booking_date_idx, name_idx, account_idx]
+                for i, part in enumerate(parts):
+                    if i in exclude_indices:
+                        continue
+                    part_clean = part.strip()
+                    if part_clean and part_clean != 'nan' and len(part_clean) > 1:
+                        if not re.match(r'^[\d\.,\-]+$', part_clean):
+                            desc_parts.append(part_clean)
+                if desc_parts:
+                    description = ' | '.join(desc_parts[:5])
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty,
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+            
+        except Exception as e:
+            debug_info['errors'].append(f'Строка {line_idx}: {str(e)}')
+            continue
+    
+    return transactions, debug_info
+
+
 # ==================== ОСНОВНОЙ ПАРСЕР ====================
 
 def parse_file(file_content: bytes, filename: str) -> List[Dict]:
@@ -1077,7 +1164,34 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     
     # Специальный парсер для Garpiz_Pernink_CZK_UC
     if 'Garpiz_Pernink_CZK_UC' in account_name:
-        return parse_garpiz_pernink_special(file_content, account_name)
+        transactions, debug_info = parse_garpiz_pernink_debug(file_content, account_name, debug_mode=True)
+        
+        # Показываем отладочную информацию
+        with st.expander("🔍 Отладочная информация для Garpiz_Pernink_CZK_UC", expanded=True):
+            st.write("**Информация о файле:**")
+            st.write(f"- Всего строк в файле: {debug_info.get('lines_processed', 0)}")
+            st.write(f"- Строк с датой: {debug_info.get('rows_with_date', 0)}")
+            st.write(f"- Строк с суммой: {debug_info.get('rows_with_amount', 0)}")
+            st.write(f"- Строк с датой и суммой: {debug_info.get('rows_with_both', 0)}")
+            
+            if debug_info.get('error'):
+                st.error(f"❌ Ошибка: {debug_info['error']}")
+            
+            st.write("**Заголовок:**")
+            st.write(f"- Индексы колонок: {debug_info.get('header_indices', {})}")
+            st.write(f"- Части заголовка: {debug_info.get('header_parts', [])}")
+            
+            st.write("**Примеры строк (первые 5):**")
+            for sample in debug_info.get('sample_rows', []):
+                st.write(f"- Строка {sample['line_idx']}: {sample['parts_count']} частей")
+                st.write(f"  {sample['parts']}")
+            
+            if debug_info.get('errors'):
+                st.warning(f"⚠️ Ошибки при парсинге: {len(debug_info['errors'])}")
+                for err in debug_info['errors'][:5]:
+                    st.write(f"- {err}")
+        
+        return transactions
     
     # Сопоставление имени счета с функцией-парсером
     account_map = {
