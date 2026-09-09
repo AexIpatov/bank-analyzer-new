@@ -152,16 +152,10 @@ def parse_amount(amount_str) -> float:
         return 0.0
 
 def format_amount(amount: float) -> str:
-    """
-    Форматирует сумму с учетом знака.
-    Отрицательные суммы отображаются с минусом.
-    """
     if amount is None or pd.isna(amount):
         return "0,00"
-    
     sign = "-" if amount < 0 else ""
     amount_abs = abs(amount)
-    
     formatted = f"{amount_abs:.2f}".replace('.', ',')
     if ',' in formatted:
         integer_part, decimal_part = formatted.split(',')
@@ -318,7 +312,7 @@ def parse_kl59_rev_nb_bluor(file_content: bytes, account_name: str) -> List[Dict
     """
     Парсер для BluOr Bank формата.
     Правильно определяет знак суммы на основе типа операции.
-    Тип операции может быть в поле 6 (D - дебет, C - кредит) или в описании (Debit, Credit)
+    Исключает служебные строки: Starting balance, Total, Debit (D) без описания, Credit (C) без описания
     """
     transactions = []
     
@@ -366,9 +360,16 @@ def parse_kl59_rev_nb_bluor(file_content: bytes, account_name: str) -> List[Dict
             continue
         
         try:
-            # Пропускаем строки с "Starting balance" и "Total"
+            # ОПИСАНИЕ - поле 3
             description = parts[3].strip() if len(parts) > 3 else ''
-            if 'Starting balance' in description or 'Total' in description:
+            
+            # ПРОПУСКАЕМ СЛУЖЕБНЫЕ СТРОКИ
+            if 'Starting balance' in description:
+                continue
+            if 'Total' in description:
+                continue
+            # Пропускаем Debit (D) и Credit (C) без конкретного описания
+            if description in ['Debit (D)', 'Credit (C)']:
                 continue
             
             # ДАТА - поле 1
