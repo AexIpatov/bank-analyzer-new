@@ -42,7 +42,6 @@ def detect_file_encoding_from_bytes(file_content: bytes) -> str:
 def detect_csv_delimiter_from_bytes(file_content: bytes) -> str:
     delimiters = [';', ',', '\t', '|']
     try:
-        # Декодируем первую строку
         encoding = detect_file_encoding_from_bytes(file_content)
         first_line = file_content.decode(encoding, errors='ignore').split('\n')[0]
         counts = {}
@@ -180,6 +179,170 @@ def format_amount(amount: float) -> str:
         integer_part = re.sub(r'(?<=\d)(?=(\d{3})+(?!\d))', ' ', integer_part)
         return f"{integer_part},{decimal_part}"
     return formatted
+
+
+# ==================== СПЕЦИАЛЬНЫЙ ПАРСЕР ДЛЯ Garpiz_Pernink_CZK_UC ====================
+
+def parse_garpiz_pernink_special(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Специальный парсер для Garpiz_Pernink_CZK_UC.
+    Читает файл построчно и ищет данные в правильных колонках.
+    """
+    transactions = []
+    
+    # Декодируем содержимое
+    try:
+        content = file_content.decode('utf-8')
+    except:
+        try:
+            content = file_content.decode('cp1250')
+        except:
+            content = file_content.decode('latin-1')
+    
+    lines = content.split('\n')
+    
+    # Удаляем пустые строки и пробелы по краям
+    lines = [line.strip() for line in lines if line.strip()]
+    
+    if len(lines) < 3:
+        return []
+    
+    # Находим строку с заголовком
+    header_idx = -1
+    for i, line in enumerate(lines):
+        if 'From Account' in line and 'Amount' in line and 'Currency' in line:
+            header_idx = i
+            break
+    
+    if header_idx == -1:
+        return []
+    
+    # Разбираем заголовок, чтобы определить индексы колонок
+    header_parts = lines[header_idx].split(';')
+    
+    # Удаляем пустые части в конце
+    while header_parts and header_parts[-1] == '':
+        header_parts.pop()
+    
+    # Определяем индексы нужных колонок
+    from_account_idx = None
+    amount_idx = None
+    booking_date_idx = None
+    name_idx = None
+    transaction_details_idx = None
+    account_idx = None
+    
+    for i, part in enumerate(header_parts):
+        part_clean = part.strip().lower()
+        if 'from account' in part_clean:
+            from_account_idx = i
+        elif 'amount' in part_clean and 'currency' not in part_clean:
+            amount_idx = i
+        elif 'booking date' in part_clean:
+            booking_date_idx = i
+        elif 'name' in part_clean and 'bank' not in part_clean:
+            name_idx = i
+        elif 'transaction details' in part_clean:
+            transaction_details_idx = i
+        elif 'account' in part_clean and 'from' not in part_clean:
+            account_idx = i
+    
+    # Проверяем наличие обязательных колонок
+    if from_account_idx is None or amount_idx is None or booking_date_idx is None:
+        return []
+    
+    # Обрабатываем строки после заголовка
+    for line_idx in range(header_idx + 1, len(lines)):
+        line = lines[line_idx]
+        if not line:
+            continue
+        
+        # Разбиваем строку
+        parts = line.split(';')
+        
+        # Удаляем пустые части в конце
+        while parts and parts[-1] == '':
+            parts.pop()
+        
+        if len(parts) < 4:
+            continue
+        
+        try:
+            # Получаем номер счета
+            if from_account_idx >= len(parts):
+                continue
+            account_num = parts[from_account_idx].strip()
+            if not account_num or not re.match(r'^\d+$', account_num):
+                continue
+            
+            # Получаем дату
+            if booking_date_idx >= len(parts):
+                continue
+            date_str = parts[booking_date_idx].strip()
+            if not date_str or not re.match(r'^\d{4}-\d{2}-\d{2}', date_str):
+                continue
+            date = parse_date(date_str)
+            if not date:
+                continue
+            
+            # Получаем сумму
+            if amount_idx >= len(parts):
+                continue
+            amt_str = parts[amount_idx].strip()
+            if not amt_str:
+                continue
+            amount = parse_amount(amt_str)
+            if amount == 0.0:
+                continue
+            
+            # Получаем контрагента
+            counterparty = ''
+            if name_idx is not None and name_idx < len(parts):
+                val = parts[name_idx].strip()
+                if val and val != 'nan' and len(val) > 1:
+                    counterparty = val[:200]
+            
+            # Если контрагент не найден, пробуем колонку Account
+            if not counterparty and account_idx is not None and account_idx < len(parts):
+                val = parts[account_idx].strip()
+                if val and val != 'nan' and len(val) > 1:
+                    counterparty = val[:200]
+            
+            # Получаем описание
+            description = ''
+            if transaction_details_idx is not None and transaction_details_idx < len(parts):
+                val = parts[transaction_details_idx].strip()
+                if val and val != 'nan' and len(val) > 1:
+                    description = val
+            
+            # Если нет описания, собираем из других колонок
+            if not description:
+                desc_parts = []
+                exclude_indices = [from_account_idx, amount_idx, booking_date_idx, name_idx, account_idx]
+                for i, part in enumerate(parts):
+                    if i in exclude_indices:
+                        continue
+                    part_clean = part.strip()
+                    if part_clean and part_clean != 'nan' and len(part_clean) > 1:
+                        # Пропускаем числа, похожие на суммы или коды
+                        if not re.match(r'^[\d\.,\-]+$', part_clean):
+                            desc_parts.append(part_clean)
+                if desc_parts:
+                    description = ' | '.join(desc_parts[:5])
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty,
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+            
+        except Exception as e:
+            continue
+    
+    return transactions
+
 
 # ==================== ОСНОВНОЙ УНИВЕРСАЛЬНЫЙ ПАРСЕР ====================
 
@@ -613,122 +776,10 @@ def parse_b1_estate_uc(df: pd.DataFrame, account_name: str) -> List[Dict]:
 def parse_garpiz_unicredit(df: pd.DataFrame, account_name: str) -> List[Dict]:
     return parse_unicredit_generic(df, account_name)
 
-# 36. Garpiz_Pernink_CZK_UC (СПЕЦИАЛЬНЫЙ ПАРСЕР)
+# 36. Garpiz_Pernink_CZK_UC - используем специальный парсер
 def parse_garpiz_pernink_pandas(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    """
-    Специальный парсер для Garpiz_Pernink_CZK_UC.
-    """
-    transactions = []
-    header_row = -1
-    for idx in range(min(50, len(df))):
-        row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
-        if 'from account' in row_text and 'amount' in row_text and 'currency' in row_text:
-            header_row = idx
-            break
-    if header_row == -1:
-        return robust_parse_csv_or_excel(df, account_name)
-    
-    headers = []
-    for val in df.iloc[header_row].values:
-        if pd.isna(val):
-            headers.append('')
-        else:
-            headers.append(str(val).strip())
-    
-    col_indices = {}
-    for i, h in enumerate(headers):
-        h_lower = h.lower()
-        if 'from account' in h_lower:
-            col_indices['from_account'] = i
-        elif 'amount' in h_lower and 'currency' not in h_lower:
-            col_indices['amount'] = i
-        elif 'booking date' in h_lower:
-            col_indices['booking_date'] = i
-        elif 'name' in h_lower and 'bank' not in h_lower:
-            col_indices['name'] = i
-        elif 'transaction details' in h_lower:
-            col_indices['transaction_details'] = i
-        elif 'account' in h_lower and 'from' not in h_lower:
-            col_indices['account'] = i
-    
-    if 'from_account' not in col_indices or 'amount' not in col_indices or 'booking_date' not in col_indices:
-        return robust_parse_csv_or_excel(df, account_name)
-    
-    for idx in range(header_row + 1, len(df)):
-        try:
-            row = df.iloc[idx]
-            if all(pd.isna(x) or str(x).strip() == '' for x in row):
-                continue
-            
-            acc_idx = col_indices['from_account']
-            if acc_idx >= len(row):
-                continue
-            account_num = str(row.iloc[acc_idx]).strip() if pd.notna(row.iloc[acc_idx]) else ''
-            if not account_num or not re.match(r'^\d+$', account_num):
-                continue
-            
-            date_idx = col_indices['booking_date']
-            if date_idx >= len(row):
-                continue
-            date_val = row.iloc[date_idx]
-            if pd.isna(date_val):
-                continue
-            date_str = str(date_val).strip()
-            if not re.match(r'^\d{4}-\d{2}-\d{2}', date_str):
-                continue
-            date = parse_date(date_str)
-            if not date:
-                continue
-            
-            amt_idx = col_indices['amount']
-            if amt_idx >= len(row):
-                continue
-            amt_val = row.iloc[amt_idx]
-            if pd.isna(amt_val):
-                continue
-            amount = parse_amount(str(amt_val).strip())
-            if amount == 0.0:
-                continue
-            
-            counterparty = ''
-            if 'name' in col_indices and col_indices['name'] < len(row):
-                val = row.iloc[col_indices['name']]
-                if pd.notna(val) and str(val).strip() and str(val).strip() != 'nan':
-                    counterparty = str(val).strip()[:200]
-            if not counterparty and 'account' in col_indices and col_indices['account'] < len(row):
-                val = row.iloc[col_indices['account']]
-                if pd.notna(val) and str(val).strip() and str(val).strip() != 'nan':
-                    counterparty = str(val).strip()[:200]
-            
-            description = ''
-            if 'transaction_details' in col_indices and col_indices['transaction_details'] < len(row):
-                val = row.iloc[col_indices['transaction_details']]
-                if pd.notna(val) and str(val).strip() and str(val).strip() != 'nan':
-                    description = str(val).strip()
-            
-            if not description:
-                desc_parts = []
-                exclude_indices = list(col_indices.values())
-                for i, val in enumerate(row):
-                    if i in exclude_indices:
-                        continue
-                    if pd.notna(val) and str(val).strip() and str(val).strip() != 'nan':
-                        part = str(val).strip()
-                        if len(part) > 1 and not re.match(r'^[\d\.,\-]+$', part):
-                            desc_parts.append(part)
-                if desc_parts:
-                    description = ' | '.join(desc_parts[:5])
-            
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': counterparty,
-                'Наименование счета': account_name,
-                'Описание': description[:500]
-            })
-        except Exception as e:
-            continue
-    return transactions
+    # Этот парсер больше не используется, так как мы используем специальный
+    return robust_parse_csv_or_excel(df, account_name)
 
 # 37. Koruna UniCredit- CZK
 def parse_koruna_unicredit(df: pd.DataFrame, account_name: str) -> List[Dict]:
@@ -1023,6 +1074,10 @@ def parse_unicredit_generic(df: pd.DataFrame, account_name: str) -> List[Dict]:
 
 def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     account_name = clean_account_name(filename)
+    
+    # Специальный парсер для Garpiz_Pernink_CZK_UC
+    if 'Garpiz_Pernink_CZK_UC' in account_name:
+        return parse_garpiz_pernink_special(file_content, account_name)
     
     # Сопоставление имени счета с функцией-парсером
     account_map = {
