@@ -159,7 +159,6 @@ def format_amount(amount: float) -> str:
     if amount is None or pd.isna(amount):
         return "0,00"
     
-    # Определяем знак
     sign = "-" if amount < 0 else ""
     amount_abs = abs(amount)
     
@@ -311,48 +310,15 @@ def parse_bsr_bluor_2(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== ПАРСЕР ДЛЯ BSR_Estate_EUR_BluOr_3 ====================
 
 def parse_bsr_bluor_3(file_content: bytes, account_name: str) -> List[Dict]:
-    transactions = []
-    try:
-        content = file_content.decode('utf-8')
-    except:
-        try:
-            content = file_content.decode('cp1250')
-        except:
-            content = file_content.decode('latin-1')
-    lines = content.split('\n')
-    lines = [line.strip() for line in lines if line.strip()]
-    for line in lines:
-        parts = line.split(';')
-        if len(parts) < 3:
-            continue
-        try:
-            date_str = parts[0].strip()
-            date = parse_date(date_str)
-            if not date:
-                continue
-            amount_str = parts[1].strip().replace(',', '.')
-            amount = parse_amount(amount_str)
-            if amount == 0.0:
-                continue
-            description = ' '.join(parts[2:]) if len(parts) > 2 else ''
-            transactions.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': '',
-                'Наименование счета': account_name,
-                'Описание': description[:500]
-            })
-        except:
-            continue
-    return transactions
+    return parse_bsr_bluor_2(file_content, account_name)
 
-# ==================== ПАРСЕР ДЛЯ KL59_Rev_NB_EUR_BluOR (BluOr Bank) ====================
+# ==================== ПАРСЕР ДЛЯ KL59_Rev_NB_EUR_BluOR (BluOr Bank) - ИСПРАВЛЕННЫЙ ====================
 
 def parse_kl59_rev_nb_bluor(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Парсер для BluOr Bank формата.
     Правильно определяет знак суммы на основе типа операции.
-    Поле 6: D - дебет (расход, отрицательная сумма), C - кредит (доход, положительная сумма)
+    Тип операции может быть в поле 6 (D - дебет, C - кредит) или в описании (Debit, Credit)
     """
     transactions = []
     
@@ -417,23 +383,31 @@ def parse_kl59_rev_nb_bluor(file_content: bytes, account_name: str) -> List[Dict
             if amount == 0.0:
                 continue
             
-            # ТИП ОПЕРАЦИИ - поле 6 (D - дебет, C - кредит)
-            trans_type = parts[6].strip() if len(parts) > 6 else ''
+            # ОПРЕДЕЛЯЕМ ТИП ОПЕРАЦИИ
+            trans_type = ''
+            
+            # Сначала проверяем поле 6 (тип операции)
+            if len(parts) > 6:
+                trans_type = parts[6].strip()
+            
+            # Если поле 6 пустое, ищем в описании
+            if not trans_type or trans_type == '':
+                if 'Debit' in description or 'D)' in description:
+                    trans_type = 'D'
+                elif 'Credit' in description or 'C)' in description:
+                    trans_type = 'C'
             
             # Определяем знак суммы
-            # D (Debit) - расход, должен быть отрицательным
-            # C (Credit) - доход, должен быть положительным
             if trans_type == 'D':
-                amount = -abs(amount)  # Отрицательная сумма для дебета
+                amount = -abs(amount)  # Дебет - отрицательная сумма (расход)
             elif trans_type == 'C':
-                amount = abs(amount)   # Положительная сумма для кредита
+                amount = abs(amount)   # Кредит - положительная сумма (доход)
             else:
                 # Если тип не определен, оставляем как есть
                 pass
             
             # КОНТРАГЕНТ
             counterparty = ''
-            # Пробуем извлечь контрагента из описания
             if 'BluOr' in description or 'Bank' in description:
                 counterparty = 'BluOr Bank'
             elif trans_type == 'D':
