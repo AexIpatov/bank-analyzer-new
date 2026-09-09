@@ -169,12 +169,12 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР UNICREDIT GARBIZ (СПЕЦИАЛЬНЫЙ) ====================
+# ==================== ПАРСЕР UNICREDIT (ДЛЯ ВСЕХ СЧЕТОВ UNICREDIT) ====================
 
-def parse_unicredit_garpiz_csv(file_content: bytes, account_name: str) -> List[Dict]:
+def parse_unicredit_csv(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    Специальный парсер для CSV файлов UniCredit Garpiz.
-    Читает файл построчно, так как стандартный pandas не справляется с пустыми колонками.
+    Универсальный парсер для всех CSV файлов UniCredit.
+    Обрабатывает файлы с разделителем ; и структурой как у Garpiz.
     """
     transactions = []
     
@@ -204,7 +204,7 @@ def parse_unicredit_garpiz_csv(file_content: bytes, account_name: str) -> List[D
     
     if header_line == -1:
         # Если заголовок не найден, пробуем парсить напрямую
-        return parse_unicredit_direct_csv(lines, account_name)
+        return parse_unicredit_direct(lines, account_name)
     
     # Парсим строки после заголовка
     for i in range(header_line + 1, len(lines)):
@@ -259,6 +259,12 @@ def parse_unicredit_garpiz_csv(file_content: bytes, account_name: str) -> List[D
                 if counterparty and counterparty != 'nan':
                     counterparty = counterparty[:200]
             
+            # Если все еще нет, пробуем Bank Name (индекс 6)
+            if not counterparty and len(parts) > 6:
+                counterparty = parts[6].strip()
+                if counterparty and counterparty != 'nan' and 'Bank' not in counterparty:
+                    counterparty = counterparty[:200]
+            
             # Ищем описание (колонка Transaction Details, индекс 13)
             description = ''
             if len(parts) > 13:
@@ -282,19 +288,20 @@ def parse_unicredit_garpiz_csv(file_content: bytes, account_name: str) -> List[D
                 if desc_parts:
                     description = ' | '.join(desc_parts)
             
-            # Если все еще нет описания, используем тип транзакции или другие данные
-            if not description:
-                # Пробуем взять из колонки Bank (индекс 5)
-                if len(parts) > 5:
-                    bank = parts[5].strip()
-                    if bank and bank != 'nan':
-                        description = bank
+            # Если все еще нет описания, используем Bank (индекс 5)
+            if not description and len(parts) > 5:
+                bank = parts[5].strip()
+                if bank and bank != 'nan':
+                    description = bank
                 
-                # Или из колонки Bank Name (индекс 6)
-                if not description and len(parts) > 6:
+                # Добавляем Bank Name если есть
+                if len(parts) > 6:
                     bank_name = parts[6].strip()
-                    if bank_name and bank_name != 'nan':
-                        description = bank_name
+                    if bank_name and bank_name != 'nan' and bank_name != bank:
+                        if description:
+                            description += f" | {bank_name}"
+                        else:
+                            description = bank_name
             
             transactions.append({
                 'Дата': date,
@@ -309,7 +316,7 @@ def parse_unicredit_garpiz_csv(file_content: bytes, account_name: str) -> List[D
     
     return transactions
 
-def parse_unicredit_direct_csv(lines: List[str], account_name: str) -> List[Dict]:
+def parse_unicredit_direct(lines: List[str], account_name: str) -> List[Dict]:
     """
     Прямой парсер для CSV UniCredit, когда заголовок не найден.
     """
@@ -400,9 +407,12 @@ def parse_unicredit_direct_csv(lines: List[str], account_name: str) -> List[Dict
     
     return transactions
 
-# ==================== ОСТАЛЬНЫЕ ПАРСЕРЫ ====================
+# ==================== ПАРСЕР CSOB (ДЛЯ ВСЕХ СЧЕТОВ CSOB) ====================
 
-def parse_csob_dzibik(df: pd.DataFrame, account_name: str) -> List[Dict]:
+def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
+    """
+    Универсальный парсер для всех счетов CSOB.
+    """
     transactions = []
     
     header_row = -1
@@ -486,16 +496,9 @@ def parse_csob_dzibik(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
-def parse_csob_jenisov(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    return parse_csob_dzibik(df, account_name)
+# ==================== ПАРСЕР FIO ====================
 
-def parse_csob_rr_strojka(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    return parse_csob_dzibik(df, account_name)
-
-def parse_csob_koruna_strojka(df: pd.DataFrame, account_name: str) -> List[Dict]:
-    return parse_csob_dzibik(df, account_name)
-
-def parse_fio_stalkin(df: pd.DataFrame, account_name: str) -> List[Dict]:
+def parse_fio(df: pd.DataFrame, account_name: str) -> List[Dict]:
     transactions = []
     
     header_row = -1
@@ -588,6 +591,8 @@ def parse_fio_stalkin(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
+# ==================== ПАРСЕР INDUSTRA ====================
+
 def parse_industra(df: pd.DataFrame, account_name: str) -> List[Dict]:
     transactions = []
     
@@ -632,7 +637,9 @@ def parse_industra(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
-def parse_mkb_budapest(df: pd.DataFrame, account_name: str) -> List[Dict]:
+# ==================== ПАРСЕР MKB ====================
+
+def parse_mkb(df: pd.DataFrame, account_name: str) -> List[Dict]:
     transactions = []
     
     start_row = -1
@@ -700,7 +707,9 @@ def parse_mkb_budapest(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
-def parse_revolut_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
+# ==================== ПАРСЕР REVOLUT ====================
+
+def parse_revolut(df: pd.DataFrame, account_name: str) -> List[Dict]:
     transactions = []
     
     header_row = -1
@@ -792,7 +801,9 @@ def parse_revolut_estate(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
-def parse_paysera_generic(df: pd.DataFrame, account_name: str) -> List[Dict]:
+# ==================== ПАРСЕР PAYSERA ====================
+
+def parse_paysera(df: pd.DataFrame, account_name: str) -> List[Dict]:
     transactions = []
     
     header_row = -1
@@ -895,6 +906,8 @@ def parse_paysera_generic(df: pd.DataFrame, account_name: str) -> List[Dict]:
     
     return transactions
 
+# ==================== УНИВЕРСАЛЬНЫЙ ПАРСЕР ====================
+
 def parse_unknown(df: pd.DataFrame, account_name: str) -> List[Dict]:
     transactions = []
     
@@ -940,40 +953,58 @@ def parse_unknown(df: pd.DataFrame, account_name: str) -> List[Dict]:
 def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     account_name = clean_account_name(filename)
     
-    # Определяем тип счета по имени файла
-    if 'Garpiz UniCredit' in account_name or 'Garpiz UniCredit Bank' in account_name:
-        # Используем специальный парсер для CSV UniCredit
-        ext = os.path.splitext(filename)[1].lower()
-        if ext == '.csv':
-            return parse_unicredit_garpiz_csv(file_content, account_name)
+    # Определяем тип файла по имени
+    is_unicredit = False
+    is_csob = False
+    is_fio = False
+    is_industra = False
+    is_mkb = False
+    is_revolut = False
+    is_paysera = False
     
-    # Для остальных счетов используем стандартный парсинг
-    account_type = 'unknown'
+    # UniCredit счета
+    unicredit_accounts = [
+        'Garpiz UniCredit', 'Garpiz UniCredit Bank',
+        'Koruna UniCredit', 'TwoHills_Molly_Unicredit',
+        'B1_Estate_CZK_UC', 'Garpiz_Pernink_CZK_UC'
+    ]
     
-    if 'DŽIBIK' in account_name or 'DZIBIK' in account_name:
-        account_type = 'csob_dzibik'
-    elif 'JENISOV' in account_name and 'CSOB' in account_name:
-        account_type = 'csob_jenisov'
-    elif 'RR_Strojka' in account_name and 'CSOB' in account_name:
-        account_type = 'csob_rr_strojka'
-    elif 'Koruna_Strojka' in account_name and 'CSOB' in account_name:
-        account_type = 'csob_koruna_strojka'
-    elif 'Koruna UniCredit' in account_name or 'TwoHills_Molly_Unicredit' in account_name or \
-         'B1_Estate_CZK_UC' in account_name or 'Garpiz_Pernink_CZK_UC' in account_name:
-        account_type = 'unicredit_garpiz'
-    elif 'Stalkin_ML2_CZK_FIO' in account_name:
-        account_type = 'fio_stalkin'
-    elif 'Industra' in account_name:
-        account_type = 'industra'
-    elif 'Budapest' in account_name and 'MKB' in account_name:
-        account_type = 'mkb_budapest'
-    elif 'Revolut' in account_name:
-        account_type = 'revolut'
-    elif 'Paysera' in account_name:
-        account_type = 'paysera'
+    for acc in unicredit_accounts:
+        if acc in account_name:
+            is_unicredit = True
+            break
+    
+    # CSOB счета
+    if 'CSOB' in account_name or 'DŽIBIK' in account_name or 'DZIBIK' in account_name:
+        is_csob = True
+    
+    # FIO счета
+    if 'FIO' in account_name:
+        is_fio = True
+    
+    # Industra счета
+    if 'Industra' in account_name:
+        is_industra = True
+    
+    # MKB счета
+    if 'MKB' in account_name and 'Budapest' in account_name:
+        is_mkb = True
+    
+    # Revolut счета
+    if 'Revolut' in account_name:
+        is_revolut = True
+    
+    # Paysera счета
+    if 'Paysera' in account_name:
+        is_paysera = True
     
     ext = os.path.splitext(filename)[1].lower()
     
+    # Для UniCredit CSV используем специальный парсер
+    if is_unicredit and ext == '.csv':
+        return parse_unicredit_csv(file_content, account_name)
+    
+    # Для остальных файлов используем стандартный парсинг
     if ext == '.csv':
         with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp:
             tmp.write(file_content)
@@ -981,7 +1012,6 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
         
         try:
             encoding = detect_file_encoding(tmp_path)
-            # Определяем разделитель
             with open(tmp_path, 'r', encoding=encoding, errors='ignore') as f:
                 first_line = f.readline()
             delimiter = ';' if ';' in first_line else ','
@@ -995,26 +1025,18 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
                 on_bad_lines='skip'
             )
             
-            if account_type == 'csob_dzibik':
-                return parse_csob_dzibik(df, account_name)
-            elif account_type == 'csob_jenisov':
-                return parse_csob_jenisov(df, account_name)
-            elif account_type == 'csob_rr_strojka':
-                return parse_csob_rr_strojka(df, account_name)
-            elif account_type == 'csob_koruna_strojka':
-                return parse_csob_koruna_strojka(df, account_name)
-            elif account_type == 'unicredit_garpiz':
-                return parse_unicredit_garpiz_csv(file_content, account_name)
-            elif account_type == 'fio_stalkin':
-                return parse_fio_stalkin(df, account_name)
-            elif account_type == 'industra':
+            if is_csob:
+                return parse_csob(df, account_name)
+            elif is_fio:
+                return parse_fio(df, account_name)
+            elif is_industra:
                 return parse_industra(df, account_name)
-            elif account_type == 'mkb_budapest':
-                return parse_mkb_budapest(df, account_name)
-            elif account_type == 'revolut':
-                return parse_revolut_estate(df, account_name)
-            elif account_type == 'paysera':
-                return parse_paysera_generic(df, account_name)
+            elif is_mkb:
+                return parse_mkb(df, account_name)
+            elif is_revolut:
+                return parse_revolut(df, account_name)
+            elif is_paysera:
+                return parse_paysera(df, account_name)
             else:
                 return parse_unknown(df, account_name)
                 
@@ -1042,26 +1064,18 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
                 if df.empty:
                     continue
                 
-                if account_type == 'csob_dzibik':
-                    transactions = parse_csob_dzibik(df, account_name)
-                elif account_type == 'csob_jenisov':
-                    transactions = parse_csob_jenisov(df, account_name)
-                elif account_type == 'csob_rr_strojka':
-                    transactions = parse_csob_rr_strojka(df, account_name)
-                elif account_type == 'csob_koruna_strojka':
-                    transactions = parse_csob_koruna_strojka(df, account_name)
-                elif account_type == 'unicredit_garpiz':
-                    transactions = parse_unicredit_garpiz_csv(file_content, account_name)
-                elif account_type == 'fio_stalkin':
-                    transactions = parse_fio_stalkin(df, account_name)
-                elif account_type == 'industra':
+                if is_csob:
+                    transactions = parse_csob(df, account_name)
+                elif is_fio:
+                    transactions = parse_fio(df, account_name)
+                elif is_industra:
                     transactions = parse_industra(df, account_name)
-                elif account_type == 'mkb_budapest':
-                    transactions = parse_mkb_budapest(df, account_name)
-                elif account_type == 'revolut':
-                    transactions = parse_revolut_estate(df, account_name)
-                elif account_type == 'paysera':
-                    transactions = parse_paysera_generic(df, account_name)
+                elif is_mkb:
+                    transactions = parse_mkb(df, account_name)
+                elif is_revolut:
+                    transactions = parse_revolut(df, account_name)
+                elif is_paysera:
+                    transactions = parse_paysera(df, account_name)
                 else:
                     transactions = parse_unknown(df, account_name)
                 
