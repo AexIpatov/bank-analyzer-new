@@ -54,6 +54,7 @@ def clean_account_name(filename: str) -> str:
     name = re.sub(r'\d{1,2}-\d{1,2}$', '', name)
     name = re.sub(r' 2026$', '', name)
     name = re.sub(r'\d{2}\.\d{2}\.\d{4}$', '', name)
+    name = re.sub(r' \(2\)$', '', name)
     return name.strip() if name else 'Неизвестный счет'
 
 def parse_date(date_str: str) -> str:
@@ -166,51 +167,183 @@ def format_amount(amount: float) -> str:
 # ==================== ПАРСЕР ДЛЯ Regina Alfa-bank_NOMIQA_RUB ====================
 
 def parse_regina_alfa(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер для Альфа-Банк (Россия) формата.
+    XLSX с заголовками: Дата проводки, Код операции, Описание, Сумма в валюте счета
+    """
     transactions = []
+    
     try:
-        content = file_content.decode('utf-8')
-    except:
+        df = pd.read_excel(BytesIO(file_content), sheet_name='Table 1', header=None)
+    except Exception as e:
         try:
-            content = file_content.decode('cp1250')
-        except:
-            content = file_content.decode('latin-1')
-    lines = content.split('\n')
-    lines = [line.strip() for line in lines if line.strip()]
-    if len(lines) < 3:
+            df = pd.read_excel(BytesIO(file_content), header=None)
+        except Exception as e2:
+            return []
+    
+    if df.empty:
         return []
-    header_idx = -1
-    for i, line in enumerate(lines):
-        if 'дата' in line.lower() and 'сумма' in line.lower():
-            header_idx = i
+    
+    # Ищем строку с заголовками "Операции по счету"
+    data_start_idx = -1
+    for idx, row in df.iterrows():
+        if idx < 50:
+            row_str = ' '.join([str(x) for x in row.values if pd.notna(x)])
+            if 'Операции по счету' in row_str:
+                data_start_idx = idx + 1
+                break
+    
+    if data_start_idx == -1:
+        return []
+    
+    # Ищем заголовки колонок
+    header_row_idx = -1
+    for idx in range(data_start_idx, min(data_start_idx + 5, len(df))):
+        row = df.iloc[idx]
+        row_str = ' '.join([str(x) for x in row.values if pd.notna(x)])
+        if 'Дата проводки' in row_str and 'Сумма' in row_str:
+            header_row_idx = idx
             break
-    if header_idx == -1:
+    
+    if header_row_idx == -1:
         return []
-    for line_idx in range(header_idx + 1, len(lines)):
-        line = lines[line_idx]
-        if not line:
+    
+    header_row = df.iloc[header_row_idx]
+    date_idx = -1
+    amount_idx = -1
+    desc_idx = -1
+    code_idx = -1
+    
+    for idx, val in enumerate(header_row.values):
+        if pd.isna(val):
             continue
-        parts = line.split(';')
-        if len(parts) < 3:
+        val_str = str(val).strip()
+        if 'Дата проводки' in val_str:
+            date_idx = idx
+        elif 'Сумма' in val_str and 'валюте' in val_str:
+            amount_idx = idx
+        elif 'Описание' in val_str:
+            desc_idx = idx
+        elif 'Код операции' in val_str:
+            code_idx = idx
+    
+    if date_idx == -1:
+        date_idx = 0
+    if amount_idx == -1:
+        amount_idx = 10
+    if desc_idx == -1:
+        desc_idx = 2
+    
+    # Парсим данные
+    for idx in range(header_row_idx + 1, len(df)):
+        row = df.iloc[idx]
+        
+        # Проверяем, что строка не пустая
+        row_values = [x for x in row.values if pd.notna(x)]
+        if not row_values:
             continue
+        
+        # Проверяем, что это не итоговая строка
+        row_str = ' '.join([str(x) for x in row.values if pd.notna(x)])
+        if 'подпись' in row_str.lower() or 'Уполномоченное лицо' in row_str:
+            continue
+        
         try:
-            date_str = parts[0].strip() if len(parts) > 0 else ''
+            # ДАТА
+            date_str = ''
+            if date_idx < len(row):
+                date_val = row.iloc[date_idx]
+                if pd.notna(date_val):
+                    date_str = str(date_val).strip()
+                    if date_str == 'nan':
+                        date_str = ''
+            
+            if not date_str:
+                continue
+            
             date = parse_date(date_str)
             if not date:
                 continue
-            amount_str = parts[1].strip() if len(parts) > 1 else ''
-            amount = parse_amount(amount_str)
-            if amount == 0.0:
+            
+            # СУММА
+            amount = 0.0
+            amount_found = False
+            
+            if amount_idx < len(row):
+                amount_val = row.iloc[amount_idx]
+                if pd.notna(amount_val) and amount_val != '':
+                    amount_str = str(amount_val).strip()
+                    if amount_str and amount_str != 'nan':
+                        parsed = parse_amount(amount_str)
+                        if parsed != 0.0:
+                            amount = parsed
+                            amount_found = True
+            
+            if not amount_found:
+                # Пробуем найти сумму в последней колонке
+                for col_idx in range(len(row) - 1, -1, -1):
+                    val = row.iloc[col_idx]
+                    if pd.notna(val) and val != '':
+                        val_str = str(val).strip()
+                        if val_str and val_str != 'nan':
+                            parsed = parse_amount(val_str)
+                            if parsed != 0.0:
+                                amount = parsed
+                                amount_found = True
+                                break
+            
+            if not amount_found:
                 continue
-            description = ' '.join(parts[2:]) if len(parts) > 2 else ''
+            
+            # КОНТРАГЕНТ
+            counterparty = ''
+            if desc_idx < len(row):
+                desc_val = row.iloc[desc_idx]
+                if pd.notna(desc_val):
+                    desc_str = str(desc_val).strip()
+                    if desc_str and desc_str != 'nan':
+                        # Пробуем извлечь контрагента из описания
+                        # Ищем "Перевод" или "от"
+                        match = re.search(r'Перевод\s+([^\s]+)', desc_str)
+                        if match:
+                            counterparty = match.group(1)
+                        else:
+                            # Ищем получателя
+                            match = re.search(r'на\s+([^,]+)', desc_str)
+                            if match:
+                                counterparty = match.group(1)
+                            else:
+                                counterparty = desc_str[:200]
+            
+            # ОПИСАНИЕ
+            description = ''
+            if desc_idx < len(row):
+                desc_val = row.iloc[desc_idx]
+                if pd.notna(desc_val):
+                    description = str(desc_val).strip()
+                    if description == 'nan':
+                        description = ''
+            
+            # Если описание пустое, пробуем другие поля
+            if not description:
+                if code_idx < len(row):
+                    code_val = row.iloc[code_idx]
+                    if pd.notna(code_val):
+                        code_str = str(code_val).strip()
+                        if code_str and code_str != 'nan':
+                            description = f"Код: {code_str}"
+            
             transactions.append({
                 'Дата': date,
                 'Сумма': amount,
-                'Контрагент': '',
+                'Контрагент': counterparty[:200],
                 'Наименование счета': account_name,
                 'Описание': description[:500]
             })
-        except:
+            
+        except Exception as e:
             continue
+    
     return transactions
 
 # ==================== ПАРСЕР ДЛЯ Tinkoff RUB ====================
@@ -657,10 +790,6 @@ def parse_fio_stalkin(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== ПАРСЕР ДЛЯ AN14_Estate_EUR_Industra (Industra Bank) ====================
 
 def parse_industra_an14(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер для Industra Bank формата (AN14_Estate_EUR_Industra).
-    Формат XLS с заголовками: Дата транзакции, Дата валютирования, Номер транзакции, Референс транзакции, Тип транзакции, Получатель / Плательщик, ...
-    """
     transactions = []
     
     try:
@@ -671,7 +800,6 @@ def parse_industra_an14(file_content: bytes, account_name: str) -> List[Dict]:
     if df.empty:
         return []
     
-    # Ищем строку с заголовками
     header_row_idx = -1
     for idx, row in df.iterrows():
         if idx < 30:
@@ -683,7 +811,6 @@ def parse_industra_an14(file_content: bytes, account_name: str) -> List[Dict]:
     if header_row_idx == -1:
         return []
     
-    # Определяем индексы колонок
     header_row = df.iloc[header_row_idx]
     col_indices = {}
     
@@ -717,7 +844,6 @@ def parse_industra_an14(file_content: bytes, account_name: str) -> List[Dict]:
             continue
         
         try:
-            # ДАТА
             date_str = ''
             if 'date' in col_indices and col_indices['date'] < len(row):
                 date_str = str(row.iloc[col_indices['date']]).strip()
@@ -731,11 +857,9 @@ def parse_industra_an14(file_content: bytes, account_name: str) -> List[Dict]:
             if not date:
                 continue
             
-            # СУММА
             amount = 0.0
             amount_found = False
             
-            # Проверяем дебет (расход)
             if 'debit' in col_indices and col_indices['debit'] < len(row):
                 debit_val = row.iloc[col_indices['debit']]
                 if pd.notna(debit_val) and debit_val != '':
@@ -746,7 +870,6 @@ def parse_industra_an14(file_content: bytes, account_name: str) -> List[Dict]:
                             amount = -abs(parsed)
                             amount_found = True
             
-            # Проверяем кредит (доход)
             if not amount_found and 'credit' in col_indices and col_indices['credit'] < len(row):
                 credit_val = row.iloc[col_indices['credit']]
                 if pd.notna(credit_val) and credit_val != '':
@@ -760,14 +883,12 @@ def parse_industra_an14(file_content: bytes, account_name: str) -> List[Dict]:
             if not amount_found:
                 continue
             
-            # КОНТРАГЕНТ
             counterparty = ''
             if 'counterparty' in col_indices and col_indices['counterparty'] < len(row):
                 counterparty = str(row.iloc[col_indices['counterparty']]).strip()
                 if counterparty == 'nan':
                     counterparty = ''
             
-            # ОПИСАНИЕ
             description = ''
             if 'description' in col_indices and col_indices['description'] < len(row):
                 description = str(row.iloc[col_indices['description']]).strip()
@@ -994,10 +1115,6 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== ПАРСЕР ДЛЯ AN14_Estate_EUR_Revolut (Revolut) ====================
 
 def parse_revolut_an14(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер для Revolut Bank формата (AN14_Estate_EUR_Revolut).
-    CSV с заголовками: Date started (UTC),Date completed (UTC),ID,Type,State,Description,Reference,Payer,...
-    """
     transactions = []
     
     try:
@@ -1075,42 +1192,35 @@ def parse_revolut_an14(file_content: bytes, account_name: str) -> List[Dict]:
             continue
         
         try:
-            # Проверяем статус (только COMPLETED)
             if state_idx != -1 and state_idx < len(parts):
                 state = parts[state_idx].strip()
                 if state and state != 'COMPLETED':
                     continue
             
-            # ДАТА
             date_str = parts[date_idx].strip() if date_idx < len(parts) else ''
             date = parse_date(date_str)
             if not date:
                 continue
             
-            # СУММА
             amount_str = parts[amount_idx].strip() if amount_idx < len(parts) else ''
             amount = parse_amount(amount_str)
             if amount == 0.0:
                 continue
             
-            # КОНТРАГЕНТ
             counterparty = ''
             if counterparty_idx != -1 and counterparty_idx < len(parts):
                 counterparty = parts[counterparty_idx].strip()
                 if counterparty == '' or counterparty == 'nan':
                     counterparty = ''
             
-            # Если контрагент пустой, пробуем извлечь из описания
             if not counterparty:
                 description = parts[desc_idx].strip() if desc_idx < len(parts) else ''
-                # Пробуем извлечь получателя из описания "To XXX"
                 match = re.search(r'To\s+([^,]+)', description)
                 if match:
                     counterparty = match.group(1).strip()
                 else:
                     counterparty = description[:200]
             
-            # ОПИСАНИЕ
             description = parts[desc_idx].strip() if desc_idx < len(parts) else ''
             
             transactions.append({
@@ -1139,10 +1249,6 @@ def parse_revolut_plavas(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== ПАРСЕР ДЛЯ Paysera (ОБЩИЙ) ====================
 
 def parse_paysera_general(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Универсальный парсер для Paysera формата.
-    XLSX с заголовками: Тип, Номер выписки, Номер перевода, Дата и время, Получатель / Плательщик, EVP / IBAN, Код, Сумма и валюта, Валюты, Назначение платежа, Код платежа, Кредит / Дебет, Баланс
-    """
     transactions = []
     
     try:
@@ -1156,7 +1262,6 @@ def parse_paysera_general(file_content: bytes, account_name: str) -> List[Dict]:
     if df.empty:
         return []
     
-    # Ищем строку с заголовками
     header_row_idx = -1
     for idx, row in df.iterrows():
         if idx < 20:
@@ -1204,13 +1309,11 @@ def parse_paysera_general(file_content: bytes, account_name: str) -> List[Dict]:
         if not row_values:
             continue
         
-        # Проверяем, что это не итоговая строка
         row_str = ' '.join([str(x) for x in row.values if pd.notna(x)])
         if 'Остаток' in row_str or 'Дебетовый оборот' in row_str or 'Кредитовый оборот' in row_str:
             continue
         
         try:
-            # ДАТА
             date_str = ''
             if 'date' in col_indices and col_indices['date'] < len(row):
                 date_str = str(row.iloc[col_indices['date']]).strip()
@@ -1220,7 +1323,6 @@ def parse_paysera_general(file_content: bytes, account_name: str) -> List[Dict]:
             if not date_str:
                 continue
             
-            # Извлекаем дату из "2026-09-03 20:14:35"
             date_match = re.match(r'(\d{4}-\d{2}-\d{2})', date_str)
             if date_match:
                 date_str = date_match.group(1)
@@ -1229,7 +1331,6 @@ def parse_paysera_general(file_content: bytes, account_name: str) -> List[Dict]:
             if not date:
                 continue
             
-            # СУММА
             amount = 0.0
             amount_found = False
             
@@ -1240,7 +1341,6 @@ def parse_paysera_general(file_content: bytes, account_name: str) -> List[Dict]:
                     if amount_str and amount_str != 'nan':
                         parsed = parse_amount(amount_str)
                         if parsed != 0.0:
-                            # Проверяем тип операции
                             trans_type = ''
                             if 'type' in col_indices and col_indices['type'] < len(row):
                                 trans_type = str(row.iloc[col_indices['type']]).strip()
@@ -1256,14 +1356,12 @@ def parse_paysera_general(file_content: bytes, account_name: str) -> List[Dict]:
             if not amount_found:
                 continue
             
-            # КОНТРАГЕНТ
             counterparty = ''
             if 'counterparty' in col_indices and col_indices['counterparty'] < len(row):
                 counterparty = str(row.iloc[col_indices['counterparty']]).strip()
                 if counterparty == 'nan':
                     counterparty = ''
             
-            # ОПИСАНИЕ
             description = ''
             if 'purpose' in col_indices and col_indices['purpose'] < len(row):
                 description = str(row.iloc[col_indices['purpose']]).strip()
@@ -1710,16 +1808,6 @@ def parse_rak_bank(file_content: bytes, account_name: str) -> List[Dict]:
         except:
             continue
     return transactions
-
-# ==================== ПАРСЕР ДЛЯ NB_Rev_EUR_Revolut ====================
-
-def parse_revolut_nb(file_content: bytes, account_name: str) -> List[Dict]:
-    return parse_revolut_an14(file_content, account_name)
-
-# ==================== ПАРСЕР ДЛЯ Revolut_Plavas 1 SIA ====================
-
-def parse_revolut_plavas(file_content: bytes, account_name: str) -> List[Dict]:
-    return parse_revolut_an14(file_content, account_name)
 
 # ==================== ПАРСЕР ДЛЯ Koruna UniCredit- CZK (UniCredit Bank) ====================
 
