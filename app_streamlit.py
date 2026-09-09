@@ -402,33 +402,74 @@ def parse_csob_general(file_content: bytes, account_name: str) -> List[Dict]:
             continue
         
         try:
+            # Номер счета - индекс 0 (пропускаем)
+            account_num = parts[0].strip() if len(parts) > 0 else ''
+            
+            # Дата - posting date (индекс 4)
             date_str = parts[4].strip() if len(parts) > 4 else ''
             date = parse_date(date_str)
             if not date:
                 continue
             
+            # Сумма - payment amount (индекс 6)
             amount_str = parts[6].strip() if len(parts) > 6 else ''
+            
+            # Проверяем, что это действительно сумма
+            if not amount_str:
+                continue
+            
+            # Проверяем, что это не номер счета
+            # Номер счета - длинное число без запятой/точки
+            if re.match(r'^\d{7,}$', amount_str):
+                continue
+            if re.match(r'^\d+\/\d+$', amount_str):
+                continue
+            
+            # Проверяем, что это сумма (содержит запятую, точку, минус или скобки)
+            is_amount = False
+            if ',' in amount_str or '.' in amount_str:
+                is_amount = True
+            elif amount_str.startswith('-'):
+                is_amount = True
+            elif amount_str.startswith('(') and amount_str.endswith(')'):
+                is_amount = True
+            elif re.search(r'[\d,.]+\s*[A-Z]{3}$', amount_str):
+                is_amount = True
+            
+            if not is_amount:
+                continue
+            
             amount = parse_amount(amount_str)
             if amount == 0.0:
                 continue
             
+            # Контрагент - counterparty (индекс 13)
             counterparty = ''
             if len(parts) > 13:
                 counterparty = parts[13].strip()
                 if counterparty and counterparty != 'nan':
                     counterparty = counterparty[:200]
             
+            # Если контрагент пустой, пробуем account name (индекс 3)
+            if not counterparty and len(parts) > 3:
+                counterparty = parts[3].strip()
+                if counterparty and counterparty != 'nan':
+                    counterparty = counterparty[:200]
+            
+            # Описание - message to beneficiary and payer (индекс 16)
             description = ''
             if len(parts) > 16:
                 description = parts[16].strip()
                 if description and description != 'nan':
                     description = description
             
+            # Если нет описания, пробуем purpose of payment (индекс 28)
             if not description and len(parts) > 28:
                 description = parts[28].strip()
                 if description and description != 'nan':
                     description = description
             
+            # Если все еще нет, собираем из других полей
             if not description:
                 desc_parts = []
                 potential_desc_indices = [2, 10, 11, 12, 15, 19, 20, 21, 22, 23, 28, 29]
