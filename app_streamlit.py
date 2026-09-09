@@ -114,6 +114,10 @@ def parse_date(date_str: str) -> str:
     return date_str
 
 def parse_amount(amount_str) -> float:
+    """
+    Преобразует строку с суммой в число с плавающей точкой.
+    Работает с форматами: -350,00 или 350,00 или -350.00
+    """
     if amount_str is None or pd.isna(amount_str):
         return 0.0
     
@@ -122,6 +126,7 @@ def parse_amount(amount_str) -> float:
     if amount_str in ['', 'nan', '-', 'None', 'null', 'NaN', 'N/A', 'n/a']:
         return 0.0
     
+    # Проверяем знак
     is_negative = False
     if amount_str.startswith('-'):
         is_negative = True
@@ -130,11 +135,14 @@ def parse_amount(amount_str) -> float:
         is_negative = True
         amount_str = amount_str[1:-1]
     
+    # Удаляем валюту
     amount_str = re.sub(r'\s*[A-Z]{3}\s*$', '', amount_str)
     amount_str = re.sub(r'^\s*[A-Z]{3}\s*', '', amount_str)
     
+    # Удаляем пробелы
     amount_str = amount_str.replace(' ', '').replace('\xa0', '')
     
+    # Обрабатываем разделители
     if ',' in amount_str and '.' in amount_str:
         if amount_str.rfind('.') < amount_str.rfind(','):
             amount_str = amount_str.replace('.', '').replace(',', '.')
@@ -147,6 +155,7 @@ def parse_amount(amount_str) -> float:
         else:
             amount_str = amount_str.replace(',', '')
     
+    # Удаляем все нечисловые символы кроме точки и минуса
     amount_str = re.sub(r'[^\d.\-]', '', amount_str)
     
     if not amount_str or amount_str == '.':
@@ -154,6 +163,7 @@ def parse_amount(amount_str) -> float:
     
     try:
         value = float(amount_str)
+        # Возвращаем с правильным знаком
         return -abs(value) if is_negative else abs(value)
     except:
         return 0.0
@@ -175,6 +185,7 @@ def parse_garpiz_pernink(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Специальный парсер для Garpiz_Pernink_CZK_UC.
     Правильно определяет суммы - берет их из колонки Amount (индекс 1).
+    Игнорирует номер счета как сумму.
     """
     transactions = []
     
@@ -214,14 +225,20 @@ def parse_garpiz_pernink(file_content: bytes, account_name: str) -> List[Dict]:
             continue
         
         try:
-            # Номер счета - первая колонка
+            # Номер счета - первая колонка (используем только для проверки)
             account_num = parts[0].strip()
             if not account_num or not re.match(r'^\d+$', account_num):
                 continue
             
-            # Сумма - вторая колонка (индекс 1)
+            # Сумма - ВТОРАЯ колонка (индекс 1)
             amt_str = parts[1].strip() if len(parts) > 1 else ''
             if not amt_str:
+                continue
+            
+            # Проверяем, что это действительно сумма (содержит запятую или точку)
+            # и НЕ является номером счета (длинное число без запятой)
+            if re.match(r'^\d{10,}$', amt_str):
+                # Это номер счета, пропускаем
                 continue
             
             # Парсим сумму с сохранением знака
@@ -342,6 +359,11 @@ def parse_garpiz_unicredit(file_content: bytes, account_name: str) -> List[Dict]
             amt_str = parts[1].strip() if len(parts) > 1 else ''
             if not amt_str:
                 continue
+            
+            # Проверяем, что это действительно сумма
+            if re.match(r'^\d{10,}$', amt_str):
+                continue
+            
             amount = parse_amount(amt_str)
             if amount == 0.0:
                 continue
