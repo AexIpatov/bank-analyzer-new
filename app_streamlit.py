@@ -357,10 +357,15 @@ def parse_jenhor_unelma(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return transactions
 
-# ==================== ПАРСЕР ДЛЯ DŽIBIK Main CSOB CZK ====================
+# ==================== ПАРСЕР CSOB (ОБЩИЙ ДЛЯ ВСЕХ CSOB СЧЕТОВ) ====================
 
-def parse_csob_dzibik(file_content: bytes, account_name: str) -> List[Dict]:
+def parse_csob_general(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Универсальный парсер для CSOB формата:
+    account number;account currency;alias;account name;posting date;value date;payment amount;payment currency;balance;constant code/fee code;variable code/reference;specific code;transaction type;counterparty;counterparty's account;message to beneficiary and payer;identification;sent payment amount;sent payment currency;note;name of 3rd party;3rd party identifier;ultimate debtor;ultimate beneficiary;counterparty's bank;exchange rate;BIC/SWIFT;bank's reference;purpose of payment;message to payer
+    """
     transactions = []
+    
     try:
         content = file_content.decode('utf-8')
     except:
@@ -368,80 +373,109 @@ def parse_csob_dzibik(file_content: bytes, account_name: str) -> List[Dict]:
             content = file_content.decode('cp1250')
         except:
             content = file_content.decode('latin-1')
+    
     lines = content.split('\n')
     lines = [line.strip() for line in lines if line.strip()]
+    
     if len(lines) < 3:
         return []
+    
     header_idx = -1
     for i, line in enumerate(lines):
-        if 'account number' in line.lower() and 'account currency' in line.lower():
+        if 'account number' in line.lower() and 'posting date' in line.lower():
             header_idx = i
             break
+    
     if header_idx == -1:
         return []
+    
     for line_idx in range(header_idx + 1, len(lines)):
         line = lines[line_idx]
         if not line:
             continue
+        
         parts = line.split(';')
+        while parts and parts[-1] == '':
+            parts.pop()
+        
         if len(parts) < 7:
             continue
+        
         try:
-            account_num = parts[0].strip()
-            if not account_num:
-                continue
             date_str = parts[4].strip() if len(parts) > 4 else ''
             date = parse_date(date_str)
             if not date:
                 continue
+            
             amount_str = parts[6].strip() if len(parts) > 6 else ''
             amount = parse_amount(amount_str)
             if amount == 0.0:
                 continue
-            counterparty = parts[13].strip() if len(parts) > 13 else ''
-            description = parts[15].strip() if len(parts) > 15 else ''
-            if not description and len(parts) > 12:
-                description = parts[12].strip()
+            
+            counterparty = ''
+            if len(parts) > 13:
+                counterparty = parts[13].strip()
+                if counterparty and counterparty != 'nan':
+                    counterparty = counterparty[:200]
+            
+            description = ''
+            if len(parts) > 16:
+                description = parts[16].strip()
+                if description and description != 'nan':
+                    description = description
+            
+            if not description and len(parts) > 28:
+                description = parts[28].strip()
+                if description and description != 'nan':
+                    description = description
+            
+            if not description:
+                desc_parts = []
+                potential_desc_indices = [2, 10, 11, 12, 15, 19, 20, 21, 22, 23, 28, 29]
+                for idx in potential_desc_indices:
+                    if idx < len(parts):
+                        part = parts[idx].strip()
+                        if part and part != 'nan' and len(part) > 1:
+                            if not re.match(r'^[\d.,\-]+$', part):
+                                desc_parts.append(part)
+                if desc_parts:
+                    description = ' | '.join(desc_parts[:5])
+            
             transactions.append({
                 'Дата': date,
                 'Сумма': amount,
-                'Контрагент': counterparty[:200],
+                'Контрагент': counterparty,
                 'Наименование счета': account_name,
                 'Описание': description[:500]
             })
-        except:
+            
+        except Exception as e:
             continue
+    
     return transactions
 
-# ==================== ПАРСЕР ДЛЯ JENISOV - HORSKA_CSOB_ CZK ====================
+# ==================== ПАРСЕРЫ ДЛЯ CSOB СЧЕТОВ ====================
+
+def parse_csob_dzibik(file_content: bytes, account_name: str) -> List[Dict]:
+    return parse_csob_general(file_content, account_name)
 
 def parse_csob_jenisov_czk(file_content: bytes, account_name: str) -> List[Dict]:
-    return parse_csob_dzibik(file_content, account_name)
-
-# ==================== ПАРСЕР ДЛЯ JENISOV - HORSKA S.R EUR ====================
+    return parse_csob_general(file_content, account_name)
 
 def parse_csob_jenisov_eur(file_content: bytes, account_name: str) -> List[Dict]:
-    return parse_csob_dzibik(file_content, account_name)
-
-# ==================== ПАРСЕР ДЛЯ RR_Strojka_CZK_CSOB ====================
+    return parse_csob_general(file_content, account_name)
 
 def parse_csob_rr_strojka_czk(file_content: bytes, account_name: str) -> List[Dict]:
-    return parse_csob_dzibik(file_content, account_name)
-
-# ==================== ПАРСЕР ДЛЯ RR_Strojka_EUR_CSOB ====================
+    return parse_csob_general(file_content, account_name)
 
 def parse_csob_rr_strojka_eur(file_content: bytes, account_name: str) -> List[Dict]:
-    return parse_csob_dzibik(file_content, account_name)
-
-# ==================== ПАРСЕР ДЛЯ Koruna_Strojka_CZK_CSOB ====================
+    return parse_csob_general(file_content, account_name)
 
 def parse_csob_koruna_strojka_czk(file_content: bytes, account_name: str) -> List[Dict]:
-    return parse_csob_dzibik(file_content, account_name)
-
-# ==================== ПАРСЕР ДЛЯ Koruna_Strojka_EUR_CSOB ====================
+    return parse_csob_general(file_content, account_name)
 
 def parse_csob_koruna_strojka_eur(file_content: bytes, account_name: str) -> List[Dict]:
-    return parse_csob_dzibik(file_content, account_name)
+    return parse_csob_general(file_content, account_name)
 
 # ==================== ПАРСЕР ДЛЯ Stalkin_ML2_CZK_FIO ====================
 
@@ -1362,7 +1396,6 @@ def parse_unknown(file_content: bytes, account_name: str) -> List[Dict]:
 def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     account_name = clean_account_name(filename)
     
-    # Словарь соответствия имен счетов и функций-парсеров
     account_parsers = {
         'Regina Alfa-bank_NOMIQA_RUB': parse_regina_alfa,
         'Tinkoff RUB': parse_tinkoff,
