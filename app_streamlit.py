@@ -128,9 +128,6 @@ def parse_date(date_str: str) -> str:
     return date_str
 
 def parse_amount(amount_str) -> float:
-    """
-    Парсит сумму из строки с учетом знака.
-    """
     if amount_str is None or pd.isna(amount_str):
         return 0.0
     
@@ -139,7 +136,6 @@ def parse_amount(amount_str) -> float:
     if amount_str in ['', 'nan', '-', 'None', 'null', 'NaN', 'N/A', 'n/a']:
         return 0.0
     
-    # Проверяем знак
     is_negative = False
     if amount_str.startswith('-'):
         is_negative = True
@@ -148,14 +144,11 @@ def parse_amount(amount_str) -> float:
         is_negative = True
         amount_str = amount_str[1:-1]
     
-    # Удаляем валюту
     amount_str = re.sub(r'\s*[A-Z]{3}\s*$', '', amount_str)
     amount_str = re.sub(r'^\s*[A-Z]{3}\s*', '', amount_str)
     
-    # Удаляем пробелы
     amount_str = amount_str.replace(' ', '').replace('\xa0', '')
     
-    # Обрабатываем разделители
     if ',' in amount_str and '.' in amount_str:
         if amount_str.rfind('.') < amount_str.rfind(','):
             amount_str = amount_str.replace('.', '').replace(',', '.')
@@ -168,7 +161,6 @@ def parse_amount(amount_str) -> float:
         else:
             amount_str = amount_str.replace(',', '')
     
-    # Удаляем все нечисловые символы кроме точки и минуса
     amount_str = re.sub(r'[^\d.\-]', '', amount_str)
     
     if not amount_str or amount_str == '.':
@@ -176,7 +168,6 @@ def parse_amount(amount_str) -> float:
     
     try:
         value = float(amount_str)
-        # Возвращаем с правильным знаком
         return -abs(value) if is_negative else abs(value)
     except:
         return 0.0
@@ -191,30 +182,35 @@ def format_amount(amount: float) -> str:
         return f"{integer_part},{decimal_part}"
     return formatted
 
-# ==================== ПАРСЕР CSOB (ИСПРАВЛЕННЫЙ) ====================
+# ==================== ПАРСЕР CSOB (ПОЛНОСТЬЮ ПЕРЕРАБОТАННЫЙ) ====================
 
 def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
     """
-    Исправленный парсер для CSOB Bank.
-    Правильно обрабатывает все транзакции с учетом знака суммы.
+    Полностью переработанный парсер для CSOB Bank.
+    Находит все транзакции независимо от заполненности описания.
     """
     transactions = []
     
-    # Находим строку с заголовками
+    # 1. Находим строку с заголовками
     header_row = -1
     for idx in range(min(50, len(df))):
-        row_values = [str(v).lower().strip() for v in df.iloc[idx].values if pd.notna(v) and str(v).strip()]
-        row_text = ' '.join(row_values)
-        
-        if ('account number' in row_text and 'account currency' in row_text) or \
-           ('posting date' in row_text and 'payment amount' in row_text):
+        row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+        if 'account number' in row_text and 'account currency' in row_text:
             header_row = idx
             break
     
     if header_row == -1:
+        # Пробуем найти по другим ключевым словам
+        for idx in range(min(50, len(df))):
+            row_text = ' '.join(str(v).lower() for v in df.iloc[idx].values if pd.notna(v))
+            if 'posting date' in row_text and 'payment amount' in row_text:
+                header_row = idx
+                break
+    
+    if header_row == -1:
         return []
     
-    # Получаем заголовки
+    # 2. Определяем индексы колонок по заголовкам
     headers = []
     for val in df.iloc[header_row].values:
         if pd.isna(val):
@@ -222,37 +218,117 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
         else:
             headers.append(str(val).strip())
     
-    # Определяем индексы нужных колонок по названиям
-    date_col_idx = None
-    amount_col_idx = None
-    counterparty_col_idx = None
-    desc_col_idx = None
+    # Сопоставляем названия колонок с индексами
+    col_indices = {
+        'account_number': None,
+        'account_currency': None,
+        'alias': None,
+        'account_name': None,
+        'posting_date': None,
+        'value_date': None,
+        'payment_amount': None,
+        'payment_currency': None,
+        'balance': None,
+        'constant_code': None,
+        'variable_code': None,
+        'specific_code': None,
+        'transaction_type': None,
+        'counterparty': None,
+        'counterparty_account': None,
+        'message_to_beneficiary': None,
+        'identification': None,
+        'sent_payment_amount': None,
+        'sent_payment_currency': None,
+        'note': None,
+        'name_of_3rd_party': None,
+        '3rd_party_identifier': None,
+        'ultimate_debtor': None,
+        'ultimate_beneficiary': None,
+        'counterparty_bank': None,
+        'exchange_rate': None,
+        'bic_swift': None,
+        'bank_reference': None,
+        'purpose_of_payment': None,
+        'message_to_payer': None
+    }
     
     for i, col in enumerate(headers):
         if not col:
             continue
-        col_lower = str(col).lower()
+        col_lower = col.lower().strip()
         
-        if 'posting date' in col_lower:
-            date_col_idx = i
+        if 'account number' in col_lower:
+            col_indices['account_number'] = i
+        elif 'account currency' in col_lower:
+            col_indices['account_currency'] = i
+        elif 'alias' in col_lower:
+            col_indices['alias'] = i
+        elif 'account name' in col_lower:
+            col_indices['account_name'] = i
+        elif 'posting date' in col_lower:
+            col_indices['posting_date'] = i
+        elif 'value date' in col_lower:
+            col_indices['value_date'] = i
         elif 'payment amount' in col_lower:
-            amount_col_idx = i
-        elif 'counterparty' in col_lower and counterparty_col_idx is None:
-            counterparty_col_idx = i
+            col_indices['payment_amount'] = i
+        elif 'payment currency' in col_lower:
+            col_indices['payment_currency'] = i
+        elif 'balance' in col_lower:
+            col_indices['balance'] = i
+        elif 'constant code' in col_lower:
+            col_indices['constant_code'] = i
+        elif 'variable code' in col_lower:
+            col_indices['variable_code'] = i
+        elif 'specific code' in col_lower:
+            col_indices['specific_code'] = i
+        elif 'transaction type' in col_lower:
+            col_indices['transaction_type'] = i
+        elif 'counterparty' in col_lower and 'account' not in col_lower:
+            col_indices['counterparty'] = i
+        elif "counterparty's account" in col_lower:
+            col_indices['counterparty_account'] = i
         elif 'message to beneficiary' in col_lower:
-            desc_col_idx = i
+            col_indices['message_to_beneficiary'] = i
+        elif 'identification' in col_lower:
+            col_indices['identification'] = i
+        elif 'sent payment amount' in col_lower:
+            col_indices['sent_payment_amount'] = i
+        elif 'sent payment currency' in col_lower:
+            col_indices['sent_payment_currency'] = i
+        elif 'note' in col_lower:
+            col_indices['note'] = i
+        elif 'name of 3rd party' in col_lower:
+            col_indices['name_of_3rd_party'] = i
+        elif 'ultimate debtor' in col_lower:
+            col_indices['ultimate_debtor'] = i
+        elif 'ultimate beneficiary' in col_lower:
+            col_indices['ultimate_beneficiary'] = i
+        elif "counterparty's bank" in col_lower:
+            col_indices['counterparty_bank'] = i
+        elif 'exchange rate' in col_lower:
+            col_indices['exchange_rate'] = i
+        elif 'bic/swift' in col_lower:
+            col_indices['bic_swift'] = i
+        elif "bank's reference" in col_lower:
+            col_indices['bank_reference'] = i
+        elif 'purpose of payment' in col_lower:
+            col_indices['purpose_of_payment'] = i
+        elif 'message to payer' in col_lower:
+            col_indices['message_to_payer'] = i
     
-    # Если не нашли по названиям, используем индексы из структуры
-    if date_col_idx is None:
-        date_col_idx = 4
-    if amount_col_idx is None:
-        amount_col_idx = 6
-    if counterparty_col_idx is None:
-        counterparty_col_idx = 13
-    if desc_col_idx is None:
-        desc_col_idx = 15
+    # Если какие-то индексы не найдены, используем значения по умолчанию
+    if col_indices['posting_date'] is None:
+        col_indices['posting_date'] = 4
+    if col_indices['payment_amount'] is None:
+        col_indices['payment_amount'] = 6
+    if col_indices['counterparty'] is None:
+        col_indices['counterparty'] = 13
+    if col_indices['message_to_beneficiary'] is None:
+        col_indices['message_to_beneficiary'] = 15
+    if col_indices['transaction_type'] is None:
+        col_indices['transaction_type'] = 12
     
-    # Проходим по строкам после заголовка
+    # 3. Проходим по всем строкам после заголовка
     for idx in range(header_row + 1, len(df)):
         try:
             row = df.iloc[idx]
@@ -261,41 +337,35 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
             if all(pd.isna(x) or str(x).strip() == '' for x in row):
                 continue
             
-            # Проверяем, что это строка с данными
-            first_val = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ''
-            if not first_val or first_val.lower() in ['account number', 'nan', '']:
+            # Проверяем наличие номера счета в первой колонке
+            account_num = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ''
+            if not account_num or account_num.lower() in ['account number', 'nan', '']:
                 continue
             
             # Получаем дату
-            if len(row) <= max(date_col_idx, amount_col_idx):
+            date_idx = col_indices['posting_date']
+            if date_idx >= len(row):
                 continue
-                
-            date_val = row.iloc[date_col_idx] if date_col_idx < len(row) else None
+            date_val = row.iloc[date_idx]
             if pd.isna(date_val):
                 continue
-            
             date = parse_date(str(date_val))
             if not date:
                 continue
             
-            # Получаем сумму - ОБЯЗАТЕЛЬНО сохраняем знак!
-            if amount_col_idx >= len(row):
+            # Получаем сумму
+            amount_idx = col_indices['payment_amount']
+            if amount_idx >= len(row):
                 continue
-                
-            amount_val = row.iloc[amount_col_idx]
+            amount_val = row.iloc[amount_idx]
             if pd.isna(amount_val):
                 continue
-                
+            
             amount_str = str(amount_val).strip()
-            
-            # Проверяем, не является ли значение номером счета
-            account_num = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ''
-            account_num_clean = account_num.replace('/', '').replace(' ', '')
-            
-            # Парсим сумму с сохранением знака
             amount = parse_amount(amount_str)
             
             # Проверяем, что это не номер счета
+            account_num_clean = account_num.replace('/', '').replace(' ', '')
             amount_str_clean = str(abs(amount)).replace('.', '').replace(',', '')
             if amount_str_clean == account_num_clean:
                 continue
@@ -305,40 +375,83 @@ def parse_csob(df: pd.DataFrame, account_name: str) -> List[Dict]:
             
             # Получаем контрагента
             counterparty = ''
-            if counterparty_col_idx is not None and counterparty_col_idx < len(row):
-                val = row.iloc[counterparty_col_idx]
+            counterparty_idx = col_indices['counterparty']
+            if counterparty_idx is not None and counterparty_idx < len(row):
+                val = row.iloc[counterparty_idx]
                 if pd.notna(val) and str(val).strip() and str(val).strip() != 'nan':
                     counterparty = str(val).strip()[:200]
             
+            # Если контрагент не найден, пробуем другие колонки
+            if not counterparty:
+                # Пробуем колонку с именем счета (account_name)
+                if col_indices['account_name'] is not None and col_indices['account_name'] < len(row):
+                    val = row.iloc[col_indices['account_name']]
+                    if pd.notna(val) and str(val).strip() and str(val).strip() != 'nan':
+                        if str(val).strip() != account_name:
+                            counterparty = str(val).strip()[:200]
+                
+                # Пробуем колонку с именем 3-й стороны
+                if not counterparty and col_indices['name_of_3rd_party'] is not None and col_indices['name_of_3rd_party'] < len(row):
+                    val = row.iloc[col_indices['name_of_3rd_party']]
+                    if pd.notna(val) and str(val).strip() and str(val).strip() != 'nan':
+                        counterparty = str(val).strip()[:200]
+            
             # Получаем описание
             description = ''
-            if desc_col_idx is not None and desc_col_idx < len(row):
-                val = row.iloc[desc_col_idx]
+            
+            # Сначала пробуем взять из message_to_beneficiary
+            desc_idx = col_indices['message_to_beneficiary']
+            if desc_idx is not None and desc_idx < len(row):
+                val = row.iloc[desc_idx]
                 if pd.notna(val) and str(val).strip() and str(val).strip() != 'nan':
                     description = str(val).strip()
             
-            # Если нет описания - собираем из других колонок
+            # Если нет, собираем из других колонок
             if not description:
                 desc_parts = []
-                exclude_cols = [date_col_idx, amount_col_idx, 0, 1, 2, 3, 8, 9, 10, 11, 12]
+                # Колонки, которые нужно исключить
+                exclude_cols = [
+                    col_indices['account_number'],
+                    col_indices['account_currency'],
+                    col_indices['alias'],
+                    col_indices['account_name'],
+                    col_indices['posting_date'],
+                    col_indices['value_date'],
+                    col_indices['payment_amount'],
+                    col_indices['payment_currency'],
+                    col_indices['balance'],
+                    col_indices['constant_code'],
+                    col_indices['variable_code'],
+                    col_indices['specific_code'],
+                    col_indices['counterparty'],
+                    col_indices['counterparty_account'],
+                    col_indices['sent_payment_amount'],
+                    col_indices['sent_payment_currency'],
+                    col_indices['exchange_rate'],
+                    col_indices['bic_swift'],
+                    col_indices['bank_reference']
+                ]
+                exclude_cols = [i for i in exclude_cols if i is not None and i < len(row)]
+                
                 for i, val in enumerate(row):
                     if i in exclude_cols:
                         continue
                     if pd.notna(val) and str(val).strip() and str(val).strip() != 'nan':
                         val_str = str(val).strip()
-                        # Пропускаем числа, которые похожи на суммы или номера счетов
+                        # Не добавляем числа, похожие на суммы или номера счетов
                         if not re.match(r'^[\d\.,\-]+$', val_str) or len(val_str) > 10:
                             desc_parts.append(val_str)
+                
                 if desc_parts:
                     description = ' | '.join(desc_parts)
             
-            # Если описание все еще пустое, используем тип транзакции
-            if not description and len(row) > 12:
-                val = row.iloc[12]
-                if pd.notna(val) and str(val).strip():
-                    val_str = str(val).strip()
-                    if val_str:
-                        description = val_str
+            # Если все еще нет описания, используем тип транзакции
+            if not description:
+                trans_type_idx = col_indices['transaction_type']
+                if trans_type_idx is not None and trans_type_idx < len(row):
+                    val = row.iloc[trans_type_idx]
+                    if pd.notna(val) and str(val).strip() and str(val).strip() != 'nan':
+                        description = str(val).strip()
             
             transactions.append({
                 'Дата': date,
