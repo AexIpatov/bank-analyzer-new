@@ -185,7 +185,6 @@ def parse_garpiz_pernink(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Специальный парсер для Garpiz_Pernink_CZK_UC.
     Правильно определяет суммы - берет их из колонки Amount (индекс 1).
-    Игнорирует номер счета как сумму.
     """
     transactions = []
     
@@ -225,7 +224,7 @@ def parse_garpiz_pernink(file_content: bytes, account_name: str) -> List[Dict]:
             continue
         
         try:
-            # Номер счета - первая колонка (используем только для проверки)
+            # Номер счета - первая колонка
             account_num = parts[0].strip()
             if not account_num or not re.match(r'^\d+$', account_num):
                 continue
@@ -235,10 +234,9 @@ def parse_garpiz_pernink(file_content: bytes, account_name: str) -> List[Dict]:
             if not amt_str:
                 continue
             
-            # Проверяем, что это действительно сумма (содержит запятую или точку)
-            # и НЕ является номером счета (длинное число без запятой)
+            # Проверяем, что это НЕ номер счета
+            # Номер счета - это длинное число без запятой (например 7955655028)
             if re.match(r'^\d{10,}$', amt_str):
-                # Это номер счета, пропускаем
                 continue
             
             # Парсим сумму с сохранением знака
@@ -360,7 +358,7 @@ def parse_garpiz_unicredit(file_content: bytes, account_name: str) -> List[Dict]
             if not amt_str:
                 continue
             
-            # Проверяем, что это действительно сумма
+            # Проверяем, что это НЕ номер счета
             if re.match(r'^\d{10,}$', amt_str):
                 continue
             
