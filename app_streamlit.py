@@ -2205,6 +2205,22 @@ def parse_unknown(file_content: bytes, account_name: str) -> List[Dict]:
 def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     account_name = clean_account_name(filename)
     
+    # ===== НОВОЕ: маршрутизация по расширению файла =====
+    ext = os.path.splitext(filename)[1].lower()
+    
+    if ext == '.docx':
+        if 'Regina Alfa' in account_name:
+            return parse_regina_alfa_docx(file_content, account_name)
+        else:
+            return parse_unknown(file_content, account_name)
+    
+    if ext == '.pdf':
+        if 'Regina Alfa' in account_name:
+            return parse_regina_alfa_pdf(file_content, account_name)
+        else:
+            return parse_unknown(file_content, account_name)
+    # ====================================================
+    
     account_parsers = {
         'Regina Alfa bank NOMIQA RUB': parse_regina_alfa,
         'Tinkoff RUB': parse_tinkoff,
