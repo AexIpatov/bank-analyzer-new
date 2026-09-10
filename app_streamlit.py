@@ -288,6 +288,139 @@ def parse_regina_alfa(file_content: bytes, account_name: str) -> List[Dict]:
     
     return transactions
 
+# ==================== ПАРСЕР ДЛЯ Regina Alfa-bank DOCX ====================
+
+def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер для Альфа-Банк в формате DOCX (Word).
+    Извлекает транзакции из таблиц и параграфов Word-документа.
+    """
+    transactions = []
+    
+    try:
+        doc = Document(BytesIO(file_content))
+    except Exception as e:
+        return []
+    
+    # Собираем весь текст из таблиц
+    all_text_parts = []
+    
+    # 1) Из таблиц
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                cell_text = cell.text.strip()
+                if cell_text:
+                    all_text_parts.append(cell_text)
+    
+    # 2) Из параграфов
+    for para in doc.paragraphs:
+        txt = para.text.strip()
+        if txt:
+            all_text_parts.append(txt)
+    
+    # Склеиваем всё в один текст
+    full_text = '\n'.join(all_text_parts)
+    full_text = full_text.replace('\ufeff', '').replace('\xa0', ' ')
+    
+    # Ищем паттерн: дата + код операции + описание + сумма
+    pattern = re.compile(
+        r'(\d{2}\.\d{2}\.\d{4})\s*'
+        r'([A-Z0-9_]+)\s*'
+        r'(.+?)'
+        r'(-?[\d\s]+,\d{2})\s*RUR',
+        re.DOTALL
+    )
+    
+    for match in pattern.finditer(full_text):
+        try:
+            date_str = match.group(1).strip()
+            code = match.group(2).strip()
+            description = match.group(3).strip()
+            amount_str = match.group(4).strip()
+            
+            description = re.sub(r'\s+', ' ', description).strip()
+            
+            date = parse_date(date_str)
+            amount = parse_amount(amount_str)
+            
+            if not date or amount == 0.0:
+                continue
+            
+            counterparty = extract_counterparty(description)
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty,
+                'Наименование счета': account_name,
+                'Описание': f"{code} {description}"[:500]
+            })
+        except Exception:
+            continue
+    
+    return transactions
+
+# ==================== ПАРСЕР ДЛЯ Regina Alfa-bank PDF ====================
+
+def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер для Альфа-Банк в формате PDF.
+    """
+    transactions = []
+    full_text_parts = []
+    
+    try:
+        with pdfplumber.open(BytesIO(file_content)) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    full_text_parts.append(text)
+    except Exception as e:
+        return []
+    
+    full_text = '\n'.join(full_text_parts)
+    full_text = full_text.replace('\ufeff', '').replace('\xa0', ' ')
+    
+    pattern = re.compile(
+        r'(\d{2}\.\d{2}\.\d{4})\s*'
+        r'([A-Z0-9_]+)\s*'
+        r'(.+?)'
+        r'(-?[\d\s]+,\d{2})\s*RUR',
+        re.DOTALL
+    )
+    
+    for match in pattern.finditer(full_text):
+        try:
+            date_str = match.group(1).strip()
+            code = match.group(2).strip()
+            description = match.group(3).strip()
+            amount_str = match.group(4).strip()
+            
+            description = re.sub(r'\s+', ' ', description).strip()
+            
+            date = parse_date(date_str)
+            amount = parse_amount(amount_str)
+            
+            if not date or amount == 0.0:
+                continue
+            
+            counterparty = extract_counterparty(description)
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty,
+                'Наименование счета': account_name,
+                'Описание': f"{code} {description}"[:500]
+            })
+        except Exception:
+            continue
+    
+    return transactions
+
+# ==================== ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
+
 def extract_counterparty(description: str) -> str:
     """Извлекает контрагента из описания"""
     if not description:
