@@ -236,6 +236,8 @@ def clean_account_name(filename: str) -> str:
     name = re.sub(r' 2026$', '', name)
     name = re.sub(r'\d{2}\.\d{2}\.\d{4}$', '', name)
     name = re.sub(r' \(2\)$', '', name)
+    name = re.sub(r'_\d{4}_\d{2}_\d{2}_\d{4}_\d{2}_\d{2}$', '', name)  # ← ИСПРАВЛЕНО: убирает _2026-07-01_2026-07-31
+    name = re.sub(r'_\d{2}-[A-Za-z]{3}-\d{4}_\d{2}-[A-Za-z]{3}-\d{4}$', '', name)  # ← ИСПРАВЛЕНО: убирает _01-Jul-2026_31-Jul-2026
     return name.strip() if name else 'Неизвестный счет'
 
 def parse_date(date_str: str) -> str:
@@ -347,6 +349,28 @@ def format_amount(amount: float) -> str:
         integer_part = re.sub(r'(?<=\d)(?=(\d{3})+(?!\d))', ' ', integer_part)
         return f"{sign}{integer_part},{decimal_part}"
     return f"{sign}{formatted}"
+
+def read_excel_any_engine(file_content: bytes, sheet_name=None):
+    """
+    Универсальное чтение XLSX/XLS независимо от расширения.
+    Пробуем разные engine (openpyxl, xlrd) и разные варианты.
+    """
+    engines_to_try = ['openpyxl', 'xlrd', None]
+    last_error = None
+    for engine in engines_to_try:
+        try:
+            kwargs = {'header': None}
+            if sheet_name:
+                kwargs['sheet_name'] = sheet_name
+            if engine:
+                kwargs['engine'] = engine
+            df = pd.read_excel(BytesIO(file_content), **kwargs)
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            last_error = e
+            continue
+    return None
 
 # ==================== ПАРСЕР ДЛЯ Regina Alfa-bank_NOMIQA_RUB ====================
 
@@ -605,7 +629,6 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
     date_idx = -1
     amount_idx = -1
     desc_idx = -1
-    card_idx = -1
     
     for i, h in enumerate(header_cells):
         h_clean = h.strip()
@@ -615,8 +638,6 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
             amount_idx = i
         elif 'Описание операции' in h_clean:
             desc_idx = i
-        elif 'Номер карты' in h_clean:
-            card_idx = i
     
     if date_idx == -1:
         date_idx = 0
@@ -1157,24 +1178,30 @@ def parse_fio_stalkin(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return transactions
 
-# ==================== ПАРСЕР ДЛЯ AN14_Estate_EUR_Industra ====================
+# ==================== ПАРСЕР ДЛЯ AN14_Estate_EUR_Industra (Industra Bank) ====== ИСПРАВЛЕНО ======
 
 def parse_industra_an14(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер для Industra Bank (XLS/XLSX).
+    Ищет строку заголовка по "Дата транзакции" и "Дебет", "Кредит".
+    Использует универсальное чтение через openpyxl / xlrd.
+    """
     transactions = []
     
-    try:
-        df = pd.read_excel(BytesIO(file_content), header=None)
-    except Exception as e:
+    df = read_excel_any_engine(file_content)
+    if df is None or df.empty:
         return []
     
-    if df.empty:
-        return []
-    
+    # Ищем строку заголовка
     header_row_idx = -1
     for idx, row in df.iterrows():
-        if idx < 30:
+        if idx < 50:
             row_str = ' '.join([str(x) for x in row.values if pd.notna(x)])
-            if 'Дата транзакции' in row_str and 'Дебет' in row_str and 'Кредит' in row_str:
+            # Расширенная проверка: ищем и "Дебет", и "Кредит" (могут быть "Дебет(D)" / "Кредит(C)")
+            has_date = 'Дата транзакции' in row_str
+            has_debit = 'Дебет' in row_str
+            has_credit = 'Кредит' in row_str
+            if has_date and has_debit and has_credit:
                 header_row_idx = idx
                 break
     
@@ -1482,9 +1509,14 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
     
     return transactions
 
-# ==================== ПАРСЕР ДЛЯ AN14_Estate_EUR_Revolut ====================
+# ==================== ПАРСЕР ДЛЯ AN14_Estate_EUR_Revolut ===== ИСПРАВЛЕНО ======
 
 def parse_revolut_an14(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер для Revolut CSV.
+    Поддерживает TOPUP (пополнение) и TRANSFER.
+    Строка считается транзакцией, если State == COMPLETED.
+    """
     transactions = []
     
     try:
@@ -1494,6 +1526,10 @@ def parse_revolut_an14(file_content: bytes, account_name: str) -> List[Dict]:
             content = file_content.decode('cp1250')
         except:
             content = file_content.decode('latin-1')
+    
+    # Убираем BOM
+    if content.startswith('\ufeff'):
+        content = content[1:]
     
     lines = content.split('\n')
     lines = [line.strip() for line in lines if line.strip()]
@@ -1516,12 +1552,13 @@ def parse_revolut_an14(file_content: bytes, account_name: str) -> List[Dict]:
     desc_idx = -1
     counterparty_idx = -1
     state_idx = -1
+    type_idx = -1
     
     for i, col in enumerate(header_parts):
         col_clean = col.strip().strip('"')
         if 'Date started' in col_clean:
             date_idx = i
-        elif 'Amount' in col_clean and 'Total' not in col_clean:
+        elif col_clean == 'Amount':
             amount_idx = i
         elif 'Description' in col_clean:
             desc_idx = i
@@ -1529,6 +1566,8 @@ def parse_revolut_an14(file_content: bytes, account_name: str) -> List[Dict]:
             counterparty_idx = i
         elif 'State' in col_clean:
             state_idx = i
+        elif col_clean == 'Type':
+            type_idx = i
     
     if date_idx == -1:
         date_idx = 0
@@ -1536,12 +1575,15 @@ def parse_revolut_an14(file_content: bytes, account_name: str) -> List[Dict]:
         amount_idx = 14
     if desc_idx == -1:
         desc_idx = 5
+    if type_idx == -1:
+        type_idx = 3
     
     for line_idx in range(header_idx + 1, len(lines)):
         line = lines[line_idx]
         if not line:
             continue
         
+        # Разбираем CSV с кавычками
         parts = []
         current = ''
         in_quotes = False
@@ -1562,36 +1604,56 @@ def parse_revolut_an14(file_content: bytes, account_name: str) -> List[Dict]:
             continue
         
         try:
+            # Проверяем статус
             if state_idx != -1 and state_idx < len(parts):
                 state = parts[state_idx].strip()
                 if state and state != 'COMPLETED':
                     continue
             
+            # ДАТА
             date_str = parts[date_idx].strip() if date_idx < len(parts) else ''
             date = parse_date(date_str)
             if not date:
                 continue
             
+            # СУММА
             amount_str = parts[amount_idx].strip() if amount_idx < len(parts) else ''
             amount = parse_amount(amount_str)
             if amount == 0.0:
                 continue
             
+            # ТИП операции
+            trans_type = ''
+            if type_idx < len(parts):
+                trans_type = parts[type_idx].strip()
+            
+            # Знак суммы: TOPUP всегда доход, TRANSFER может быть в обе стороны,
+            # FEE — всегда расход.
+            if trans_type == 'TOPUP':
+                amount = abs(amount)
+            elif trans_type == 'FEE':
+                amount = -abs(amount)
+            # TRANSFER оставляем с тем знаком, который пришёл (в файле он уже со знаком "-")
+            
+            # КОНТРАГЕНТ
             counterparty = ''
             if counterparty_idx != -1 and counterparty_idx < len(parts):
                 counterparty = parts[counterparty_idx].strip()
                 if counterparty == '' or counterparty == 'nan':
                     counterparty = ''
             
+            description = parts[desc_idx].strip() if desc_idx < len(parts) else ''
+            
             if not counterparty:
-                description = parts[desc_idx].strip() if desc_idx < len(parts) else ''
                 match = re.search(r'To\s+([^,]+)', description)
                 if match:
                     counterparty = match.group(1).strip()
                 else:
-                    counterparty = description[:200]
-            
-            description = parts[desc_idx].strip() if desc_idx < len(parts) else ''
+                    match = re.search(r'from\s+([^,]+)', description)
+                    if match:
+                        counterparty = match.group(1).strip()
+                    else:
+                        counterparty = description[:200]
             
             transactions.append({
                 'Дата': date,
@@ -1616,27 +1678,30 @@ def parse_revolut_nb(file_content: bytes, account_name: str) -> List[Dict]:
 def parse_revolut_plavas(file_content: bytes, account_name: str) -> List[Dict]:
     return parse_revolut_an14(file_content, account_name)
 
-# ==================== ПАРСЕР ДЛЯ Paysera (ОБЩИЙ) ====================
+# ==================== ПАРСЕР ДЛЯ Paysera (ОБЩИЙ) ===== ИСПРАВЛЕНО ======
 
 def parse_paysera_general(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер для Paysera XLSX.
+    Ищет строку заголовка по 'Тип', 'Дата и время', 'Сумма и валюта'.
+    Игнорирует строки с 'Остаток', 'Дебетовый оборот', 'Кредитовый оборот'.
+    """
     transactions = []
     
-    try:
-        df = pd.read_excel(BytesIO(file_content), sheet_name='Worksheet', header=None)
-    except Exception as e:
-        try:
-            df = pd.read_excel(BytesIO(file_content), header=None)
-        except Exception as e2:
-            return []
-    
-    if df.empty:
+    df = read_excel_any_engine(file_content, sheet_name='Worksheet')
+    if df is None or df.empty:
+        df = read_excel_any_engine(file_content)
+    if df is None or df.empty:
         return []
     
     header_row_idx = -1
     for idx, row in df.iterrows():
-        if idx < 20:
+        if idx < 30:
             row_str = ' '.join([str(x) for x in row.values if pd.notna(x)])
-            if 'Тип' in row_str and 'Дата и время' in row_str and 'Сумма и валюта' in row_str:
+            has_type = 'Тип' in row_str
+            has_date = 'Дата и время' in row_str
+            has_amount = 'Сумма и валюта' in row_str
+            if has_type and has_date and has_amount:
                 header_row_idx = idx
                 break
     
@@ -1662,8 +1727,6 @@ def parse_paysera_general(file_content: bytes, account_name: str) -> List[Dict]:
             col_indices['type'] = idx
         elif 'Баланс' in val_str:
             col_indices['balance'] = idx
-        elif 'Тип' in val_str:
-            col_indices['trans_type'] = idx
     
     if 'date' not in col_indices:
         col_indices['date'] = 3
@@ -1671,6 +1734,10 @@ def parse_paysera_general(file_content: bytes, account_name: str) -> List[Dict]:
         col_indices['amount'] = 7
     if 'counterparty' not in col_indices:
         col_indices['counterparty'] = 4
+    if 'purpose' not in col_indices:
+        col_indices['purpose'] = 9
+    if 'type' not in col_indices:
+        col_indices['type'] = 11
     
     for idx in range(header_row_idx + 1, len(df)):
         row = df.iloc[idx]
@@ -1679,11 +1746,13 @@ def parse_paysera_general(file_content: bytes, account_name: str) -> List[Dict]:
         if not row_values:
             continue
         
+        # Отсеиваем итоговые строки
         row_str = ' '.join([str(x) for x in row.values if pd.notna(x)])
         if 'Остаток' in row_str or 'Дебетовый оборот' in row_str or 'Кредитовый оборот' in row_str:
             continue
         
         try:
+            # ДАТА
             date_str = ''
             if 'date' in col_indices and col_indices['date'] < len(row):
                 date_str = str(row.iloc[col_indices['date']]).strip()
@@ -1701,6 +1770,7 @@ def parse_paysera_general(file_content: bytes, account_name: str) -> List[Dict]:
             if not date:
                 continue
             
+            # СУММА
             amount = 0.0
             amount_found = False
             
@@ -1708,9 +1778,12 @@ def parse_paysera_general(file_content: bytes, account_name: str) -> List[Dict]:
                 amount_val = row.iloc[col_indices['amount']]
                 if pd.notna(amount_val) and amount_val != '':
                     amount_str = str(amount_val).strip().replace(',', '.').replace(' ', '')
+                    # Убираем возможную валюту в конце
+                    amount_str = re.sub(r'[A-Za-z]+$', '', amount_str).strip()
                     if amount_str and amount_str != 'nan':
                         parsed = parse_amount(amount_str)
                         if parsed != 0.0:
+                            # Определяем знак по колонке "Кредит / Дебет"
                             trans_type = ''
                             if 'type' in col_indices and col_indices['type'] < len(row):
                                 trans_type = str(row.iloc[col_indices['type']]).strip()
@@ -1726,12 +1799,14 @@ def parse_paysera_general(file_content: bytes, account_name: str) -> List[Dict]:
             if not amount_found:
                 continue
             
+            # КОНТРАГЕНТ
             counterparty = ''
             if 'counterparty' in col_indices and col_indices['counterparty'] < len(row):
                 counterparty = str(row.iloc[col_indices['counterparty']]).strip()
                 if counterparty == 'nan':
                     counterparty = ''
             
+            # ОПИСАНИЕ
             description = ''
             if 'purpose' in col_indices and col_indices['purpose'] < len(row):
                 description = str(row.iloc[col_indices['purpose']]).strip()
@@ -1812,7 +1887,6 @@ def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict]:
     amount_idx = -1
     date_idx = -1
     desc_idx = -1
-    counterparty_idx = -1
     notes_idx = -1
     
     for i, col in enumerate(header_parts):
@@ -2005,20 +2079,15 @@ def parse_bunda_pasha_aed(file_content: bytes, account_name: str) -> List[Dict]:
 def parse_bunda_pasha_azn(file_content: bytes, account_name: str) -> List[Dict]:
     transactions = []
     
-    try:
-        df = pd.read_excel(BytesIO(file_content), sheet_name='Statement', header=None)
-    except Exception as e:
-        try:
-            df = pd.read_excel(BytesIO(file_content), header=None)
-        except Exception as e2:
-            return []
-    
-    if df.empty:
+    df = read_excel_any_engine(file_content, sheet_name='Statement')
+    if df is None or df.empty:
+        df = read_excel_any_engine(file_content)
+    if df is None or df.empty:
         return []
     
     header_row_idx = -1
     for idx, row in df.iterrows():
-        if idx < 20:
+        if idx < 30:
             row_str = ' '.join([str(x) for x in row.values if pd.notna(x)])
             if 'Əməliyyat tarixi' in row_str or 'Əməliyyat' in row_str:
                 header_row_idx = idx
