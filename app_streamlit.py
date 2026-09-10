@@ -6,6 +6,8 @@ import chardet
 from datetime import datetime
 from io import BytesIO
 from typing import Dict, List, Tuple, Optional
+from docx import Document
+import pdfplumber
 
 # ==================== НАСТРОЙКА СТРАНИЦЫ ====================
 st.set_page_config(
@@ -211,15 +213,12 @@ def parse_regina_alfa(file_content: bytes, account_name: str) -> List[Dict]:
         if not row_values:
             continue
         
-        # Проверяем, является ли строка продолжением описания
         row_str = ' '.join([str(x) for x in row.values if pd.notna(x)])
         
-        # Проверяем, содержит ли строка дату (начало новой записи)
         has_date = False
         date_val = None
         amount_val = None
         
-        # Проверяем первую колонку на наличие даты
         if len(row) > 0:
             val = row.iloc[0]
             if pd.notna(val):
@@ -228,21 +227,18 @@ def parse_regina_alfa(file_content: bytes, account_name: str) -> List[Dict]:
                     has_date = True
                     date_val = val_str
         
-        # Проверяем последние колонки на наличие суммы
         for col_idx in range(len(row) - 1, max(0, len(row) - 3), -1):
             if col_idx < len(row):
                 val = row.iloc[col_idx]
                 if pd.notna(val) and val != '':
                     val_str = str(val).strip()
                     if val_str and val_str != 'nan':
-                        # Очищаем от пробелов и валюты
                         val_str_clean = re.sub(r'\s*RUR\s*$', '', val_str)
                         if re.search(r'[\d,.]', val_str_clean):
                             amount_val = val_str
                             break
         
         if has_date:
-            # Сохраняем предыдущую запись
             if current_date is not None and current_amount is not None:
                 transactions.append({
                     'Дата': parse_date(str(current_date)),
@@ -252,26 +248,22 @@ def parse_regina_alfa(file_content: bytes, account_name: str) -> List[Dict]:
                     'Описание': current_desc[:500]
                 })
             
-            # Начинаем новую запись
             current_date = date_val
             current_desc = ''
             current_amount = amount_val
             
-            # Добавляем описание из текущей строки
             desc_parts = []
             for col_idx in range(1, len(row)):
                 val = row.iloc[col_idx]
                 if pd.notna(val) and val != '':
                     val_str = str(val).strip()
                     if val_str and val_str != 'nan' and val_str != current_date and val_str != current_amount:
-                        # Пропускаем колонки с суммой
                         if not re.search(r'[\d,.]\s*RUR', val_str):
                             desc_parts.append(val_str)
             
             if desc_parts:
                 current_desc = ' '.join(desc_parts)
         else:
-            # Это продолжение описания
             if current_date is not None:
                 desc_parts = []
                 for val in row.values:
@@ -282,11 +274,9 @@ def parse_regina_alfa(file_content: bytes, account_name: str) -> List[Dict]:
                 if desc_parts:
                     current_desc += ' ' + ' '.join(desc_parts)
             
-            # Если нашли сумму в строке без даты (как на второй странице)
             if amount_val is not None and current_amount is None:
                 current_amount = amount_val
     
-    # Сохраняем последнюю запись
     if current_date is not None and current_amount is not None:
         transactions.append({
             'Дата': parse_date(str(current_date)),
@@ -303,7 +293,6 @@ def extract_counterparty(description: str) -> str:
     if not description:
         return ''
     
-    # Перевод через СБП - ищем отправителя/получателя
     match = re.search(r'от\s+([+\d\s]+)', description)
     if match:
         return match.group(1).strip()
@@ -312,22 +301,18 @@ def extract_counterparty(description: str) -> str:
     if match:
         return match.group(1).strip()
     
-    # Пляцевая Регина
     if 'Пляцевая' in description:
         return 'Пляцевая Регина Николаевна'
     
-    # Операция по карте - ищем место совершения
     match = re.search(r'место совершения операции:\s*([^\\]+)', description)
     if match:
         place = match.group(1).strip()
-        # Извлекаем город или название
         if '\\' in place:
             parts = place.split('\\')
             if len(parts) >= 2:
                 return parts[1] if parts[1] else parts[0]
         return place[:50]
     
-    # Перевод денежных средств
     if 'Перевод денежных средств' in description:
         return 'Перевод'
     
