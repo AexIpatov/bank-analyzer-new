@@ -2205,7 +2205,7 @@ def parse_unknown(file_content: bytes, account_name: str) -> List[Dict]:
 def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     account_name = clean_account_name(filename)
     
-    # ===== НОВОЕ: маршрутизация по расширению файла =====
+    # ===== Маршрутизация по расширению файла =====
     ext = os.path.splitext(filename)[1].lower()
     
     if ext == '.docx':
@@ -2289,11 +2289,11 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
 
 def main():
     st.markdown("### 📂 Загрузите банковские выписки")
-    st.markdown("Поддерживаются форматы: **CSV, XLSX, XLS**")
+    st.markdown("Поддерживаются форматы: **CSV, XLSX, XLS, DOCX, PDF**")  # ← НОВОЕ
     
     uploaded_files = st.file_uploader(
         "Выберите файлы",
-        type=['csv', 'xlsx', 'xls'],
+        type=['csv', 'xlsx', 'xls', 'docx', 'pdf'],  # ← НОВОЕ: добавлены docx и pdf
         accept_multiple_files=True
     )
     
