@@ -19,23 +19,202 @@ st.set_page_config(
 # ==================== CSS СТИЛИ ====================
 st.markdown("""
 <style>
+.stApp {
+    background: linear-gradient(180deg, #FAF8F3 0%, #F4F7F2 100%);
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    color: #2E3B32;
+}
+.main { background: transparent; }
+footer {visibility: hidden;}
+#MainMenu {visibility: hidden;}
+
 .main-header {
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-    padding: 1.5rem;
-    border-radius: 20px;
-    color: white;
+    background: linear-gradient(135deg, #A8D5BA 0%, #7BAE7F 100%);
+    padding: 2.5rem 2rem;
+    border-radius: 24px;
+    color: #FFFFFF;
     text-align: center;
     margin-bottom: 2rem;
+    box-shadow: 0 10px 30px rgba(123, 174, 127, 0.25);
+    position: relative;
+    overflow: hidden;
 }
+.main-header::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -20%;
+    width: 400px;
+    height: 400px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 50%;
+    pointer-events: none;
+}
+.main-header h1 {
+    color: #FFFFFF;
+    font-weight: 700;
+    font-size: 2.2rem;
+    margin: 0 0 0.5rem 0;
+    letter-spacing: -0.5px;
+    position: relative;
+    z-index: 1;
+}
+.main-header p {
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 1.05rem;
+    margin: 0;
+    font-weight: 400;
+    position: relative;
+    z-index: 1;
+}
+
 .stButton > button {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border-radius: 10px;
+    background: linear-gradient(135deg, #A8D5BA 0%, #7BAE7F 100%);
+    color: #FFFFFF;
+    border: none;
+    border-radius: 12px;
+    padding: 0.6rem 1.4rem;
+    font-weight: 600;
+    font-size: 1rem;
+    transition: all 0.25s ease;
+    box-shadow: 0 4px 12px rgba(123, 174, 127, 0.25);
+}
+.stButton > button:hover {
+    background: linear-gradient(135deg, #7BAE7F 0%, #5D9968 100%);
+    box-shadow: 0 6px 18px rgba(123, 174, 127, 0.4);
+    transform: translateY(-1px);
+    color: #FFFFFF;
+}
+
+.stDownloadButton > button {
+    background: linear-gradient(135deg, #A8D5BA 0%, #7BAE7F 100%);
+    color: #FFFFFF;
+    border: none;
+    border-radius: 12px;
+    padding: 0.7rem 1.6rem;
+    font-weight: 600;
+    transition: all 0.25s ease;
+    box-shadow: 0 4px 12px rgba(123, 174, 127, 0.25);
+}
+.stDownloadButton > button:hover {
+    background: linear-gradient(135deg, #7BAE7F 0%, #5D9968 100%);
+    box-shadow: 0 6px 18px rgba(123, 174, 127, 0.4);
+    transform: translateY(-1px);
+    color: #FFFFFF;
+}
+
+.stFileUploader {
+    background: #FFFFFF;
+    border-radius: 16px;
+    padding: 1rem;
+    border: 2px dashed #D5E5D9;
+    transition: border-color 0.25s ease;
+    box-shadow: 0 2px 10px rgba(46, 59, 50, 0.04);
+}
+.stFileUploader:hover { border-color: #A8D5BA; }
+.stFileUploader section {
+    border: none !important;
+    background: transparent !important;
+}
+.stFileUploader label {
+    color: #2E3B32 !important;
+    font-weight: 500;
+}
+.stFileUploader button {
+    background: #E8F5E9 !important;
+    color: #2E3B32 !important;
+    border: 1px solid #A8D5BA !important;
+    border-radius: 10px !important;
+    font-weight: 500 !important;
+}
+.stFileUploader button:hover {
+    background: #A8D5BA !important;
+    color: #FFFFFF !important;
+}
+
+.stMetric {
+    background: #FFFFFF;
+    border-radius: 16px;
+    padding: 1.2rem 1.4rem;
+    border-left: 5px solid #A8D5BA;
+    box-shadow: 0 4px 16px rgba(46, 59, 50, 0.06);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.stMetric:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 24px rgba(123, 174, 127, 0.15);
+}
+.stMetric label {
+    color: #5A6B5D !important;
+    font-size: 0.9rem !important;
+    font-weight: 500 !important;
+}
+.stMetric [data-testid="stMetricValue"] {
+    color: #2E3B32 !important;
+    font-weight: 700 !important;
+    font-size: 1.6rem !important;
+}
+
+.stDataFrame {
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(46, 59, 50, 0.06);
+    background: #FFFFFF;
+}
+
+.stAlert {
+    border-radius: 12px;
+    border: none;
+    padding: 0.8rem 1.2rem;
+    box-shadow: 0 2px 8px rgba(46, 59, 50, 0.04);
+}
+div[data-baseweb="notification"][kind="positive"] {
+    background: #E8F5E9;
+    color: #2E3B32;
+}
+div[data-baseweb="notification"][kind="info"] {
+    background: #F0F4ED;
+    color: #2E3B32;
+}
+div[data-baseweb="notification"][kind="warning"] {
+    background: #FBF6E9;
+    color: #5A4A1F;
+}
+
+.stProgress > div > div > div {
+    background: linear-gradient(90deg, #A8D5BA 0%, #7BAE7F 100%);
+    border-radius: 8px;
+}
+
+h3 {
+    color: #2E3B32;
+    font-weight: 600;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid #E8F5E9;
+    margin-top: 1.5rem;
+    margin-bottom: 1rem;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #FAF8F3; }
+::-webkit-scrollbar-thumb { background: #C8DECC; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #A8D5BA; }
+
+hr {
+    border: none;
+    border-top: 1px solid #E8F5E9;
+    margin: 1.5rem 0;
 }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header"><h1>🏦 Аналитик банковских выписок</h1><p>Поддержка CSV, XLSX, XLS форматов</p></div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="main-header">'
+    '<h1>🏦 Аналитик банковских выписок</h1>'
+    '<p>Обработка выписок из CSV, XLSX, XLS, DOCX и PDF</p>'
+    '</div>',
+    unsafe_allow_html=True
+)
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
@@ -133,7 +312,7 @@ def parse_amount(amount_str) -> float:
     elif amount_str.startswith('(') and amount_str.endswith(')'):
         is_negative = True
         amount_str = amount_str[1:-1]
-    amount_str = re.sub(r'\s*[₽$€£]\s*$', '', amount_str)   # ← НОВОЕ: убираем символы валют ₽$€£
+    amount_str = re.sub(r'\s*[₽$€£]\s*$', '', amount_str)
     amount_str = re.sub(r'\s*[A-Z]{3}\s*$', '', amount_str)
     amount_str = re.sub(r'^\s*[A-Z]{3}\s*', '', amount_str)
     amount_str = amount_str.replace(' ', '').replace('\xa0', '')
@@ -399,17 +578,9 @@ def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     
     return transactions
 
-# ===== НОВЫЙ ПАРСЕР ДЛЯ ТИНЬКОФФ DOCX ====================
+# ==================== ПАРСЕР ДЛЯ ТИНЬКОФФ DOCX ====================
 
 def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер для Тинькофф (Т-Банк) в формате DOCX (Word).
-    Формат таблицы:
-        Дата и время операции | Дата списания | Сумма в валюте операции |
-        Сумма операции в валюте карты | Описание операции | Номер карты
-    Пример строки: 11.08.2026 15:50 | 11.08.2026 15:50 | -135 000.00 ₽ |
-                   -135 000.00 ₽ | Внутренний перевод на договор 5083465818759606 | 7596
-    """
     transactions = []
     
     try:
@@ -417,11 +588,8 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
     except Exception as e:
         return []
     
-    # Перебираем все таблицы в документе и ищем ту, что содержит
-    # заголовок "Дата и время операции" и "Сумма в валюте операции"
     target_table = None
     for table in doc.tables:
-        # Проверяем заголовок (обычно первая строка таблицы)
         if not table.rows:
             continue
         first_row_text = ' '.join(cell.text.strip() for cell in table.rows[0].cells)
@@ -432,10 +600,8 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
     if target_table is None:
         return []
     
-    # Извлекаем заголовки первой строки
     header_cells = [cell.text.strip() for cell in target_table.rows[0].cells]
     
-    # Определяем индексы нужных колонок по названиям
     date_idx = -1
     amount_idx = -1
     desc_idx = -1
@@ -452,7 +618,6 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
         elif 'Номер карты' in h_clean:
             card_idx = i
     
-    # Фоллбэк: если по названиям не нашли, используем индексы по умолчанию
     if date_idx == -1:
         date_idx = 0
     if amount_idx == -1:
@@ -460,7 +625,6 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
     if desc_idx == -1:
         desc_idx = 4
     
-    # Обрабатываем строки данных (начиная со второй)
     for row in target_table.rows[1:]:
         cells = [cell.text.strip() for cell in row.cells]
         
@@ -468,9 +632,7 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
             continue
         
         try:
-            # ===== Дата =====
             date_raw = cells[date_idx] if date_idx < len(cells) else ''
-            # Из "11.08.2026 15:50" берём только дату
             date_match = re.match(r'(\d{2}\.\d{2}\.\d{4})', date_raw)
             if not date_match:
                 continue
@@ -479,22 +641,14 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
             if not date:
                 continue
             
-            # ===== Сумма =====
             amount_raw = cells[amount_idx] if amount_idx < len(cells) else ''
             amount = parse_amount(amount_raw)
             if amount == 0.0:
                 continue
             
-            # ===== Описание =====
             description = cells[desc_idx] if desc_idx < len(cells) else ''
             description = re.sub(r'\s+', ' ', description).strip()
             
-            # ===== Контрагент =====
-            # Тинькофф не даёт контрагента явно, но из описания можно понять:
-            # "Внутренний перевод на договор 5083465818759606" -> "Внутренний перевод"
-            # "Внешний перевод по номеру телефона +79168618351" -> "Внешний перевод"
-            # "Перевод себе" -> "Перевод себе"
-            # "Плата за оповещения об операциях" -> "Т-Банк"
             counterparty = extract_tinkoff_counterparty(description)
             
             transactions.append({
@@ -511,44 +665,29 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
     return transactions
 
 def extract_tinkoff_counterparty(description: str) -> str:
-    """
-    Извлекает контрагента из описания операции Тинькофф.
-    Примеры:
-        "Внутренний перевод на договор 5083465818759606" -> "Внутренний перевод"
-        "Внешний перевод по номеру телефона +79168618351" -> "Внешний перевод"
-        "Перевод себе" -> "Перевод себе"
-        "Плата за оповещения об операциях" -> "Т-Банк"
-    """
     if not description:
         return ''
     
-    # 1) Внутренний перевод
     if 'Внутренний перевод' in description:
         return 'Внутренний перевод'
     
-    # 2) Внешний перевод
     if 'Внешний перевод' in description:
         return 'Внешний перевод'
     
-    # 3) Перевод себе
     if 'Перевод себе' in description:
         return 'Перевод себе'
     
-    # 4) Плата за оповещения / комиссии
     if 'Плата за' in description or 'Комиссия' in description:
         return 'Т-Банк'
     
-    # 5) Перевод (общий случай)
     if 'Перевод' in description:
         return 'Перевод'
     
-    # 6) Прочее — первые 60 символов описания
     return description[:60]
 
 # ==================== ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА (Альфа-Банк) ====================
 
 def extract_counterparty(description: str) -> str:
-    """Извлекает контрагента из описания (для Альфа-Банка)"""
     if not description:
         return ''
     
@@ -577,7 +716,7 @@ def extract_counterparty(description: str) -> str:
     
     return description[:50]
 
-# ==================== ПАРСЕР ДЛЯ Tinkoff RUB (CSV/XLSX - старый) ====================
+# ==================== ПАРСЕР ДЛЯ Tinkoff RUB (CSV) ====================
 
 def parse_tinkoff(file_content: bytes, account_name: str) -> List[Dict]:
     transactions = []
@@ -670,7 +809,7 @@ def parse_bsr_bluor_2(file_content: bytes, account_name: str) -> List[Dict]:
 def parse_bsr_bluor_3(file_content: bytes, account_name: str) -> List[Dict]:
     return parse_bsr_bluor_2(file_content, account_name)
 
-# ==================== ПАРСЕР ДЛЯ KL59_Rev_NB_EUR_BluOR (BluOr Bank) ====================
+# ==================== ПАРСЕР ДЛЯ KL59_Rev_NB_EUR_BluOR ====================
 
 def parse_kl59_rev_nb_bluor(file_content: bytes, account_name: str) -> List[Dict]:
     transactions = []
@@ -1018,7 +1157,7 @@ def parse_fio_stalkin(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return transactions
 
-# ==================== ПАРСЕР ДЛЯ AN14_Estate_EUR_Industra (Industra Bank) ====================
+# ==================== ПАРСЕР ДЛЯ AN14_Estate_EUR_Industra ====================
 
 def parse_industra_an14(file_content: bytes, account_name: str) -> List[Dict]:
     transactions = []
@@ -1343,7 +1482,7 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
     
     return transactions
 
-# ==================== ПАРСЕР ДЛЯ AN14_Estate_EUR_Revolut (Revolut) ====================
+# ==================== ПАРСЕР ДЛЯ AN14_Estate_EUR_Revolut ====================
 
 def parse_revolut_an14(file_content: bytes, account_name: str) -> List[Dict]:
     transactions = []
@@ -2040,7 +2179,7 @@ def parse_rak_bank(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return transactions
 
-# ==================== ПАРСЕР ДЛЯ Koruna UniCredit- CZK (UniCredit Bank) ====================
+# ==================== ПАРСЕР ДЛЯ Koruna UniCredit- CZK ====================
 
 def parse_unicredit_koruna(file_content: bytes, account_name: str) -> List[Dict]:
     transactions = []
@@ -2331,13 +2470,12 @@ def parse_unknown(file_content: bytes, account_name: str) -> List[Dict]:
 def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     account_name = clean_account_name(filename)
     
-    # ===== Маршрутизация по расширению файла =====
     ext = os.path.splitext(filename)[1].lower()
     
     if ext == '.docx':
         if 'Regina Alfa' in account_name:
             return parse_regina_alfa_docx(file_content, account_name)
-        if 'Tinkoff' in account_name:   # ← НОВОЕ: маршрутизация Тинькофф DOCX
+        if 'Tinkoff' in account_name:
             return parse_tinkoff_docx(file_content, account_name)
         else:
             return parse_unknown(file_content, account_name)
@@ -2347,7 +2485,6 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
             return parse_regina_alfa_pdf(file_content, account_name)
         else:
             return parse_unknown(file_content, account_name)
-    # ====================================================
     
     account_parsers = {
         'Regina Alfa bank NOMIQA RUB': parse_regina_alfa,
