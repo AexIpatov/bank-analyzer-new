@@ -20,7 +20,6 @@ st.set_page_config(
 # ==================== CSS СТИЛИ + ИЛЛЮСТРАЦИИ ====================
 st.markdown("""
 <style>
-/* ---------- ШРИФТЫ И БАЗОВЫЕ ЦВЕТА ---------- */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 :root {
@@ -326,33 +325,6 @@ hr {
     line-height: 1.4;
 }
 
-/* ---------- STEP-ЧИПСЫ (сколько файлов загружено) ---------- */
-.step-chips {
-    display: flex;
-    gap: 0.6rem;
-    margin: 1rem 0;
-    flex-wrap: wrap;
-}
-.step-chip {
-    background: #FFFFFF;
-    border: 1px solid #E8F2E4;
-    border-radius: 999px;
-    padding: 0.5rem 1.1rem;
-    font-size: 0.88rem;
-    font-weight: 500;
-    color: var(--ink-soft);
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    box-shadow: 0 2px 8px rgba(46, 59, 50, 0.04);
-}
-.step-chip.active {
-    background: linear-gradient(135deg, #5D9968 0%, #7BAE7F 100%);
-    color: #FFFFFF;
-    border-color: transparent;
-    box-shadow: 0 4px 14px rgba(93, 153, 104, 0.3);
-}
-
 /* ---------- ФУТЕР ---------- */
 .footer-note {
     text-align: center;
@@ -381,22 +353,18 @@ st.markdown("""
     </div>
     <div class="hero-illustration">
       <svg width="180" height="180" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <!-- фон круга -->
         <circle cx="100" cy="100" r="90" fill="rgba(255,255,255,0.15)"/>
-        <!-- столбики графика -->
         <rect x="50" y="110" width="14" height="50" rx="4" fill="rgba(255,255,255,0.85)"/>
         <rect x="72" y="90" width="14" height="70" rx="4" fill="rgba(255,255,255,0.95)"/>
         <rect x="94" y="70" width="14" height="90" rx="4" fill="rgba(255,255,255,1)"/>
         <rect x="116" y="95" width="14" height="65" rx="4" fill="rgba(255,255,255,0.95)"/>
         <rect x="138" y="60" width="14" height="100" rx="4" fill="rgba(255,255,255,1)"/>
-        <!-- линия тренда -->
         <path d="M57 100 L79 80 L101 60 L123 85 L145 50" stroke="#FFFFFF" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
         <circle cx="57" cy="100" r="5" fill="#FFFFFF"/>
         <circle cx="79" cy="80" r="5" fill="#FFFFFF"/>
         <circle cx="101" cy="60" r="5" fill="#FFFFFF"/>
         <circle cx="123" cy="85" r="5" fill="#FFFFFF"/>
         <circle cx="145" cy="50" r="5" fill="#FFFFFF"/>
-        <!-- монетка -->
         <circle cx="160" cy="40" r="16" fill="#FFD86B" stroke="#FFFFFF" stroke-width="2"/>
         <text x="160" y="46" text-anchor="middle" font-size="16" font-weight="700" fill="#5D9968">₽</text>
       </svg>
@@ -416,26 +384,31 @@ def detect_file_encoding_from_bytes(file_content: bytes) -> str:
         return 'utf-8'
 
 def clean_account_name(filename: str) -> str:
+    """
+    Убирает всё лишнее из имени файла:
+      - расширение
+      - ГГГГ-ММ-ДД
+      - IBAN
+      - суффиксы типа _01-Jul-2026_31-Jul-2026
+      - суффиксы _01.08.2026
+      - суффиксы _2026-07-01_2026-07-31 (в любом виде)
+      - лишние подчёркивания и дефисы превращаются в пробелы
+    """
     name = os.path.splitext(filename)[0]
-    # Убираем дату ГГГГ-ММ-ДД
+    
+    # 1) убираем дату с месяцем-словом (01-Jul-2026)
+    name = re.sub(r'\d{2}-[A-Za-z]{3}-\d{4}', '', name)
+    # 2) убираем ISO-даты ГГГГ-ММ-ДД
     name = re.sub(r'\d{4}-\d{2}-\d{2}', '', name)
-    # Убираем IBAN
+    # 3) убираем даты в формате ДД.ММ.ГГГГ
+    name = re.sub(r'\d{2}\.\d{2}\.\d{4}', '', name)
+    # 4) убираем IBAN
     name = re.sub(r'LV\d{2}[A-Z]{4}\d{13,}', '', name)
-    # Убираем суффиксы типа _01-Jul-2026_31-Jul-2026
-    name = re.sub(r'_\d{2}-[A-Za-z]{3}-\d{4}_\d{2}-[A-Za-z]{3}-\d{4}', '', name)
-    # Убираем суффиксы _01.08.2026 и похожие
-    name = re.sub(r'_\d{2}\.\d{2}\.\d{4}', '', name)
-    # Убираем суффиксы с одиночной датой _2026-07-01_2026-07-31 (осталась только одна из-за предыдущего шага)
-    name = re.sub(r'_\d{4}_\d{2}_\d{2}', '', name)
-    # Заменяем _ и - на пробелы
-    name = re.sub(r'[_\-]', ' ', name).strip()
-    # Сжимаем пробелы
+    # 5) заменяем _ и - на пробелы
+    name = re.sub(r'[_\-]', ' ', name)
+    # 6) убираем лишние точки и пробелы по краям
+    name = re.sub(r'\.+', ' ', name)
     name = re.sub(r'\s+', ' ', name)
-    # Убираем хвост " 2026"
-    name = re.sub(r' 2026$', '', name)
-    # Убираем хвост вида " 01.08.2026"
-    name = re.sub(r' \d{1,2}\.\d{1,2}\.\d{4}$', '', name)
-    # Убираем " (2)" в конце
     name = re.sub(r' \(2\)$', '', name)
     return name.strip() if name else 'Неизвестный счет'
 
@@ -550,7 +523,7 @@ def format_amount(amount: float) -> str:
     return f"{sign}{formatted}"
 
 def read_excel_any_engine(file_content: bytes, sheet_name=None):
-    """Универсальное чтение XLSX/XLS независимо от расширения."""
+    """Универсальное чтение XLSX/XLS независимо от расширения файла."""
     engines_to_try = ['openpyxl', 'xlrd', None]
     for engine in engines_to_try:
         try:
@@ -1247,7 +1220,7 @@ def parse_fio_stalkin(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return transactions
 
-# ---------- Industra (AN14, Plavas1, KL59) ----------
+# ---------- Industra (AN14, Plavas1, KL59, P1 statement) ----------
 def parse_industra_an14(file_content: bytes, account_name: str) -> List[Dict]:
     transactions = []
     df = read_excel_any_engine(file_content)
@@ -2116,7 +2089,7 @@ def parse_rak_bank(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return transactions
 
-# ---------- UniCredit (Koruna, B1, Garpiz, TwoHills) ----------
+# ---------- UniCredit ----------
 def parse_unicredit_koruna(file_content: bytes, account_name: str) -> List[Dict]:
     transactions = []
     try:
@@ -2334,27 +2307,145 @@ def parse_unknown(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
     """
-    Возвращает (транзакции, имя_парсера).
-    Имя парсера полезно для отладки.
+    Возвращает (транзакции, имя_парсера_или_описание).
     """
     account_name = clean_account_name(filename)
     ext = os.path.splitext(filename)[1].lower()
+    low = account_name.lower()
     
     # ---------- DOCX ----------
     if ext == '.docx':
-        if 'Regina Alfa' in account_name:
+        if 'regina alfa' in low:
             return parse_regina_alfa_docx(file_content, account_name), 'parse_regina_alfa_docx'
-        if 'Tinkoff' in account_name:
+        if 'tinkoff' in low:
             return parse_tinkoff_docx(file_content, account_name), 'parse_tinkoff_docx'
         return parse_unknown(file_content, account_name), 'parse_unknown'
     
     # ---------- PDF ----------
     if ext == '.pdf':
-        if 'Regina Alfa' in account_name:
+        if 'regina alfa' in low:
             return parse_regina_alfa_pdf(file_content, account_name), 'parse_regina_alfa_pdf'
         return parse_unknown(file_content, account_name), 'parse_unknown'
     
-    # ---------- XLS / XLSX / CSV ----------
+    # ========== ПРЯМЫЕ ПРОВЕРКИ ПО ПОДСТРОКАМ ==========
+    # Revolut — очень важно поставить ДО словаря, потому что имя после очистки
+    # "AN14 Estate EUR Revolut", а ключ в словаре тот же, но подстрахуемся.
+    if 'revolut' in low:
+        if 'nb rev' in low or 'nb_rev' in low:
+            return parse_revolut_nb(file_content, account_name), 'parse_revolut_nb (по подстроке nb)'
+        if 'plavas' in low:
+            return parse_revolut_plavas(file_content, account_name), 'parse_revolut_plavas (по подстроке plavas)'
+        return parse_revolut_an14(file_content, account_name), 'parse_revolut_an14 (по подстроке revolut)'
+    
+    # Paysera — на случай если в имени только "Paysera"
+    if 'paysera' in low or 'paysera-bs' in low or 'paysera bs' in low:
+        if 'baltic' in low:
+            return parse_paysera_baltic(file_content, account_name), 'parse_paysera_baltic'
+        if 'sveciy' in low:
+            return parse_paysera_sveciy(file_content, account_name), 'parse_paysera_sveciy'
+        if 'property' in low:
+            return parse_paysera_property(file_content, account_name), 'parse_paysera_property'
+        if 'rerum' in low:
+            return parse_paysera_rerum(file_content, account_name), 'parse_paysera_rerum'
+        return parse_paysera_general(file_content, account_name), 'parse_paysera_general'
+    
+    # Industra Bank (Plavas, KL59, AN14, P1 statement)
+    if 'industra' in low or 'plavas' in low or 'kl59' in low or 'an14' in low or 'p1 statement' in low:
+        return parse_industra_an14(file_content, account_name), 'parse_industra_an14 (по подстроке)'
+    
+    # CSOB
+    if 'csob' in low:
+        if 'dzibik' in low:
+            return parse_csob_dzibik(file_content, account_name), 'parse_csob_dzibik'
+        if 'jenisov' in low and 'czk' in low:
+            return parse_csob_jenisov_czk(file_content, account_name), 'parse_csob_jenisov_czk'
+        if 'jenisov' in low and 'eur' in low:
+            return parse_csob_jenisov_eur(file_content, account_name), 'parse_csob_jenisov_eur'
+        if 'rr strojka' in low and 'czk' in low:
+            return parse_csob_rr_strojka_czk(file_content, account_name), 'parse_csob_rr_strojka_czk'
+        if 'rr strojka' in low and 'eur' in low:
+            return parse_csob_rr_strojka_eur(file_content, account_name), 'parse_csob_rr_strojka_eur'
+        if 'koruna strojka' in low and 'czk' in low:
+            return parse_csob_koruna_strojka_czk(file_content, account_name), 'parse_csob_koruna_strojka_czk'
+        if 'koruna strojka' in low and 'eur' in low:
+            return parse_csob_koruna_strojka_eur(file_content, account_name), 'parse_csob_koruna_strojka_eur'
+        return parse_csob_general(file_content, account_name), 'parse_csob_general'
+    
+    # BluOr Bank
+    if 'bluor' in low:
+        if 'kl59' in low:
+            return parse_kl59_rev_nb_bluor(file_content, account_name), 'parse_kl59_rev_nb_bluor'
+        if 'bsr' in low and '2' in low:
+            return parse_bsr_bluor_2(file_content, account_name), 'parse_bsr_bluor_2'
+        if 'bsr' in low and '3' in low:
+            return parse_bsr_bluor_3(file_content, account_name), 'parse_bsr_bluor_3'
+    
+    # UniCredit
+    if 'unicredit' in low or 'garpiz' in low or 'twohills' in low or 'two hills' in low:
+        if 'b1 estate' in low:
+            return parse_unicredit_b1_estate(file_content, account_name), 'parse_unicredit_b1_estate'
+        if 'pernink' in low:
+            return parse_garpiz_pernink(file_content, account_name), 'parse_garpiz_pernink'
+        if 'garpiz' in low:
+            return parse_garpiz_unicredit(file_content, account_name), 'parse_garpiz_unicredit'
+        if 'twohills' in low or 'two hills' in low:
+            return parse_unicredit_twohills(file_content, account_name), 'parse_unicredit_twohills'
+        return parse_unicredit_koruna(file_content, account_name), 'parse_unicredit_koruna'
+    
+    # MKB
+    if 'mkb' in low or 'budapest' in low:
+        if 'huf' in low:
+            return parse_mkb_budapest_huf(file_content, account_name), 'parse_mkb_budapest_huf'
+        return parse_mkb_budapest_eur(file_content, account_name), 'parse_mkb_budapest_eur'
+    
+    # Pasha Bank
+    if 'pasha' in low or 'bunda' in low:
+        if 'azn' in low:
+            return parse_bunda_pasha_azn(file_content, account_name), 'parse_bunda_pasha_azn'
+        return parse_bunda_pasha_aed(file_content, account_name), 'parse_bunda_pasha_aed'
+    
+    # MASHREQ
+    if 'mashreq' in low or 'mashr' in low or 'nom iqa' in low or 'nomiqa' in low:
+        if 'mashreq' in low or 'aed' in low and 'mashr' in low:
+            return parse_mashreq(file_content, account_name), 'parse_mashreq'
+    
+    # WIO
+    if 'wio' in low:
+        return parse_wio_business(file_content, account_name), 'parse_wio_business'
+    
+    # Tinkoff
+    if 'tinkoff' in low or 't-bank' in low:
+        return parse_tinkoff(file_content, account_name), 'parse_tinkoff'
+    
+    # Regina Alfa (xlsx)
+    if 'regina alfa' in low:
+        return parse_regina_alfa(file_content, account_name), 'parse_regina_alfa'
+    
+    # FIO
+    if 'fio' in low or 'stalkin' in low:
+        return parse_fio_stalkin(file_content, account_name), 'parse_fio_stalkin'
+    
+    # JenHor
+    if 'jenhor' in low or 'unelma' in low:
+        return parse_jenhor_unelma(file_content, account_name), 'parse_jenhor_unelma'
+    
+    # Saida N26 / Wise
+    if 'n26' in low:
+        return parse_saida_n26(file_content, account_name), 'parse_saida_n26'
+    if 'wise' in low:
+        return parse_saida_wise(file_content, account_name), 'parse_saida_wise'
+    
+    # Kapital bank
+    if 'kapital' in low or 'saida' in low:
+        if 'бизнес' in low or 'business' in low:
+            return parse_kapital_saida_business(file_content, account_name), 'parse_kapital_saida_business'
+        return parse_kapital_saida_azn(file_content, account_name), 'parse_kapital_saida_azn'
+    
+    # RAK BANK
+    if 'rak bank' in low or 'rak' in low:
+        return parse_rak_bank(file_content, account_name), 'parse_rak_bank'
+    
+    # ========== СЛОВАРЬ ДЛЯ ТОЧНОГО СОВПАДЕНИЯ ==========
     account_parsers = {
         'Regina Alfa bank NOMIQA RUB': parse_regina_alfa,
         'Tinkoff RUB': parse_tinkoff,
@@ -2373,7 +2464,7 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
         'AN14 Estate EUR Industra': parse_industra_an14,
         'Plavas1 Estate EUR Industra': parse_industra_plavas1,
         'KL59 Rev NB EUR Industra': parse_industra_kl59,
-        'P1 statement': parse_industra_plavas1,   # ← ДОБАВЛЕНО
+        'P1 statement': parse_industra_plavas1,
         'Kapital bank Saida AZN': parse_kapital_saida_azn,
         'Kapital bank Saida AZN бизнес счет': parse_kapital_saida_business,
         'MASHREQ BANK AED NOMIQA': parse_mashreq,
@@ -2387,7 +2478,7 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
         'Paysera BS PROPERTY SIA': parse_paysera_property,
         'Paysera BS RERUM SIA': parse_paysera_rerum,
         'RAK BANK Nomiqa клиенты': parse_rak_bank,
-        'AN14 Estate EUR Revolut': parse_revolut_an14,   # ← проверено, есть
+        'AN14 Estate EUR Revolut': parse_revolut_an14,
         'NB Rev EUR Revolut': parse_revolut_nb,
         'Revolut Plavas 1 SIA': parse_revolut_plavas,
         'B1 Estate CZK UC': parse_unicredit_b1_estate,
@@ -2399,26 +2490,23 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
         'Saida Wise': parse_saida_wise,
     }
     
-    # 1) Точное совпадение
     if account_name in account_parsers:
         func = account_parsers[account_name]
-        return func(file_content, account_name), f"точное: {func.__name__}"
+        return func(file_content, account_name), f'точное: {func.__name__}'
     
-    # 2) Частичное совпадение по ключевым словам
+    # Частичное совпадение по 60% слов
     for acc_name, func in account_parsers.items():
         acc_keywords = set(acc_name.lower().split())
         file_keywords = set(account_name.lower().split())
         common = acc_keywords.intersection(file_keywords)
         if len(common) >= len(acc_keywords) * 0.6 and len(common) > 0:
-            return func(file_content, account_name), f"частичное: {acc_name} → {func.__name__}"
+            return func(file_content, account_name), f'частичное: {acc_name} → {func.__name__}'
     
-    # 3) Универсальный
     return parse_unknown(file_content, account_name), 'parse_unknown'
 
 # ==================== ОСНОВНОЙ ИНТЕРФЕЙС ====================
 
 def main():
-    # ---- Заголовок раздела ----
     st.markdown("### 📥 Загрузка файлов")
     st.markdown("Перетащите выписки в окно ниже или нажмите **Browse files**.")
     
@@ -2429,7 +2517,6 @@ def main():
         label_visibility="collapsed"
     )
     
-    # ---- Подсказки-карточки ----
     if not uploaded_files:
         st.markdown("---")
         col1, col2, col3 = st.columns(3)
@@ -2496,17 +2583,18 @@ def main():
                     content = uploaded_file.read()
                     transactions, parser_name = parse_file(content, uploaded_file.name)
                     
+                    account_name = clean_account_name(uploaded_file.name)
+                    debug_info.append(f"🔍 `{uploaded_file.name}` → имя счёта: `{account_name}` → парсер: `{parser_name}` → {len(transactions)} операций")
+                    
                     if transactions:
                         all_transactions.extend(transactions)
                         file_stats.append(f"✅ {uploaded_file.name}: {len(transactions)} операций")
-                        debug_info.append(f"🔍 {uploaded_file.name} → парсер: `{parser_name}`")
                     else:
                         file_stats.append(f"ℹ️ {uploaded_file.name}: транзакций не найдено")
-                        debug_info.append(f"🔍 {uploaded_file.name} → парсер: `{parser_name}` (пусто)")
                         
                 except Exception as e:
                     failed_files.append(f"{uploaded_file.name} (ошибка: {str(e)})")
-                    debug_info.append(f"❌ {uploaded_file.name} → исключение: {str(e)}")
+                    debug_info.append(f"❌ `{uploaded_file.name}` → исключение: {str(e)}")
                 
                 progress_bar.progress((i + 1) / len(uploaded_files))
             
@@ -2516,7 +2604,6 @@ def main():
             for stat in file_stats:
                 st.info(stat)
             
-            # ---- Отладочная информация ----
             with st.expander("🔧 Техническая информация (какой парсер применён)"):
                 for line in debug_info:
                     st.markdown(line)
@@ -2551,7 +2638,6 @@ def main():
                     hide_index=True
                 )
                 
-                # ---- Excel ----
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df_display = df.drop(columns=['Сумма_число'])
@@ -2581,7 +2667,6 @@ def main():
                 for f in failed_files:
                     st.write(f"- {f}")
     
-    # ---- Футер ----
     st.markdown("""
     <div class="footer-note">
       Работает локально. Данные никуда не отправляются.
