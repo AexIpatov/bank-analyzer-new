@@ -128,9 +128,12 @@ def parse_amount(amount_str) -> float:
     if amount_str.startswith('-'):
         is_negative = True
         amount_str = amount_str[1:]
+    elif amount_str.startswith('+'):
+        amount_str = amount_str[1:]
     elif amount_str.startswith('(') and amount_str.endswith(')'):
         is_negative = True
         amount_str = amount_str[1:-1]
+    amount_str = re.sub(r'\s*[₽$€£]\s*$', '', amount_str)   # ← НОВОЕ: убираем символы валют ₽$€£
     amount_str = re.sub(r'\s*[A-Z]{3}\s*$', '', amount_str)
     amount_str = re.sub(r'^\s*[A-Z]{3}\s*', '', amount_str)
     amount_str = amount_str.replace(' ', '').replace('\xa0', '')
@@ -169,10 +172,6 @@ def format_amount(amount: float) -> str:
 # ==================== ПАРСЕР ДЛЯ Regina Alfa-bank_NOMIQA_RUB ====================
 
 def parse_regina_alfa(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер для Альфа-Банк (Россия) формата.
-    XLSX с заголовками: Дата проводки, Код операции, Описание, Сумма в валюте счета
-    """
     transactions = []
     
     try:
@@ -186,7 +185,6 @@ def parse_regina_alfa(file_content: bytes, account_name: str) -> List[Dict]:
     if df.empty:
         return []
     
-    # Ищем строку "Операции по счету"
     data_start_idx = -1
     for idx, row in df.iterrows():
         if idx < 50:
@@ -198,11 +196,7 @@ def parse_regina_alfa(file_content: bytes, account_name: str) -> List[Dict]:
     if data_start_idx == -1:
         return []
     
-    # Собираем все строки данных, включая многострочные описания
-    all_data_rows = []
-    current_row = None
     current_date = None
-    current_code = None
     current_desc = ''
     current_amount = None
     
@@ -212,8 +206,6 @@ def parse_regina_alfa(file_content: bytes, account_name: str) -> List[Dict]:
         
         if not row_values:
             continue
-        
-        row_str = ' '.join([str(x) for x in row.values if pd.notna(x)])
         
         has_date = False
         date_val = None
@@ -291,10 +283,6 @@ def parse_regina_alfa(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== ПАРСЕР ДЛЯ Regina Alfa-bank DOCX ====================
 
 def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер для Альфа-Банк в формате DOCX (Word).
-    Извлекает транзакции из таблиц и параграфов Word-документа.
-    """
     transactions = []
     
     try:
@@ -302,10 +290,8 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
     except Exception as e:
         return []
     
-    # Собираем весь текст из таблиц
     all_text_parts = []
     
-    # 1) Из таблиц
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
@@ -313,17 +299,14 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
                 if cell_text:
                     all_text_parts.append(cell_text)
     
-    # 2) Из параграфов
     for para in doc.paragraphs:
         txt = para.text.strip()
         if txt:
             all_text_parts.append(txt)
     
-    # Склеиваем всё в один текст
     full_text = '\n'.join(all_text_parts)
     full_text = full_text.replace('\ufeff', '').replace('\xa0', ' ')
     
-    # Ищем паттерн: дата + код операции + описание + сумма
     pattern = re.compile(
         r'(\d{2}\.\d{2}\.\d{4})\s*'
         r'([A-Z0-9_]+)\s*'
@@ -364,9 +347,6 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
 # ==================== ПАРСЕР ДЛЯ Regina Alfa-bank PDF ====================
 
 def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер для Альфа-Банк в формате PDF.
-    """
     transactions = []
     full_text_parts = []
     
@@ -419,10 +399,156 @@ def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     
     return transactions
 
-# ==================== ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
+# ===== НОВЫЙ ПАРСЕР ДЛЯ ТИНЬКОФФ DOCX ====================
+
+def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер для Тинькофф (Т-Банк) в формате DOCX (Word).
+    Формат таблицы:
+        Дата и время операции | Дата списания | Сумма в валюте операции |
+        Сумма операции в валюте карты | Описание операции | Номер карты
+    Пример строки: 11.08.2026 15:50 | 11.08.2026 15:50 | -135 000.00 ₽ |
+                   -135 000.00 ₽ | Внутренний перевод на договор 5083465818759606 | 7596
+    """
+    transactions = []
+    
+    try:
+        doc = Document(BytesIO(file_content))
+    except Exception as e:
+        return []
+    
+    # Перебираем все таблицы в документе и ищем ту, что содержит
+    # заголовок "Дата и время операции" и "Сумма в валюте операции"
+    target_table = None
+    for table in doc.tables:
+        # Проверяем заголовок (обычно первая строка таблицы)
+        if not table.rows:
+            continue
+        first_row_text = ' '.join(cell.text.strip() for cell in table.rows[0].cells)
+        if 'Дата и время операции' in first_row_text and 'Сумма' in first_row_text:
+            target_table = table
+            break
+    
+    if target_table is None:
+        return []
+    
+    # Извлекаем заголовки первой строки
+    header_cells = [cell.text.strip() for cell in target_table.rows[0].cells]
+    
+    # Определяем индексы нужных колонок по названиям
+    date_idx = -1
+    amount_idx = -1
+    desc_idx = -1
+    card_idx = -1
+    
+    for i, h in enumerate(header_cells):
+        h_clean = h.strip()
+        if 'Дата и время операции' in h_clean:
+            date_idx = i
+        elif 'Сумма в валюте операции' in h_clean:
+            amount_idx = i
+        elif 'Описание операции' in h_clean:
+            desc_idx = i
+        elif 'Номер карты' in h_clean:
+            card_idx = i
+    
+    # Фоллбэк: если по названиям не нашли, используем индексы по умолчанию
+    if date_idx == -1:
+        date_idx = 0
+    if amount_idx == -1:
+        amount_idx = 2
+    if desc_idx == -1:
+        desc_idx = 4
+    
+    # Обрабатываем строки данных (начиная со второй)
+    for row in target_table.rows[1:]:
+        cells = [cell.text.strip() for cell in row.cells]
+        
+        if len(cells) < 3:
+            continue
+        
+        try:
+            # ===== Дата =====
+            date_raw = cells[date_idx] if date_idx < len(cells) else ''
+            # Из "11.08.2026 15:50" берём только дату
+            date_match = re.match(r'(\d{2}\.\d{2}\.\d{4})', date_raw)
+            if not date_match:
+                continue
+            date_str = date_match.group(1)
+            date = parse_date(date_str)
+            if not date:
+                continue
+            
+            # ===== Сумма =====
+            amount_raw = cells[amount_idx] if amount_idx < len(cells) else ''
+            amount = parse_amount(amount_raw)
+            if amount == 0.0:
+                continue
+            
+            # ===== Описание =====
+            description = cells[desc_idx] if desc_idx < len(cells) else ''
+            description = re.sub(r'\s+', ' ', description).strip()
+            
+            # ===== Контрагент =====
+            # Тинькофф не даёт контрагента явно, но из описания можно понять:
+            # "Внутренний перевод на договор 5083465818759606" -> "Внутренний перевод"
+            # "Внешний перевод по номеру телефона +79168618351" -> "Внешний перевод"
+            # "Перевод себе" -> "Перевод себе"
+            # "Плата за оповещения об операциях" -> "Т-Банк"
+            counterparty = extract_tinkoff_counterparty(description)
+            
+            transactions.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': counterparty,
+                'Наименование счета': account_name,
+                'Описание': description[:500]
+            })
+            
+        except Exception as e:
+            continue
+    
+    return transactions
+
+def extract_tinkoff_counterparty(description: str) -> str:
+    """
+    Извлекает контрагента из описания операции Тинькофф.
+    Примеры:
+        "Внутренний перевод на договор 5083465818759606" -> "Внутренний перевод"
+        "Внешний перевод по номеру телефона +79168618351" -> "Внешний перевод"
+        "Перевод себе" -> "Перевод себе"
+        "Плата за оповещения об операциях" -> "Т-Банк"
+    """
+    if not description:
+        return ''
+    
+    # 1) Внутренний перевод
+    if 'Внутренний перевод' in description:
+        return 'Внутренний перевод'
+    
+    # 2) Внешний перевод
+    if 'Внешний перевод' in description:
+        return 'Внешний перевод'
+    
+    # 3) Перевод себе
+    if 'Перевод себе' in description:
+        return 'Перевод себе'
+    
+    # 4) Плата за оповещения / комиссии
+    if 'Плата за' in description or 'Комиссия' in description:
+        return 'Т-Банк'
+    
+    # 5) Перевод (общий случай)
+    if 'Перевод' in description:
+        return 'Перевод'
+    
+    # 6) Прочее — первые 60 символов описания
+    return description[:60]
+
+# ==================== ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА (Альфа-Банк) ====================
 
 def extract_counterparty(description: str) -> str:
-    """Извлекает контрагента из описания"""
+    """Извлекает контрагента из описания (для Альфа-Банка)"""
     if not description:
         return ''
     
@@ -451,7 +577,7 @@ def extract_counterparty(description: str) -> str:
     
     return description[:50]
 
-# ==================== ПАРСЕР ДЛЯ Tinkoff RUB ====================
+# ==================== ПАРСЕР ДЛЯ Tinkoff RUB (CSV/XLSX - старый) ====================
 
 def parse_tinkoff(file_content: bytes, account_name: str) -> List[Dict]:
     transactions = []
@@ -2211,6 +2337,8 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
     if ext == '.docx':
         if 'Regina Alfa' in account_name:
             return parse_regina_alfa_docx(file_content, account_name)
+        if 'Tinkoff' in account_name:   # ← НОВОЕ: маршрутизация Тинькофф DOCX
+            return parse_tinkoff_docx(file_content, account_name)
         else:
             return parse_unknown(file_content, account_name)
     
@@ -2289,11 +2417,11 @@ def parse_file(file_content: bytes, filename: str) -> List[Dict]:
 
 def main():
     st.markdown("### 📂 Загрузите банковские выписки")
-    st.markdown("Поддерживаются форматы: **CSV, XLSX, XLS, DOCX, PDF**")  # ← НОВОЕ
+    st.markdown("Поддерживаются форматы: **CSV, XLSX, XLS, DOCX, PDF**")
     
     uploaded_files = st.file_uploader(
         "Выберите файлы",
-        type=['csv', 'xlsx', 'xls', 'docx', 'pdf'],  # ← НОВОЕ: добавлены docx и pdf
+        type=['csv', 'xlsx', 'xls', 'docx', 'pdf'],
         accept_multiple_files=True
     )
     
