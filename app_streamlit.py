@@ -321,10 +321,10 @@ def safe_str(v) -> str:
         return ''
     return str(v).strip()
 
-def read_xlsx(file_content: bytes, sheet_name=None):
+def read_xlsx(file_content: bytes, sheet_name=None, header=None):
     for engine in ['openpyxl', 'xlrd', None]:
         try:
-            kw = {'header': None}
+            kw = {'header': header}
             if sheet_name:
                 kw['sheet_name'] = sheet_name
             if engine:
@@ -405,19 +405,26 @@ def pdf_all_tables(file_content: bytes) -> List[List[List[str]]]:
         return []
     return tables_out
 
-# ==================== CSOB ====================
-
-def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
-    transactions = []
+def read_text_with_encoding(file_content: bytes) -> str:
     try:
         content = file_content.decode('utf-8')
     except Exception:
         try:
             content = file_content.decode('cp1250')
         except Exception:
-            content = file_content.decode('latin-1')
+            try:
+                content = file_content.decode('cp1251')
+            except Exception:
+                content = file_content.decode('latin-1')
     if content.startswith('\ufeff'):
         content = content[1:]
+    return content
+
+# ==================== CSOB ====================
+
+def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
+    transactions = []
+    content = read_text_with_encoding(file_content)
     lines = [l.rstrip('\r').strip() for l in content.split('\n') if l.strip()]
     if len(lines) < 2:
         return []
@@ -754,15 +761,7 @@ def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
-    try:
-        content = file_content.decode('utf-8')
-    except Exception:
-        try:
-            content = file_content.decode('cp1250')
-        except Exception:
-            content = file_content.decode('latin-1')
-    if content.startswith('\ufeff'):
-        content = content[1:]
+    content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     skip = ['начальный остаток', 'конечный остаток', 'starting balance', 'ending balance',
             'total', 'дебет (d)', 'кредит (c)', 'debit (d)', 'credit (c)']
@@ -858,13 +857,7 @@ def parse_bluor_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
-    try:
-        content = file_content.decode('utf-8')
-    except Exception:
-        try:
-            content = file_content.decode('cp1250')
-        except Exception:
-            content = file_content.decode('latin-1')
+    content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     if len(lines) < 3:
         return []
@@ -1001,15 +994,7 @@ def parse_jenhor_unelma_pdf(file_content: bytes, account_name: str) -> List[Dict
 
 def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
-    try:
-        content = file_content.decode('utf-8')
-    except Exception:
-        try:
-            content = file_content.decode('cp1250')
-        except Exception:
-            content = file_content.decode('latin-1')
-    if content.startswith('\ufeff'):
-        content = content[1:]
+    content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     if len(lines) < 2:
         return []
@@ -1203,13 +1188,7 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
-    try:
-        content = file_content.decode('utf-8')
-    except Exception:
-        try:
-            content = file_content.decode('cp1250')
-        except Exception:
-            content = file_content.decode('latin-1')
+    content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     for line in lines:
         parts = [p.strip() for p in line.split(';')]
@@ -1491,75 +1470,103 @@ def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
-# ==================== MKB ====================
+# ==================== MKB (Budapest) ====================
 
-def parse_budapest_eur_mkb(file_content: bytes, account_name: str) -> List[Dict]:
+def _parse_mkb_csv_generic(file_content: bytes, account_name: str) -> List[Dict]:
+    """Общий парсер для MKB CSV с ';' — используется и для EUR, и для HUF."""
     result = []
-    try:
-        content = file_content.decode('utf-8')
-    except Exception:
-        try:
-            content = file_content.decode('cp1250')
-        except Exception:
-            content = file_content.decode('latin-1')
-    if content.startswith('\ufeff'):
-        content = content[1:]
+    content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
-    if len(lines) < 3:
+    if len(lines) < 4:
         return []
-    header = -1
+    # Найти строку-заголовок (Sorszám ... Értéknap ... Összeg)
+    header_idx = -1
     for i, l in enumerate(lines):
         low = l.lower()
-        if 'sorsz' in low and 'rt' in low and 'knap' in low:
-            header = i
+        if 'sorsz' in low and 'rt' in low and 'knap' in low and ('sszeg' in low or 'összeg' in low):
+            header_idx = i
             break
-    if header == -1:
+    if header_idx == -1:
         return []
-    hdr_parts = [p.strip() for p in lines[header].split(';')]
-    date_idx = amount_idx = desc_idx = cp_idx = -1
+    hdr_parts = [p.strip() for p in lines[header_idx].split(';')]
+    ci = {}
     for i, h in enumerate(hdr_parts):
         hl = h.lower()
         if 'értéknap' in hl or ('rt' in hl and 'knap' in hl):
-            date_idx = i
+            ci['date'] = i
         elif 'összeg' in hl or 'sszeg' in hl:
-            amount_idx = i
+            ci['amount'] = i
         elif 'közlemény' in hl or 'kzlem' in hl:
-            desc_idx = i
-        elif 'kedvezményezett' in hl and 'neve' in hl and cp_idx == -1:
-            cp_idx = i
-    if date_idx == -1:
-        date_idx = 1
-    if amount_idx == -1:
-        amount_idx = 9
-    if desc_idx == -1:
-        desc_idx = 11
-    for line in lines[header + 1:]:
+            ci['description'] = i
+        elif 'kedvezményezett' in hl and 'neve' in hl and 'counterparty' not in ci:
+            ci['counterparty'] = i
+        elif 'tranzakció típusa' in hl or 'tranzakci' in hl and 'típusa' in hl:
+            if 'type' not in ci:
+                ci['type'] = i
+    if 'date' not in ci:
+        ci['date'] = 1
+    if 'amount' not in ci:
+        ci['amount'] = 9
+    if 'description' not in ci:
+        ci['description'] = 11
+    if 'counterparty' not in ci:
+        ci['counterparty'] = 4
+    if 'type' not in ci:
+        ci['type'] = 2
+
+    for line in lines[header_idx + 1:]:
         parts = [p.strip() for p in line.split(';')]
         if len(parts) < 10:
             continue
         try:
-            date = parse_date(parts[date_idx] if date_idx < len(parts) else '')
+            date = parse_date(parts[ci['date']] if ci['date'] < len(parts) else '')
             if not date:
                 continue
-            amount = parse_amount(parts[amount_idx] if amount_idx < len(parts) else '')
+            amount = parse_amount(parts[ci['amount']] if ci['amount'] < len(parts) else '')
             if amount == 0.0:
                 continue
-            desc = parts[desc_idx] if desc_idx < len(parts) else ''
-            cp = parts[cp_idx] if cp_idx >= 0 and cp_idx < len(parts) else ''
+            desc = parts[ci['description']] if ci['description'] < len(parts) else ''
+            cp = parts[ci['counterparty']] if ci['counterparty'] < len(parts) else ''
+            ttype = parts[ci['type']] if ci['type'] < len(parts) else ''
+            if cp in ['N/A', 'n/a']:
+                cp = ''
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp[:200], 'Наименование счета': account_name,
-                'Описание': desc[:500]
+                'Описание': (f"{ttype} | {desc}" if ttype else desc)[:500]
             })
         except Exception:
             continue
     return result
 
+def parse_budapest_eur_mkb(file_content: bytes, account_name: str) -> List[Dict]:
+    """EUR MKB приходит и как CSV, и как XLSX. Пробуем оба варианта."""
+    # Сначала попробуем XLSX (магические байты)
+    if file_content[:2] == b'PK' or file_content[:4] == b'\xd0\xcf\x11\xe0':
+        result = parse_budapest_huf_mkb(file_content, account_name)
+        if result:
+            return result
+    # Иначе — CSV
+    return _parse_mkb_csv_generic(file_content, account_name)
+
 def parse_budapest_huf_mkb(file_content: bytes, account_name: str) -> List[Dict]:
+    """HUF MKB приходит как XLS (старый формат). Заголовок может быть на 4-й строке."""
     result = []
-    df = read_xlsx(file_content)
+    df = None
+    for engine in ['xlrd', 'openpyxl', None]:
+        try:
+            kw = {'header': None}
+            if engine:
+                kw['engine'] = engine
+            df = pd.read_excel(BytesIO(file_content), **kw)
+            if df is not None and not df.empty:
+                break
+        except Exception:
+            continue
     if df is None or df.empty:
-        return []
+        # fallback на CSV
+        return _parse_mkb_csv_generic(file_content, account_name)
+
     header_row = -1
     for idx, row in df.iterrows():
         if idx < 20:
@@ -1571,7 +1578,8 @@ def parse_budapest_huf_mkb(file_content: bytes, account_name: str) -> List[Dict]
                 header_row = idx
                 break
     if header_row == -1:
-        return []
+        return _parse_mkb_csv_generic(file_content, account_name)
+
     hdr = df.iloc[header_row]
     ci = {}
     for i, v in enumerate(hdr.values):
@@ -1587,12 +1595,21 @@ def parse_budapest_huf_mkb(file_content: bytes, account_name: str) -> List[Dict]
             ci['description'] = i
         elif 'kedvezményezett' in sl and 'neve' in sl and 'counterparty' not in ci:
             ci['counterparty'] = i
+        elif 'tranzakció típusa' in sl or ('tranzakci' in sl and 'típusa' in sl):
+            if 'type' not in ci:
+                ci['type'] = i
+
     if 'date' not in ci:
         ci['date'] = 1
     if 'amount' not in ci:
         ci['amount'] = 9
     if 'description' not in ci:
         ci['description'] = 11
+    if 'counterparty' not in ci:
+        ci['counterparty'] = 4
+    if 'type' not in ci:
+        ci['type'] = 2
+
     for idx in range(header_row + 1, len(df)):
         row = df.iloc[idx]
         rv = [x for x in row.values if pd.notna(x)]
@@ -1610,10 +1627,13 @@ def parse_budapest_huf_mkb(file_content: bytes, account_name: str) -> List[Dict]
                 continue
             desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
             cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
+            ttype = safe_str(row.iloc[ci['type']]) if 'type' in ci and ci['type'] < len(row) else ''
+            if cp in ['N/A', 'n/a']:
+                cp = ''
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp[:200], 'Наименование счета': account_name,
-                'Описание': desc[:500]
+                'Описание': (f"{ttype} | {desc}" if ttype else desc)[:500]
             })
         except Exception:
             continue
@@ -1934,22 +1954,14 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
-# ==================== Paysera PDF (ФИНАЛЬНАЯ ВЕРСИЯ) ====================
+# ==================== Paysera PDF ====================
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Paysera PDF. pdfplumber отдаёт плоский текст.
 
-    Особенность формата:
-      Date and time <date> <time> ... <amount> EUR ... Purpose of payment: ...
-
-    pdfplumber может вставить одну и ту же дату дважды (в шапке таблицы и в
-    самой строке транзакции). Из-за этого «окно между датами» оказывается
-    слишком узким, и в каждой группе находится одна и та же сумма — задвоение.
-
-    Решение: склеиваем соседние даты, расстояние между которыми < 400 символов,
-    в одну группу. Для группы берём дату самого первого вхождения, а сумму и
-    описание ищем во всём расширенном окне до следующей реальной даты.
+    Группируем близкие даты (< 400 символов между ними) — на одну операцию
+    pdfplumber вставляет дату дважды, что приводило к задвоению.
     """
     result = []
     full_text = pdf_all_text(file_content)
@@ -1961,8 +1973,7 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     if not raw_dates:
         return []
 
-    # Группируем близкие даты
-    groups = []  # каждый: {'date': str, 'start': int, 'end': int}
+    groups = []
     cur = {'date': raw_dates[0].group(1), 'start': raw_dates[0].start(), 'end': raw_dates[0].end()}
     for dm in raw_dates[1:]:
         if dm.start() - cur['end'] < 400:
@@ -2039,7 +2050,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             'Описание': desc[:500]
         })
 
-    # Финальная дедупликация по (дата, сумма)
     seen = set()
     deduped = []
     for r in result:
@@ -2054,13 +2064,7 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_rak_bank(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
-    try:
-        content = file_content.decode('utf-8')
-    except Exception:
-        try:
-            content = file_content.decode('cp1250')
-        except Exception:
-            content = file_content.decode('latin-1')
+    content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     for line in lines:
         parts = [p.strip() for p in line.split(';')]
@@ -2109,15 +2113,7 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
-    try:
-        content = file_content.decode('utf-8')
-    except Exception:
-        try:
-            content = file_content.decode('cp1250')
-        except Exception:
-            content = file_content.decode('latin-1')
-    if content.startswith('\ufeff'):
-        content = content[1:]
+    content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     if len(lines) < 3:
         return []
@@ -2135,6 +2131,9 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
             ci['date'] = i
         elif h == 'Amount':
             ci['amount'] = i
+        elif h == 'Total amount':
+            if 'amount' not in ci:
+                ci['amount'] = i
         elif 'Description' in h:
             ci['description'] = i
         elif 'Payer' in h:
@@ -2146,7 +2145,7 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
     if 'date' not in ci:
         ci['date'] = 0
     if 'amount' not in ci:
-        ci['amount'] = 14
+        ci['amount'] = 15
     if 'description' not in ci:
         ci['description'] = 5
     if 'type' not in ci:
@@ -2165,7 +2164,7 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 cur += ch
         parts.append(cur.strip())
         parts = [p.strip('"') for p in parts]
-        if len(parts) < 3:
+        if len(parts) < 6:
             continue
         try:
             if 'state' in ci and ci['state'] < len(parts):
@@ -2249,21 +2248,13 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
-    try:
-        content = file_content.decode('utf-8')
-    except Exception:
-        try:
-            content = file_content.decode('cp1250')
-        except Exception:
-            content = file_content.decode('latin-1')
-    if content.startswith('\ufeff'):
-        content = content[1:]
+    content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     if len(lines) < 3:
         return []
     header = -1
     for i, l in enumerate(lines):
-        if 'From Account' in l and 'Amount' in l and 'Currency' in l:
+        if 'From Account' in l and 'Amount' in l and 'Booking Date' in l:
             header = i
             break
     if header == -1:
@@ -2272,13 +2263,13 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
     ci = {}
     for i, h in enumerate(hdr_parts):
         hc = h.strip()
-        if hc == 'Amount':
+        if hc == 'Amount' and 'amount' not in ci:
             ci['amount'] = i
-        elif hc == 'Booking Date':
+        elif hc == 'Booking Date' and 'date' not in ci:
             ci['date'] = i
-        elif hc == 'Transaction Details':
+        elif hc == 'Transaction Details' and 'description' not in ci:
             ci['description'] = i
-        elif hc == 'Name':
+        elif hc == 'Name' and 'counterparty' not in ci:
             ci['counterparty'] = i
     if 'amount' not in ci:
         ci['amount'] = 1
@@ -2302,16 +2293,15 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
             if not date:
                 continue
             cp = parts[ci['counterparty']].strip() if ci['counterparty'] < len(parts) else ''
-            if not cp and len(parts) > 8:
-                cp = parts[8].strip()
             desc = parts[ci['description']].strip() if ci['description'] < len(parts) else ''
             if not desc:
-                for idx in [14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]:
-                    if idx < len(parts):
-                        v = parts[idx].strip()
-                        if v and v != 'nan' and len(v) > 1 and not re.match(r'^[\d.,\-]+$', v):
-                            desc = v
-                            break
+                for idx in range(len(parts) - 1, -1, -1):
+                    if idx in (ci['amount'], ci['date'], ci['counterparty']):
+                        continue
+                    v = parts[idx].strip()
+                    if v and v != 'nan' and len(v) > 2 and not re.match(r'^[\d.,\-]+$', v) and not re.match(r'^\d{4}-\d{2}-\d{2}$', v):
+                        desc = v
+                        break
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp[:200], 'Наименование счета': account_name,
@@ -2399,19 +2389,11 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
-# ==================== WIO, Saida N26, Wise ====================
+# ==================== WIO ====================
 
 def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
-    try:
-        content = file_content.decode('utf-8')
-    except Exception:
-        try:
-            content = file_content.decode('cp1250')
-        except Exception:
-            content = file_content.decode('latin-1')
-    if content.startswith('\ufeff'):
-        content = content[1:]
+    content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     if len(lines) < 3:
         return []
@@ -2506,15 +2488,11 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
+# ==================== Saida N26 (CSV) ====================
+
 def parse_saida_n26_csv(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
-    try:
-        content = file_content.decode('utf-8')
-    except Exception:
-        try:
-            content = file_content.decode('cp1250')
-        except Exception:
-            content = file_content.decode('latin-1')
+    content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     if len(lines) < 3:
         return []
@@ -2547,6 +2525,206 @@ def parse_saida_n26_csv(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_saida_wise(file_content, account_name):
     return parse_saida_n26_csv(file_content, account_name)
+
+# ==================== Saida Wise XLSX ====================
+
+def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Wise Excel.
+    Заголовок: удостоверение личности | Дата | Дата и время | Сумма | Валюта |
+               Описание | Пояснение к переводу | Текущий баланс | ...
+               | Имя получателя | ... | Поставщик услуг | ... | Тип транзакции
+    """
+    result = []
+    df = read_xlsx(file_content, sheet_name='All transactions')
+    if df is None or df.empty:
+        df = read_xlsx(file_content)
+    if df is None or df.empty:
+        return []
+    # Заголовок — первая строка (index=0) при header=None
+    hdr = df.iloc[0]
+    ci = {}
+    for i, v in enumerate(hdr.values):
+        if pd.isna(v):
+            continue
+        s = str(v).strip().lower()
+        if s == 'дата' or s == 'date':
+            if 'date' not in ci:
+                ci['date'] = i
+        elif 'дата и время' in s:
+            if 'datetime' not in ci:
+                ci['datetime'] = i
+        elif s == 'сумма' or s == 'amount':
+            if 'amount' not in ci:
+                ci['amount'] = i
+        elif s == 'описание':
+            if 'description' not in ci:
+                ci['description'] = i
+        elif s == 'пояснение к переводу':
+            if 'note' not in ci:
+                ci['note'] = i
+        elif s == 'имя получателя':
+            if 'recipient' not in ci:
+                ci['recipient'] = i
+        elif s == 'имя плательщика':
+            if 'payer' not in ci:
+                ci['payer'] = i
+        elif s == 'тип транзакции':
+            if 'type' not in ci:
+                ci['type'] = i
+    if 'amount' not in ci:
+        ci['amount'] = 3
+    if 'date' not in ci and 'datetime' not in ci:
+        ci['date'] = 1
+    elif 'date' not in ci:
+        ci['date'] = ci['datetime']
+    if 'description' not in ci:
+        ci['description'] = 5
+    if 'type' not in ci:
+        ci['type'] = 21
+
+    for idx in range(1, len(df)):
+        row = df.iloc[idx]
+        try:
+            dstr = safe_str(row.iloc[ci['date']]) if ci['date'] < len(row) else ''
+            if not dstr:
+                continue
+            date = parse_date(dstr)
+            if not date:
+                continue
+            av = row.iloc[ci['amount']] if ci['amount'] < len(row) else None
+            if pd.isna(av) or str(av).strip() in ['', 'nan']:
+                continue
+            amount = parse_amount(str(av).strip().replace(',', '.'))
+            if amount == 0.0:
+                continue
+            desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
+            note = safe_str(row.iloc[ci['note']]) if 'note' in ci and ci['note'] < len(row) else ''
+            cp = safe_str(row.iloc[ci['recipient']]) if 'recipient' in ci and ci['recipient'] < len(row) else ''
+            if not cp:
+                cp = safe_str(row.iloc[ci['payer']]) if 'payer' in ci and ci['payer'] < len(row) else ''
+            full_desc = desc
+            if note and note != 'nan':
+                full_desc = f"{desc} | {note}" if desc else note
+            result.append({
+                'Дата': date, 'Сумма': amount,
+                'Контрагент': cp[:200], 'Наименование счета': account_name,
+                'Описание': full_desc[:500]
+            })
+        except Exception:
+            continue
+    return result
+
+# ==================== Pasha Bank (BUNDA LLC) ====================
+
+def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Pasha Bank XLSX (BUNDA LLC, AZN или AED).
+    Заголовок таблицы (row ~11):
+        Əməliyyat tarixi | İcra tarixi | Ödəyən/Benefisiar | Təyinat |
+        İstinad No | Код | Mədaxil | Məxaric | [AZN ekvivalent] | Balans
+    Итоговые строки (DÖVRÜN SONUNA BALANS, MÖVCUD BALANS) — пропускаем.
+    """
+    result = []
+    df = read_xlsx(file_content, sheet_name='Statement')
+    if df is None or df.empty:
+        df = read_xlsx(file_content)
+    if df is None or df.empty:
+        return []
+
+    header_row = -1
+    for idx, row in df.iterrows():
+        if idx < 40:
+            rs = ' '.join([str(x) for x in row.values if pd.notna(x)])
+            if 'Əməliyyat tarixi' in rs and 'Mədaxil' in rs and 'Məxaric' in rs:
+                header_row = idx
+                break
+    if header_row == -1:
+        return []
+
+    hdr = df.iloc[header_row]
+    ci = {}
+    for i, v in enumerate(hdr.values):
+        if pd.isna(v):
+            continue
+        s = str(v).strip()
+        if 'Əməliyyat tarixi' in s:
+            ci['date'] = i
+        elif 'İcra tarixi' in s:
+            ci['exec_date'] = i
+        elif 'Ödəyən' in s or 'Benefisiar' in s or 'Ödəyən/Benefisiar' in s:
+            ci['counterparty'] = i
+        elif 'Təyinat' in s:
+            ci['description'] = i
+        elif 'Mədaxil' in s:
+            ci['credit'] = i
+        elif 'Məxaric' in s:
+            ci['debit'] = i
+        elif 'Balans' in s and 'Balans' not in ci:
+            ci['balance'] = i
+        elif 'Код' in s or s == 'Kod':
+            ci['code'] = i
+    if 'date' not in ci:
+        ci['date'] = 0
+    if 'description' not in ci:
+        ci['description'] = 3
+    if 'counterparty' not in ci:
+        ci['counterparty'] = 2
+    if 'credit' not in ci:
+        ci['credit'] = 6
+    if 'debit' not in ci:
+        ci['debit'] = 7
+
+    for idx in range(header_row + 1, len(df)):
+        row = df.iloc[idx]
+        rv = [x for x in row.values if pd.notna(x)]
+        if not rv:
+            continue
+        try:
+            dstr = safe_str(row.iloc[ci['date']]) if ci['date'] < len(row) else ''
+            if not dstr:
+                continue
+            date = parse_date(dstr)
+            if not date:
+                continue
+            desc = safe_str(row.iloc[ci['description']]) if ci['description'] < len(row) else ''
+            low_desc = desc.lower()
+            # Пропускаем итоговые строки
+            if 'balans' in low_desc and ('dövr' in low_desc or 'mövcud' in low_desc):
+                continue
+            credit = 0.0
+            debit = 0.0
+            if 'credit' in ci and ci['credit'] < len(row):
+                cv = row.iloc[ci['credit']]
+                if pd.notna(cv) and str(cv).strip() not in ['', 'nan', '-']:
+                    credit = parse_amount(str(cv).strip().replace(',', '.'))
+            if 'debit' in ci and ci['debit'] < len(row):
+                dv = row.iloc[ci['debit']]
+                if pd.notna(dv) and str(dv).strip() not in ['', 'nan', '-']:
+                    debit = parse_amount(str(dv).strip().replace(',', '.'))
+            if credit == 0.0 and debit == 0.0:
+                continue
+            # У Pasha Bank в выписке Mədaxil (приход) и Məxaric (расход).
+            # В исходном файле приход указан положительным, расход — положительным,
+            # но мы должны расход сделать отрицательным.
+            if credit != 0.0:
+                amount = abs(credit)
+            else:
+                amount = -abs(debit)
+            cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
+            # Чистим cp от x000D_
+            cp = cp.replace('_x000D_', ' ').replace('\r', ' ').replace('\n', ' ')
+            cp = re.sub(r'\s+', ' ', cp).strip()
+            desc = desc.replace('_x000D_', ' ').replace('\r', ' ').replace('\n', ' ')
+            desc = re.sub(r'\s+', ' ', desc).strip()
+            result.append({
+                'Дата': date, 'Сумма': amount,
+                'Контрагент': cp[:200], 'Наименование счета': account_name,
+                'Описание': desc[:500]
+            })
+        except Exception:
+            continue
+    return result
 
 # ==================== Универсальный PDF fallback ====================
 
@@ -2605,7 +2783,7 @@ def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
 
 def get_parser_by_ext(account_name: str, ext: str):
     low = account_name.lower()
-    
+
     # ========== PDF ==========
     if ext == '.pdf':
         if 'regina alfa' in low:
@@ -2637,7 +2815,7 @@ def get_parser_by_ext(account_name: str, ext: str):
         if 'wio' in low:
             return parse_wio_pdf, 'wio_pdf'
         return parse_pdf_universal, 'pdf_universal'
-    
+
     # ========== DOCX ==========
     if ext == '.docx':
         if 'regina alfa' in low:
@@ -2653,92 +2831,197 @@ def get_parser_by_ext(account_name: str, ext: str):
         if 'kapital' in low or ('saida' in low and 'azn' in low):
             return parse_kapital_saida_docx, 'kapital_saida_docx'
         return None, None
-    
-    # ========== XLSX / XLS / CSV ==========
-    if 'regina alfa' in low:
-        return parse_regina_alfa_xlsx, 'regina_alfa_xlsx'
-    if 'tinkoff' in low:
-        return parse_tinkoff_docx, 'tinkoff_docx'
-    if 'bluor' in low:
-        if 'kl59' in low:
+
+    # ========== XLSX / XLS ==========
+    if ext in ('.xlsx', '.xls'):
+        if 'regina alfa' in low:
+            return parse_regina_alfa_xlsx, 'regina_alfa_xlsx'
+        if 'tinkoff' in low:
+            return parse_tinkoff_docx, 'tinkoff_docx'
+        if 'bluor' in low:
+            if 'kl59' in low:
+                return parse_kl59_bluor, 'kl59_bluor'
+            if 'bsr' in low and '3' in low:
+                return parse_bsr_bluor_3, 'bsr_bluor_3'
+            if 'bsr' in low:
+                return parse_bsr_bluor_2, 'bsr_bluor_2'
             return parse_kl59_bluor, 'kl59_bluor'
-        if 'bsr' in low and '3' in low:
-            return parse_bsr_bluor_3, 'bsr_bluor_3'
-        if 'bsr' in low:
-            return parse_bsr_bluor_2, 'bsr_bluor_2'
-        return parse_kl59_bluor, 'kl59_bluor'
-    if 'jenhor' in low or 'unelma' in low:
-        return parse_jenhor_unelma_csv, 'jenhor_unelma_csv'
-    if 'csob' in low:
-        if 'dzibik' in low:
+        if 'jenhor' in low or 'unelma' in low:
+            return parse_jenhor_unelma_csv, 'jenhor_unelma_csv'
+        if 'csob' in low:
+            if 'dzibik' in low:
+                return parse_dzibik_main_csob, 'dzibik_main_csob'
+            if 'jenisov' in low and 'eur' in low:
+                return parse_jenisov_csob_eur, 'jenisov_csob_eur'
+            if 'jenisov' in low:
+                return parse_jenisov_csob_czk, 'jenisov_csob_czk'
+            if 'rr strojka' in low and 'eur' in low:
+                return parse_rr_strojka_eur_csob, 'rr_strojka_eur_csob'
+            if 'rr strojka' in low:
+                return parse_rr_strojka_czk_csob, 'rr_strojka_czk_csob'
+            if 'rr rev ostr' in low:
+                return parse_rr_rev_ostr_csob, 'rr_rev_ostr_csob'
+            if 'koruna strojka' in low and 'eur' in low:
+                return parse_koruna_strojka_eur_csob, 'koruna_strojka_eur_csob'
+            if 'koruna strojka' in low:
+                return parse_koruna_strojka_czk_csob, 'koruna_strojka_czk_csob'
             return parse_dzibik_main_csob, 'dzibik_main_csob'
-        if 'jenisov' in low and 'eur' in low:
-            return parse_jenisov_csob_eur, 'jenisov_csob_eur'
-        if 'jenisov' in low:
-            return parse_jenisov_csob_czk, 'jenisov_csob_czk'
-        if 'rr strojka' in low and 'eur' in low:
-            return parse_rr_strojka_eur_csob, 'rr_strojka_eur_csob'
-        if 'rr strojka' in low:
-            return parse_rr_strojka_czk_csob, 'rr_strojka_czk_csob'
-        if 'rr rev ostr' in low:
-            return parse_rr_rev_ostr_csob, 'rr_rev_ostr_csob'
-        if 'koruna strojka' in low and 'eur' in low:
-            return parse_koruna_strojka_eur_csob, 'koruna_strojka_eur_csob'
-        if 'koruna strojka' in low:
-            return parse_koruna_strojka_czk_csob, 'koruna_strojka_czk_csob'
-        return parse_dzibik_main_csob, 'dzibik_main_csob'
-    if 'stalkin' in low or 'fio' in low:
-        return parse_stalkin_ml2_fio, 'stalkin_ml2_fio'
-    if 'industra' in low or 'plavas' in low or 'p1 statement' in low or 'kl59' in low or 'an14' in low:
-        if 'plavas' in low:
-            return parse_industra_plavas1, 'industra_plavas1'
-        if 'kl59' in low:
-            return parse_industra_kl59, 'industra_kl59'
-        return parse_industra_an14, 'industra_an14'
-    if 'kapital' in low or ('saida' in low and 'azn' in low):
-        return parse_kapital_saida_azn_csv, 'kapital_saida_azn_csv'
-    if 'mashreq' in low or ('nomiqa' in low and 'aed' in low):
-        return parse_mashreq, 'mashreq'
-    if 'mkb' in low or 'budapest' in low:
-        if 'huf' in low:
+        if 'stalkin' in low or 'fio' in low:
+            return parse_stalkin_ml2_fio, 'stalkin_ml2_fio'
+        if 'industra' in low or 'plavas' in low or 'p1 statement' in low or 'kl59' in low or 'an14' in low:
+            if 'plavas' in low:
+                return parse_industra_plavas1, 'industra_plavas1'
+            if 'kl59' in low:
+                return parse_industra_kl59, 'industra_kl59'
+            return parse_industra_an14, 'industra_an14'
+        if 'kapital' in low or ('saida' in low and 'azn' in low):
+            return parse_kapital_saida_azn_csv, 'kapital_saida_azn_csv'
+        if 'mashreq' in low or ('nomiqa' in low and 'aed' in low):
+            return parse_mashreq, 'mashreq'
+        if 'budapest huf' in low or ('mkb' in low and 'huf' in low):
             return parse_budapest_huf_mkb, 'budapest_huf_mkb'
-        return parse_budapest_eur_mkb, 'budapest_eur_mkb'
-    if 'n26' in low:
-        return parse_saida_n26_csv, 'saida_n26_csv'
-    if 'paysera' in low:
-        if 'baltic' in low:
+        if 'budapest eur' in low or ('mkb' in low and 'eur' in low):
+            return parse_budapest_eur_mkb, 'budapest_eur_mkb'
+        if 'mkb' in low or 'budapest' in low:
+            return parse_budapest_huf_mkb, 'budapest_huf_mkb'
+        if 'saida' in low and 'wise' in low:
+            return parse_saida_wise_xlsx, 'saida_wise_xlsx'
+        if 'n26' in low:
+            return parse_saida_n26_csv, 'saida_n26_csv'
+        if 'paysera' in low:
+            if 'baltic' in low:
+                return parse_paysera_baltic_xlsx, 'paysera_baltic_xlsx'
+            if 'sveciy' in low:
+                return parse_paysera_sveciy_xlsx, 'paysera_sveciy_xlsx'
+            if 'property' in low:
+                return parse_paysera_property, 'paysera_property'
+            if 'rerum' in low:
+                return parse_paysera_rerum, 'paysera_rerum'
             return parse_paysera_baltic_xlsx, 'paysera_baltic_xlsx'
-        if 'sveciy' in low:
-            return parse_paysera_sveciy_xlsx, 'paysera_sveciy_xlsx'
-        if 'property' in low:
-            return parse_paysera_property, 'paysera_property'
-        if 'rerum' in low:
-            return parse_paysera_rerum, 'paysera_rerum'
-        return parse_paysera_baltic_xlsx, 'paysera_baltic_xlsx'
-    if 'rak' in low and 'bank' in low:
-        return parse_rak_bank, 'rak_bank'
-    if 'revolut' in low:
-        if 'nb rev' in low or 'nb_rev' in low:
-            return parse_revolut_nb, 'revolut_nb'
-        if 'plavas' in low:
-            return parse_revolut_plavas, 'revolut_plavas'
-        return parse_revolut_an14, 'revolut_an14'
-    if 'unicredit' in low or 'garpiz' in low or 'twohills' in low or 'two hills' in low:
-        if 'b1 estate' in low:
+        if 'rak' in low and 'bank' in low:
+            return parse_rak_bank, 'rak_bank'
+        if 'bunda' in low and 'pasha' in low:
+            return parse_pasha_bank_xlsx, 'pasha_bank_xlsx'
+        if 'pasha' in low:
+            return parse_pasha_bank_xlsx, 'pasha_bank_xlsx'
+        if 'revolut' in low:
+            if 'nb rev' in low or 'nb_rev' in low:
+                return parse_revolut_nb, 'revolut_nb'
+            if 'plavas' in low:
+                return parse_revolut_plavas, 'revolut_plavas'
+            return parse_revolut_an14, 'revolut_an14'
+        if 'unicredit' in low or 'garpiz' in low or 'twohills' in low or 'two hills' in low or 'b1 estate' in low:
+            if 'b1 estate' in low:
+                return parse_unicredit_b1, 'unicredit_b1'
+            if 'pernink' in low:
+                return parse_garpiz_pernink, 'garpiz_pernink'
+            if 'garpiz' in low:
+                return parse_garpiz_unicredit, 'garpiz_unicredit'
+            if 'twohills' in low or 'two hills' in low:
+                return parse_twohills_unicredit, 'twohills_unicredit'
+            if 'koruna' in low:
+                return parse_koruna_unicredit, 'koruna_unicredit'
             return parse_unicredit_b1, 'unicredit_b1'
-        if 'pernink' in low:
-            return parse_garpiz_pernink, 'garpiz_pernink'
-        if 'garpiz' in low:
-            return parse_garpiz_unicredit, 'garpiz_unicredit'
-        if 'twohills' in low or 'two hills' in low:
-            return parse_twohills_unicredit, 'twohills_unicredit'
-        if 'koruna' in low:
-            return parse_koruna_unicredit, 'koruna_unicredit'
-        return parse_unicredit_b1, 'unicredit_b1'
-    if 'wio' in low:
-        return parse_wio_business, 'wio_business'
-    if 'wise' in low:
-        return parse_saida_wise, 'saida_wise'
+        if 'wio' in low:
+            return parse_wio_business, 'wio_business'
+        if 'wise' in low:
+            return parse_saida_wise_xlsx, 'saida_wise_xlsx'
+        return None, None
+
+    # ========== CSV ==========
+    if ext == '.csv':
+        if 'regina alfa' in low:
+            return parse_regina_alfa_xlsx, 'regina_alfa_xlsx'
+        if 'tinkoff' in low:
+            return parse_tinkoff_docx, 'tinkoff_docx'
+        if 'bluor' in low:
+            if 'kl59' in low:
+                return parse_kl59_bluor, 'kl59_bluor'
+            if 'bsr' in low and '3' in low:
+                return parse_bsr_bluor_3, 'bsr_bluor_3'
+            if 'bsr' in low:
+                return parse_bsr_bluor_2, 'bsr_bluor_2'
+            return parse_kl59_bluor, 'kl59_bluor'
+        if 'jenhor' in low or 'unelma' in low:
+            return parse_jenhor_unelma_csv, 'jenhor_unelma_csv'
+        if 'csob' in low:
+            if 'dzibik' in low:
+                return parse_dzibik_main_csob, 'dzibik_main_csob'
+            if 'jenisov' in low and 'eur' in low:
+                return parse_jenisov_csob_eur, 'jenisov_csob_eur'
+            if 'jenisov' in low:
+                return parse_jenisov_csob_czk, 'jenisov_csob_czk'
+            if 'rr strojka' in low and 'eur' in low:
+                return parse_rr_strojka_eur_csob, 'rr_strojka_eur_csob'
+            if 'rr strojka' in low:
+                return parse_rr_strojka_czk_csob, 'rr_strojka_czk_csob'
+            if 'rr rev ostr' in low:
+                return parse_rr_rev_ostr_csob, 'rr_rev_ostr_csob'
+            if 'koruna strojka' in low and 'eur' in low:
+                return parse_koruna_strojka_eur_csob, 'koruna_strojka_eur_csob'
+            if 'koruna strojka' in low:
+                return parse_koruna_strojka_czk_csob, 'koruna_strojka_czk_csob'
+            return parse_dzibik_main_csob, 'dzibik_main_csob'
+        if 'stalkin' in low or 'fio' in low:
+            return parse_stalkin_ml2_fio, 'stalkin_ml2_fio'
+        if 'industra' in low or 'plavas' in low or 'p1 statement' in low or 'kl59' in low or 'an14' in low:
+            if 'plavas' in low:
+                return parse_industra_plavas1, 'industra_plavas1'
+            if 'kl59' in low:
+                return parse_industra_kl59, 'industra_kl59'
+            return parse_industra_an14, 'industra_an14'
+        if 'kapital' in low or ('saida' in low and 'azn' in low):
+            return parse_kapital_saida_azn_csv, 'kapital_saida_azn_csv'
+        if 'mashreq' in low or ('nomiqa' in low and 'aed' in low):
+            return parse_mashreq, 'mashreq'
+        if 'budapest huf' in low or ('mkb' in low and 'huf' in low):
+            return parse_budapest_huf_mkb, 'budapest_huf_mkb'
+        if 'budapest eur' in low or ('mkb' in low and 'eur' in low):
+            return parse_budapest_eur_mkb, 'budapest_eur_mkb'
+        if 'mkb' in low or 'budapest' in low:
+            return parse_budapest_eur_mkb, 'budapest_eur_mkb'
+        if 'n26' in low:
+            return parse_saida_n26_csv, 'saida_n26_csv'
+        if 'paysera' in low:
+            if 'baltic' in low:
+                return parse_paysera_baltic_xlsx, 'paysera_baltic_xlsx'
+            if 'sveciy' in low:
+                return parse_paysera_sveciy_xlsx, 'paysera_sveciy_xlsx'
+            if 'property' in low:
+                return parse_paysera_property, 'paysera_property'
+            if 'rerum' in low:
+                return parse_paysera_rerum, 'paysera_rerum'
+            return parse_paysera_baltic_xlsx, 'paysera_baltic_xlsx'
+        if 'rak' in low and 'bank' in low:
+            return parse_rak_bank, 'rak_bank'
+        if 'bunda' in low and 'pasha' in low:
+            return parse_pasha_bank_xlsx, 'pasha_bank_csv'
+        if 'pasha' in low:
+            return parse_pasha_bank_xlsx, 'pasha_bank_csv'
+        if 'revolut' in low:
+            if 'nb rev' in low or 'nb_rev' in low:
+                return parse_revolut_nb, 'revolut_nb'
+            if 'plavas' in low:
+                return parse_revolut_plavas, 'revolut_plavas'
+            return parse_revolut_an14, 'revolut_an14'
+        if 'unicredit' in low or 'garpiz' in low or 'twohills' in low or 'two hills' in low or 'b1 estate' in low or 'b1_estate' in low:
+            if 'b1 estate' in low or 'b1_estate' in low:
+                return parse_unicredit_b1, 'unicredit_b1'
+            if 'pernink' in low:
+                return parse_garpiz_pernink, 'garpiz_pernink'
+            if 'garpiz' in low:
+                return parse_garpiz_unicredit, 'garpiz_unicredit'
+            if 'twohills' in low or 'two hills' in low:
+                return parse_twohills_unicredit, 'twohills_unicredit'
+            if 'koruna' in low:
+                return parse_koruna_unicredit, 'koruna_unicredit'
+            return parse_unicredit_b1, 'unicredit_b1'
+        if 'wio' in low:
+            return parse_wio_business, 'wio_business'
+        if 'wise' in low:
+            return parse_saida_wise_xlsx, 'saida_wise_xlsx'
+        return None, None
+
     return None, None
 
 def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
@@ -2757,14 +3040,14 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
 def main():
     st.markdown("### 📥 Загрузка файлов")
     st.markdown("Перетащите выписки в окно ниже или нажмите **Browse files**.")
-    
+
     uploaded_files = st.file_uploader(
         "Выберите файлы",
         type=['csv', 'xlsx', 'xls', 'docx', 'pdf'],
         accept_multiple_files=True,
         label_visibility="collapsed"
     )
-    
+
     if not uploaded_files:
         st.markdown("---")
         c1, c2, c3 = st.columns(3)
@@ -2801,20 +3084,20 @@ def main():
               <div class="info-card-text"><h4>Экспорт в Excel</h4><p>Скачайте итог в один клик</p></div>
             </div>
             """, unsafe_allow_html=True)
-    
+
     if uploaded_files:
         st.markdown("---")
         st.markdown(f"**Загружено файлов:** {len(uploaded_files)}")
-        
+
         if st.button("🚀 Обработать файлы"):
             all_tx = []
             failed = []
             file_stats = []
             debug_info = []
-            
+
             progress = st.progress(0)
             status = st.empty()
-            
+
             for i, uf in enumerate(uploaded_files):
                 status.text(f"Обработка: {uf.name}")
                 try:
@@ -2843,22 +3126,22 @@ def main():
                     failed.append(f"{uf.name} (ошибка: {e})")
                     debug_info.append(f"❌ `{uf.name}` → исключение: {e}")
                 progress.progress((i + 1) / len(uploaded_files))
-            
+
             status.text("✅ Обработка завершена!")
-            
+
             st.markdown("### 📋 Результат обработки")
             for s in file_stats:
                 st.info(s)
-            
+
             with st.expander("🔧 Техническая информация"):
                 for line in debug_info:
                     st.markdown(line)
-            
+
             if all_tx:
                 df = pd.DataFrame(all_tx)
                 df['Сумма_число'] = df['Сумма']
                 df['Сумма'] = df['Сумма'].apply(format_amount)
-                
+
                 st.markdown("---")
                 st.markdown("### 📊 Итоги")
                 c1, c2, c3 = st.columns(3)
@@ -2870,11 +3153,11 @@ def main():
                     st.metric("📈 Доходы", f"{income:,.2f}".replace('.', ','))
                 with c3:
                     st.metric("📉 Расходы", f"{expense:,.2f}".replace('.', ','))
-                
+
                 st.markdown("---")
                 st.markdown("### 🧾 Детализация транзакций")
                 st.dataframe(df.drop(columns=['Сумма_число']), use_container_width=True, hide_index=True)
-                
+
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df.drop(columns=['Сумма_число']).to_excel(writer, sheet_name='Транзакции', index=False)
@@ -2883,7 +3166,7 @@ def main():
                     bs['Сумма'] = bs['Сумма'].apply(lambda x: f"{x:,.2f}".replace('.', ','))
                     bs.to_excel(writer, sheet_name='Сводка по счетам')
                 output.seek(0)
-                
+
                 st.markdown("### 💾 Сохранить результат")
                 st.download_button(
                     label="📥 Скачать Excel",
@@ -2891,12 +3174,12 @@ def main():
                     file_name="анализ_банковских_выписок.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
-            
+
             if failed:
                 st.warning(f"⚠️ Не удалось обработать: {len(failed)} файлов")
                 for f in failed:
                     st.write(f"- {f}")
-    
+
     st.markdown("""
     <div class="footer-note">
       Работает локально. Данные никуда не отправляются.
