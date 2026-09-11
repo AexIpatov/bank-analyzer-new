@@ -455,7 +455,6 @@ def _split_line(line: str, sep: str) -> List[str]:
     while i < n:
         ch = line[i]
         if ch == '"':
-            # Экранированная кавычка ""
             if inq and i + 1 < n and line[i + 1] == '"':
                 cur += '"'
                 i += 2
@@ -810,6 +809,18 @@ def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== BluOr Bank ====================
 
 def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    BluOr Bank CSV.
+
+    [FIX-3] Уточнены правила:
+      - служебные строки определяем строго по точным фразам
+        ('начальный остаток', 'конечный остаток', 'дебет (d)',
+        'кредит (c)', 'opening balance', 'closing balance');
+      - сумму 0.00 больше НЕ отсекаем автоматически — если это
+        реальная транзакция с суммой 0.00, она сохранится (в файле
+        BSR_Estate_EUR_BluOr_3 все строки служебные, поэтому 0
+        операций — корректный результат).
+    """
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -817,15 +828,29 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
         return []
     first_line = lines[0]
     sep = ';' if first_line.count(';') > first_line.count(',') else ','
-    skip_words = ['начальный остаток', 'конечный остаток', 'starting balance', 'ending balance',
-                  'total', 'дебет (d)', 'кредит (c)', 'debit (d)', 'credit (c)',
-                  'account number', 'balance', 'saldo', 'выписка', 'statement',
-                  'iban', 'currency', 'date', 'amount']
+
+    # [FIX-3] Точные маркеры служебных строк (а не подстроки вида 'total'
+    # внутри описания реальной транзакции)
+    service_markers = [
+        'начальный остаток', 'конечный остаток',
+        'входящий остаток', 'исходящий остаток',
+        'opening balance', 'closing balance',
+        'дебет (d)', 'кредит (c)',
+        'debit (d)', 'credit (c)',
+        'saldo počáteční', 'saldo konečné',
+        'sākuma atlikums', 'beigu atlikums',
+    ]
+
     for line in lines:
         parts = _split_line(line, sep)
         if len(parts) < 4:
             continue
         try:
+            # Определяем служебную строку по содержимому (склеенное описание)
+            joined_low = ' '.join(p.lower() for p in parts)
+            if any(m in joined_low for m in service_markers):
+                continue
+
             date = None
             date_idx = -1
             for i in range(min(5, len(parts))):
@@ -836,6 +861,7 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
                     break
             if not date:
                 continue
+
             amount = 0.0
             amount_idx = -1
             for i in [4, 5, 3, 6]:
@@ -845,8 +871,19 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
                         amount = a
                         amount_idx = i
                         break
-            if amount == 0.0:
+            # [FIX-3] Если сумма 0.00 — считаем это допустимым только если
+            # в строке есть тип D/C (то есть это реальная транзакция)
+            ttype = ''
+            for i in [6, 7, 8]:
+                if i < len(parts):
+                    v = parts[i].strip().upper()
+                    if v in ('D', 'C'):
+                        ttype = v
+                        break
+
+            if amount == 0.0 and not ttype:
                 continue
+
             desc = ''
             for i in [3, 2, 1]:
                 if i < len(parts) and i not in (date_idx, amount_idx):
@@ -855,19 +892,12 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
                         desc = v
                         break
             low = desc.lower()
-            if any(w in low for w in skip_words):
-                continue
-            ttype = ''
-            for i in [6, 7, 8]:
-                if i < len(parts):
-                    v = parts[i].strip().upper()
-                    if v in ('D', 'C'):
-                        ttype = v
-                        break
+
             if ttype == 'D':
                 amount = -abs(amount)
             elif ttype == 'C':
                 amount = abs(amount)
+
             cp = 'BluOr Bank' if 'bluor' in low or 'bank' in low else ''
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -1105,7 +1135,7 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
     """
     Industra Bank .xls/.xlsx/.csv.
 
-    [FIX-9] Терпимый поиск заголовка:
+    Терпимый поиск заголовка:
       - расширенные маркеры (Дата транзакции / Date / Transaction Date,
         Дебет / Debit, Кредит / Credit);
       - окно поиска 60 строк;
@@ -1119,7 +1149,6 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
         for idx, row in df.iterrows():
             if idx < 60:
                 rs = ' '.join([str(x) for x in row.values if pd.notna(x)]).lower()
-                # [FIX-9] Расширенные маркеры: дата + дебет/кредит (RU/EN)
                 has_date = ('дата транзакции' in rs) or ('transaction date' in rs) \
                     or ('date' in rs and 'transaction' in rs)
                 has_debit = ('дебет' in rs) or ('debit' in rs)
@@ -1199,7 +1228,7 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
         if result:
             return result
 
-    # [FIX-9] CSV-fallback: пробуем текстовое чтение
+    # CSV-fallback
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     if not lines:
@@ -1628,31 +1657,21 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Универсальный парсер MKB: работает и с CSV, и с XLS (BIFF), и с XLSX.
     Заголовок содержит 'Sorszám' и 'Értéknap' (с диакритикой или без).
-
-    [FIX-1] Каскад для .xls BIFF:
-      1) xlrd (штатный для BIFF);
-      2) openpyxl (на случай, если xlrd не справился);
-      3) pd.read_html (на случай HTML внутри .xls);
-      4) CSV-путь (текстовое чтение).
-    Расширенный набор маркеров заголовка и окно поиска до 30 строк.
     """
     result = []
     df = None
 
     # 1) Пробуем как XLS/XLSX по магическим байтам
     if _is_real_xls(file_content):
-        # [FIX-1] xlrd
         try:
             df = pd.read_excel(BytesIO(file_content), header=None, engine='xlrd')
         except Exception:
             df = None
-        # [FIX-1] openpyxl fallback
         if df is None or df.empty:
             try:
                 df = pd.read_excel(BytesIO(file_content), header=None, engine='openpyxl')
             except Exception:
                 df = None
-        # [FIX-1] pd.read_html fallback
         if df is None or df.empty:
             try:
                 tables = pd.read_html(BytesIO(file_content))
@@ -1680,7 +1699,6 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
             if idx < 30:
                 rs = ' '.join([str(x) for x in row.values if pd.notna(x)])
                 rsl = rs.lower()
-                # [FIX-1] Расширенные маркеры: Sorszám/Értéknap с диакритикой или без
                 has_sorsz = ('sorszám' in rsl) or ('sorszam' in rsl)
                 has_ert = ('értéknap' in rsl) or ('erteknap' in rsl)
                 has_ossz = ('összeg' in rsl) or ('osszeg' in rsl)
@@ -1742,7 +1760,6 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                     date = parse_date(dstr)
                     if not date:
                         continue
-                    # Сумма: сначала amount, иначе credit-debit
                     amount = 0.0
                     if 'amount' in ci and ci['amount'] < len(row):
                         amount = parse_amount(row.iloc[ci['amount']])
@@ -2323,8 +2340,8 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Revolut CSV.
-    [FIX-11] Терпимый поиск заголовка: 'Date started (UTC)' или 'Date started',
-    а также 'Type'/'State'/'Description'/'Payer'/'Amount'.
+    Терпимый поиск заголовка: 'Date started (UTC)' или 'Date started',
+    а также 'Type'/'State'/'Description'/'Payer'/'Beneficiary name'/'Amount'.
     Пропускаем операции с State != COMPLETED.
     """
     result = []
@@ -3030,7 +3047,7 @@ def get_parser_by_ext(account_name: str, ext: str):
 
     # ========== XLSX / XLS ==========
     if ext in ('.xlsx', '.xls'):
-        # [FIX-11] Revolut ДО Industra (иначе AN14_*_Revolut уходит в industra_an14)
+        # Revolut ДО Industra (иначе AN14_*_Revolut уходит в industra_an14)
         if 'revolut' in low:
             if 'nb rev' in low or 'nb_rev' in low:
                 return parse_revolut_nb, 'revolut_nb'
@@ -3071,7 +3088,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_dzibik_main_csob, 'dzibik_main_csob'
         if 'stalkin' in low or 'fio' in low:
             return parse_stalkin_ml2_fio, 'stalkin_ml2_fio'
-        # [FIX-9] Industra — расширенные маркеры заголовка
         if 'industra' in low or 'plavas' in low or 'p1 statement' in low or 'kl59' in low or 'an14' in low:
             if 'plavas' in low:
                 return parse_industra_plavas1, 'industra_plavas1'
@@ -3082,7 +3098,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_kapital_saida_azn_csv, 'kapital_saida_azn_csv'
         if 'mashreq' in low or ('nomiqa' in low and 'aed' in low):
             return parse_mashreq, 'mashreq'
-        # [FIX-1] MKB: сначала конкретные ветки (huf / eur), потом общий
         if 'budapest huf' in low or ('mkb' in low and 'huf' in low):
             return parse_budapest_huf_mkb, 'budapest_huf_mkb'
         if 'budapest eur' in low or ('mkb' in low and 'eur' in low):
@@ -3129,7 +3144,7 @@ def get_parser_by_ext(account_name: str, ext: str):
 
     # ========== CSV ==========
     if ext == '.csv':
-        # [FIX-11] Revolut ДО Industra
+        # Revolut ДО Industra
         if 'revolut' in low:
             if 'nb rev' in low or 'nb_rev' in low:
                 return parse_revolut_nb, 'revolut_nb'
