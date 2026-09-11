@@ -2,6 +2,10 @@
 # от задвоения сводки через st.session_state. Все существующие парсеры,
 # CSS, UI, дампы, экспорт, метрики, build_account_summary и билдеры Excel
 # сохранены без изменений.
+#
+# [FIX-DUP-1] Убрана дублирующая таблица "Сводка по счетам":
+# оставлена только HTML-версия (.summary-table) в тёмно-зелёной палитре.
+# st.dataframe(summary_df, ...) удалён.
 
 import streamlit as st
 import pandas as pd
@@ -4372,7 +4376,7 @@ def _files_signature(uploaded_files) -> str:
     """
     [FIX-STATE-1] Строит подпись набора загруженных файлов: имя + размер.
     Пока подпись не менялась — результат берётся из session_state,
-    файлы повторно не парсятся (лечит задвоение сводки).
+    файлы повторно не парсятся.
     """
     h = hashlib.md5()
     for uf in uploaded_files:
@@ -4386,8 +4390,7 @@ def _files_signature(uploaded_files) -> str:
 
 def _process_uploaded_files(uploaded_files) -> Dict:
     """
-    [FIX-STATE-2] Собирает результат обработки в один словарь:
-    all_tx, failed, file_stats, debug_info.
+    [FIX-STATE-2] Собирает результат обработки в один словарь.
     Вызывается один раз на уникальную подпись файлов.
     """
     all_tx: List[Dict] = []
@@ -4455,6 +4458,10 @@ def _render_results(result: Dict):
     """
     [FIX-STATE-3] Рендерит результат из session_state. Вызывается на каждом
     rerun; данные не пересобираются.
+
+    [FIX-DUP-1] Убрана дублирующая таблица "Сводка по счетам" —
+    оставлена только HTML-версия (.summary-table) в тёмно-зелёной палитре.
+    st.dataframe(summary_df, ...) удалён.
     """
     all_tx = result.get('all_tx', [])
     failed = result.get('failed', [])
@@ -4499,6 +4506,7 @@ def _render_results(result: Dict):
     st.markdown("### 🧾 Детализация транзакций")
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 
+    # [FIX-DUP-1] Единственная таблица сводки — HTML в тёмно-зелёной палитре.
     st.markdown("---")
     st.markdown("### 📁 Сводка по счетам")
     summary_df = build_account_summary(all_tx)
@@ -4509,7 +4517,7 @@ def _render_results(result: Dict):
             f'<div class="summary-table">{summary_df.to_html(index=False, escape=False)}</div>',
             unsafe_allow_html=True,
         )
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        # st.dataframe(summary_df, ...) — УДАЛЕНО, чтобы не было двух таблиц.
 
     st.markdown("---")
     st.markdown("### 💾 Сохранить результат")
@@ -4593,7 +4601,6 @@ def main():
     )
 
     if not uploaded_files:
-        # [FIX-STATE-5] Если файлы убрали — сбрасываем результат.
         st.session_state['processing_result'] = None
         st.session_state['files_signature'] = None
 
@@ -4661,8 +4668,6 @@ def main():
         elif st.session_state['files_signature'] != current_sig:
             need_process = True
         else:
-            # Кнопка нажата, но файлы те же и результат уже есть —
-            # повторно не парсим, чтобы не задваивать сводку.
             need_process = False
             st.info("Файлы не изменились — использую уже готовый результат.")
 
