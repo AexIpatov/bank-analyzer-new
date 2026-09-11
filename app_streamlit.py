@@ -19,12 +19,6 @@ st.set_page_config(
 
 # ==================== CSS СТИЛИ ====================
 # Палитра: тёмно-зелёный (цвет травы).
-#   --grass-dark   #1B5E20 — глубокий тёмно-зелёный (основной акцент)
-#   --grass        #2E7D32 — трава
-#   --grass-light  #4CAF50 — светлее
-#   --grass-accent #81C784 — акцентный
-#   --mint-light   #C8E6C9 — мягкий фон
-#   --ink          #1A2E1F — почти чёрный с зелёным отливом
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
@@ -456,14 +450,23 @@ def _split_line(line: str, sep: str) -> List[str]:
     parts = []
     cur = ''
     inq = False
-    for ch in line:
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
         if ch == '"':
+            # Экранированная кавычка ""
+            if inq and i + 1 < n and line[i + 1] == '"':
+                cur += '"'
+                i += 2
+                continue
             inq = not inq
         elif ch == sep and not inq:
             parts.append(cur.strip())
             cur = ''
         else:
             cur += ch
+        i += 1
     parts.append(cur.strip())
     return [p.strip('"') for p in parts]
 
@@ -1099,73 +1102,166 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Industra ====================
 
 def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Industra Bank .xls/.xlsx/.csv.
+
+    [FIX-9] Терпимый поиск заголовка:
+      - расширенные маркеры (Дата транзакции / Date / Transaction Date,
+        Дебет / Debit, Кредит / Credit);
+      - окно поиска 60 строк;
+      - fallback на CSV-путь (текстовое чтение), если табличное чтение
+        не дало результатов.
+    """
     result = []
     df = read_xlsx(file_content)
-    if df is None or df.empty:
-        return []
-    header_row = -1
-    for idx, row in df.iterrows():
-        if idx < 60:
-            rs = ' '.join([str(x) for x in row.values if pd.notna(x)])
-            if 'Дата транзакции' in rs and 'Дебет' in rs and 'Кредит' in rs:
-                header_row = idx
-                break
-    if header_row == -1:
-        return []
-    hdr = df.iloc[header_row]
+    if df is not None and not df.empty:
+        header_row = -1
+        for idx, row in df.iterrows():
+            if idx < 60:
+                rs = ' '.join([str(x) for x in row.values if pd.notna(x)]).lower()
+                # [FIX-9] Расширенные маркеры: дата + дебет/кредит (RU/EN)
+                has_date = ('дата транзакции' in rs) or ('transaction date' in rs) \
+                    or ('date' in rs and 'transaction' in rs)
+                has_debit = ('дебет' in rs) or ('debit' in rs)
+                has_credit = ('кредит' in rs) or ('credit' in rs)
+                if has_date and has_debit and has_credit:
+                    header_row = idx
+                    break
+        if header_row == -1:
+            return []
+        hdr = df.iloc[header_row]
+        ci = {}
+        for i, v in enumerate(hdr.values):
+            if pd.isna(v):
+                continue
+            s = str(v).strip()
+            sl = s.lower()
+            if ('дата транзакции' in sl) or ('transaction date' in sl) or (sl == 'date'):
+                if 'date' not in ci:
+                    ci['date'] = i
+            elif ('получатель' in sl) or ('плательщик' in sl) or ('counterparty' in sl) or ('payee' in sl):
+                if 'counterparty' not in ci:
+                    ci['counterparty'] = i
+            elif ('информация о транзакции' in sl) or ('описание' in sl) or ('description' in sl) or ('details' in sl):
+                if 'description' not in ci:
+                    ci['description'] = i
+            elif (('дебет' in sl) or ('debit' in sl)) and ('кредит' not in sl) and ('credit' not in sl):
+                if 'debit' not in ci:
+                    ci['debit'] = i
+            elif (('кредит' in sl) or ('credit' in sl)) and ('дебет' not in sl) and ('debit' not in sl):
+                if 'credit' not in ci:
+                    ci['credit'] = i
+        if 'date' not in ci:
+            ci['date'] = 0
+        if 'debit' not in ci:
+            ci['debit'] = 11
+        if 'credit' not in ci:
+            ci['credit'] = 12
+        for idx in range(header_row + 1, len(df)):
+            row = df.iloc[idx]
+            rv = [x for x in row.values if pd.notna(x)]
+            if not rv:
+                continue
+            try:
+                dstr = safe_str(row.iloc[ci['date']]) if ci['date'] < len(row) else ''
+                if not dstr:
+                    continue
+                date = parse_date(dstr)
+                if not date:
+                    continue
+                amount = 0.0
+                found = False
+                if 'debit' in ci and ci['debit'] < len(row):
+                    dv = row.iloc[ci['debit']]
+                    if pd.notna(dv) and str(dv).strip() not in ['', 'nan', '-']:
+                        p = parse_amount(str(dv).strip().replace(',', '.').replace(' ', ''))
+                        if p != 0.0:
+                            amount = -abs(p)
+                            found = True
+                if not found and 'credit' in ci and ci['credit'] < len(row):
+                    cv = row.iloc[ci['credit']]
+                    if pd.notna(cv) and str(cv).strip() not in ['', 'nan', '-']:
+                        p = parse_amount(str(cv).strip().replace(',', '.').replace(' ', ''))
+                        if p != 0.0:
+                            amount = p
+                            found = True
+                if not found:
+                    continue
+                cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
+                desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
+                result.append({
+                    'Дата': date, 'Сумма': amount,
+                    'Контрагент': cp[:200], 'Наименование счета': account_name,
+                    'Описание': desc[:500]
+                })
+            except Exception:
+                continue
+        if result:
+            return result
+
+    # [FIX-9] CSV-fallback: пробуем текстовое чтение
+    content = read_text_with_encoding(file_content)
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+    if not lines:
+        return result
+    sample = '\n'.join(lines[:5])
+    sep = ';' if sample.count(';') >= sample.count(',') else ','
+    header_idx = -1
+    for i, l in enumerate(lines[:60]):
+        low = l.lower()
+        has_date = ('дата транзакции' in low) or ('transaction date' in low)
+        has_debit = ('дебет' in low) or ('debit' in low)
+        has_credit = ('кредит' in low) or ('credit' in low)
+        if has_date and has_debit and has_credit:
+            header_idx = i
+            break
+    if header_idx == -1:
+        return result
+    hdr = _split_line(lines[header_idx], sep)
     ci = {}
-    for i, v in enumerate(hdr.values):
-        if pd.isna(v):
-            continue
-        s = str(v).strip()
-        if 'Дата транзакции' in s:
-            ci['date'] = i
-        elif 'Получатель' in s or 'Плательщик' in s:
-            ci['counterparty'] = i
-        elif 'Информация о транзакции' in s:
-            ci['description'] = i
-        elif 'Дебет' in s and 'Кредит' not in s:
-            ci['debit'] = i
-        elif 'Кредит' in s and 'Дебет' not in s:
-            ci['credit'] = i
+    for i, h in enumerate(hdr):
+        hl = h.lower()
+        if ('дата транзакции' in hl) or ('transaction date' in hl):
+            if 'date' not in ci:
+                ci['date'] = i
+        elif ('получатель' in hl) or ('плательщик' in hl) or ('counterparty' in hl):
+            if 'counterparty' not in ci:
+                ci['counterparty'] = i
+        elif ('информация о транзакции' in hl) or ('описание' in hl) or ('description' in hl):
+            if 'description' not in ci:
+                ci['description'] = i
+        elif (('дебет' in hl) or ('debit' in hl)) and ('кредит' not in hl) and ('credit' not in hl):
+            if 'debit' not in ci:
+                ci['debit'] = i
+        elif (('кредит' in hl) or ('credit' in hl)) and ('дебет' not in hl) and ('debit' not in hl):
+            if 'credit' not in ci:
+                ci['credit'] = i
     if 'date' not in ci:
-        ci['date'] = 0
-    if 'debit' not in ci:
-        ci['debit'] = 11
-    if 'credit' not in ci:
-        ci['credit'] = 12
-    for idx in range(header_row + 1, len(df)):
-        row = df.iloc[idx]
-        rv = [x for x in row.values if pd.notna(x)]
-        if not rv:
+        return result
+    for line in lines[header_idx + 1:]:
+        parts = _split_line(line, sep)
+        if ci['date'] >= len(parts):
             continue
         try:
-            dstr = safe_str(row.iloc[ci['date']]) if ci['date'] < len(row) else ''
-            if not dstr:
-                continue
-            date = parse_date(dstr)
+            date = parse_date(parts[ci['date']])
             if not date:
                 continue
             amount = 0.0
             found = False
-            if 'debit' in ci and ci['debit'] < len(row):
-                dv = row.iloc[ci['debit']]
-                if pd.notna(dv) and str(dv).strip() not in ['', 'nan', '-']:
-                    p = parse_amount(str(dv).strip().replace(',', '.').replace(' ', ''))
-                    if p != 0.0:
-                        amount = -abs(p)
-                        found = True
-            if not found and 'credit' in ci and ci['credit'] < len(row):
-                cv = row.iloc[ci['credit']]
-                if pd.notna(cv) and str(cv).strip() not in ['', 'nan', '-']:
-                    p = parse_amount(str(cv).strip().replace(',', '.').replace(' ', ''))
-                    if p != 0.0:
-                        amount = p
-                        found = True
+            if 'debit' in ci and ci['debit'] < len(parts):
+                p = parse_amount(parts[ci['debit']].replace(',', '.').replace(' ', ''))
+                if p != 0.0:
+                    amount = -abs(p)
+                    found = True
+            if not found and 'credit' in ci and ci['credit'] < len(parts):
+                p = parse_amount(parts[ci['credit']].replace(',', '.').replace(' ', ''))
+                if p != 0.0:
+                    amount = p
+                    found = True
             if not found:
                 continue
-            cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-            desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
+            cp = parts[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(parts) else ''
+            desc = parts[ci['description']] if 'description' in ci and ci['description'] < len(parts) else ''
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp[:200], 'Наименование счета': account_name,
@@ -1530,142 +1626,212 @@ def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    Универсальный парсер MKB: работает и с CSV, и с XLS, и с XLSX.
-    Заголовок содержит 'Sorszám' и 'Értéknap'.
+    Универсальный парсер MKB: работает и с CSV, и с XLS (BIFF), и с XLSX.
+    Заголовок содержит 'Sorszám' и 'Értéknap' (с диакритикой или без).
+
+    [FIX-1] Каскад для .xls BIFF:
+      1) xlrd (штатный для BIFF);
+      2) openpyxl (на случай, если xlrd не справился);
+      3) pd.read_html (на случай HTML внутри .xls);
+      4) CSV-путь (текстовое чтение).
+    Расширенный набор маркеров заголовка и окно поиска до 30 строк.
     """
     result = []
     df = None
 
-    # 1) Пробуем как XLS/XLSX, если магические байты совпадают
+    # 1) Пробуем как XLS/XLSX по магическим байтам
     if _is_real_xls(file_content):
+        # [FIX-1] xlrd
         try:
             df = pd.read_excel(BytesIO(file_content), header=None, engine='xlrd')
         except Exception:
             df = None
+        # [FIX-1] openpyxl fallback
+        if df is None or df.empty:
+            try:
+                df = pd.read_excel(BytesIO(file_content), header=None, engine='openpyxl')
+            except Exception:
+                df = None
+        # [FIX-1] pd.read_html fallback
+        if df is None or df.empty:
+            try:
+                tables = pd.read_html(BytesIO(file_content))
+                if tables:
+                    df = tables[0]
+            except Exception:
+                df = None
     elif _is_real_xlsx(file_content):
         try:
             df = pd.read_excel(BytesIO(file_content), header=None, engine='openpyxl')
         except Exception:
             df = None
-
-    # 2) Если не получилось — пробуем как CSV
-    if df is None or df.empty:
-        content = read_text_with_encoding(file_content)
-        lines = [l.strip() for l in content.split('\n') if l.strip()]
-        if not lines:
-            return []
-        sample = '\n'.join(lines[:5])
-        sep = ';' if sample.count(';') >= sample.count(',') else ','
-        header_line_idx = -1
-        for i, l in enumerate(lines):
-            low = l.lower()
-            if 'sorsz' in low and 'rt' in low and 'knap' in low:
-                header_line_idx = i
-                break
-        if header_line_idx == -1:
-            return []
-        hdr = _split_line(lines[header_line_idx], sep)
-        if len(hdr) < 5:
-            return []
-        def find_col(patterns):
-            for i, h in enumerate(hdr):
-                hl = h.lower()
-                if any(p in hl for p in patterns):
-                    return i
-            return -1
-        date_idx = find_col(['értéknap', 'rt', 'knap'])
-        amount_idx = find_col(['összeg', 'sszeg'])
-        desc_idx = find_col(['közlemény', 'kzlem'])
-        cp_idx = find_col(['kedvezményezett'])
-        type_idx = find_col(['tranzakció típusa', 'tranzakci', 'típusa'])
-        if date_idx == -1 or amount_idx == -1:
-            return []
-        for line in lines[header_line_idx + 1:]:
-            parts = _split_line(line, sep)
-            if len(parts) < max(date_idx, amount_idx) + 1:
-                continue
+        if df is None or df.empty:
             try:
-                date = parse_date(parts[date_idx])
-                if not date:
-                    continue
-                amount = parse_amount(parts[amount_idx])
-                if amount == 0.0:
-                    continue
-                desc = parts[desc_idx] if 0 <= desc_idx < len(parts) else ''
-                cp = parts[cp_idx] if 0 <= cp_idx < len(parts) else ''
-                ttype = parts[type_idx] if 0 <= type_idx < len(parts) else ''
-                if cp in ['N/A', 'n/a']:
-                    cp = ''
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp[:200], 'Наименование счета': account_name,
-                    'Описание': (f"{ttype} | {desc}" if ttype else desc)[:500]
-                })
+                tables = pd.read_html(BytesIO(file_content))
+                if tables:
+                    df = tables[0]
             except Exception:
-                continue
+                df = None
+
+    # 2) Разбор DataFrame (если что-то получилось)
+    if df is not None and not df.empty:
+        header_row = -1
+        for idx, row in df.iterrows():
+            if idx < 30:
+                rs = ' '.join([str(x) for x in row.values if pd.notna(x)])
+                rsl = rs.lower()
+                # [FIX-1] Расширенные маркеры: Sorszám/Értéknap с диакритикой или без
+                has_sorsz = ('sorszám' in rsl) or ('sorszam' in rsl)
+                has_ert = ('értéknap' in rsl) or ('erteknap' in rsl)
+                has_ossz = ('összeg' in rsl) or ('osszeg' in rsl)
+                if has_sorsz and has_ert:
+                    header_row = idx
+                    break
+                if has_ert and has_ossz:
+                    header_row = idx
+                    break
+        if header_row != -1:
+            hdr = df.iloc[header_row]
+            ci = {}
+            for i, v in enumerate(hdr.values):
+                if pd.isna(v):
+                    continue
+                s = str(v).strip()
+                sl = s.lower()
+                if ('értéknap' in sl) or ('erteknap' in sl):
+                    if 'date' not in ci:
+                        ci['date'] = i
+                elif ('összeg' in sl) or ('osszeg' in sl):
+                    if 'amount' not in ci:
+                        ci['amount'] = i
+                elif ('közlemény' in sl) or ('kozlemeny' in sl):
+                    if 'description' not in ci:
+                        ci['description'] = i
+                elif ('kedvezményezett' in sl) and ('neve' in sl):
+                    if 'counterparty' not in ci:
+                        ci['counterparty'] = i
+                elif ('tranzakció típusa' in sl) or ('tranzakci' in sl and 'típusa' in sl):
+                    if 'type' not in ci:
+                        ci['type'] = i
+                elif ('terhelés' in sl) or ('terheles' in sl):
+                    if 'debit' not in ci:
+                        ci['debit'] = i
+                elif ('jóváírás' in sl) or ('jovairas' in sl):
+                    if 'credit' not in ci:
+                        ci['credit'] = i
+            if 'date' not in ci:
+                ci['date'] = 1
+            if 'amount' not in ci and 'credit' not in ci and 'debit' not in ci:
+                ci['amount'] = 9
+            if 'description' not in ci:
+                ci['description'] = 11
+            if 'counterparty' not in ci:
+                ci['counterparty'] = 4
+            if 'type' not in ci:
+                ci['type'] = 2
+
+            for idx in range(header_row + 1, len(df)):
+                row = df.iloc[idx]
+                rv = [x for x in row.values if pd.notna(x)]
+                if not rv:
+                    continue
+                try:
+                    dstr = safe_str(row.iloc[ci['date']]) if ci['date'] < len(row) else ''
+                    if not dstr:
+                        continue
+                    date = parse_date(dstr)
+                    if not date:
+                        continue
+                    # Сумма: сначала amount, иначе credit-debit
+                    amount = 0.0
+                    if 'amount' in ci and ci['amount'] < len(row):
+                        amount = parse_amount(row.iloc[ci['amount']])
+                    if amount == 0.0 and ('credit' in ci or 'debit' in ci):
+                        cr = parse_amount(row.iloc[ci['credit']]) if ('credit' in ci and ci['credit'] < len(row)) else 0.0
+                        db = parse_amount(row.iloc[ci['debit']]) if ('debit' in ci and ci['debit'] < len(row)) else 0.0
+                        if cr or db:
+                            amount = abs(cr) - abs(db)
+                    if amount == 0.0:
+                        continue
+                    desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
+                    cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
+                    ttype = safe_str(row.iloc[ci['type']]) if 'type' in ci and ci['type'] < len(row) else ''
+                    if cp in ['N/A', 'n/a']:
+                        cp = ''
+                    result.append({
+                        'Дата': date, 'Сумма': amount,
+                        'Контрагент': cp[:200], 'Наименование счета': account_name,
+                        'Описание': (f"{ttype} | {desc}" if ttype else desc)[:500]
+                    })
+                except Exception:
+                    continue
+            if result:
+                return result
+
+    # 3) CSV-путь (fallback)
+    content = read_text_with_encoding(file_content)
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+    if not lines:
+        return result
+    sample = '\n'.join(lines[:5])
+    sep = ';' if sample.count(';') >= sample.count(',') else ','
+    header_line_idx = -1
+    for i, l in enumerate(lines):
+        low = l.lower()
+        has_sorsz = ('sorszám' in low) or ('sorszam' in low)
+        has_ert = ('értéknap' in low) or ('erteknap' in low)
+        if has_sorsz and has_ert:
+            header_line_idx = i
+            break
+        if has_ert and (('összeg' in low) or ('osszeg' in low)):
+            header_line_idx = i
+            break
+    if header_line_idx == -1:
+        return result
+    hdr = _split_line(lines[header_line_idx], sep)
+    if len(hdr) < 3:
         return result
 
-    # 3) Разбор DataFrame
-    header_row = -1
-    for idx, row in df.iterrows():
-        if idx < 30:
-            rs = ' '.join([str(x) for x in row.values if pd.notna(x)])
-            if 'Sorszám' in rs and 'Értéknap' in rs:
-                header_row = idx
-                break
-            if 'rt' in rs and 'knap' in rs and 'sszeg' in rs:
-                header_row = idx
-                break
-    if header_row == -1:
-        return []
+    def find_col(patterns):
+        for i, h in enumerate(hdr):
+            hl = h.lower()
+            if any(p in hl for p in patterns):
+                return i
+        return -1
 
-    hdr = df.iloc[header_row]
-    ci = {}
-    for i, v in enumerate(hdr.values):
-        if pd.isna(v):
-            continue
-        s = str(v).strip()
-        sl = s.lower()
-        if 'értéknap' in sl or ('rt' in sl and 'knap' in sl):
-            ci['date'] = i
-        elif 'összeg' in sl or 'sszeg' in sl:
-            ci['amount'] = i
-        elif 'közlemény' in sl or 'kzlem' in sl:
-            ci['description'] = i
-        elif 'kedvezményezett' in sl and 'neve' in sl and 'counterparty' not in ci:
-            ci['counterparty'] = i
-        elif 'tranzakció típusa' in sl or ('tranzakci' in sl and 'típusa' in sl):
-            if 'type' not in ci:
-                ci['type'] = i
-    if 'date' not in ci:
-        ci['date'] = 1
-    if 'amount' not in ci:
-        ci['amount'] = 9
-    if 'description' not in ci:
-        ci['description'] = 11
-    if 'counterparty' not in ci:
-        ci['counterparty'] = 4
-    if 'type' not in ci:
-        ci['type'] = 2
+    date_idx = find_col(['értéknap', 'erteknap'])
+    amount_idx = find_col(['összeg', 'osszeg'])
+    desc_idx = find_col(['közlemény', 'kozlemeny'])
+    cp_idx = find_col(['kedvezményezett'])
+    type_idx = find_col(['tranzakció típusa', 'tranzakci'])
+    debit_idx = find_col(['terhelés', 'terheles'])
+    credit_idx = find_col(['jóváírás', 'jovairas'])
+    if date_idx == -1:
+        return result
+    if amount_idx == -1 and (debit_idx == -1 and credit_idx == -1):
+        return result
 
-    for idx in range(header_row + 1, len(df)):
-        row = df.iloc[idx]
-        rv = [x for x in row.values if pd.notna(x)]
-        if not rv:
+    for line in lines[header_line_idx + 1:]:
+        parts = _split_line(line, sep)
+        if date_idx >= len(parts):
             continue
         try:
-            dstr = safe_str(row.iloc[ci['date']]) if ci['date'] < len(row) else ''
-            if not dstr:
-                continue
-            date = parse_date(dstr)
+            date = parse_date(parts[date_idx])
             if not date:
                 continue
-            amount = parse_amount(row.iloc[ci['amount']] if ci['amount'] < len(row) else '')
+            amount = 0.0
+            if amount_idx >= 0 and amount_idx < len(parts):
+                amount = parse_amount(parts[amount_idx])
+            if amount == 0.0 and (debit_idx >= 0 or credit_idx >= 0):
+                cr = parse_amount(parts[credit_idx]) if (credit_idx >= 0 and credit_idx < len(parts)) else 0.0
+                db = parse_amount(parts[debit_idx]) if (debit_idx >= 0 and debit_idx < len(parts)) else 0.0
+                if cr or db:
+                    amount = abs(cr) - abs(db)
             if amount == 0.0:
                 continue
-            desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
-            cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-            ttype = safe_str(row.iloc[ci['type']]) if 'type' in ci and ci['type'] < len(row) else ''
+            desc = parts[desc_idx] if 0 <= desc_idx < len(parts) else ''
+            cp = parts[cp_idx] if 0 <= cp_idx < len(parts) else ''
+            ttype = parts[type_idx] if 0 <= type_idx < len(parts) else ''
             if cp in ['N/A', 'n/a']:
                 cp = ''
             result.append({
@@ -2155,13 +2321,19 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Revolut ====================
 
 def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Revolut CSV.
+    [FIX-11] Терпимый поиск заголовка: 'Date started (UTC)' или 'Date started',
+    а также 'Type'/'State'/'Description'/'Payer'/'Amount'.
+    Пропускаем операции с State != COMPLETED.
+    """
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     if len(lines) < 2:
         return []
     header = -1
-    for i, l in enumerate(lines):
+    for i, l in enumerate(lines[:10]):
         low = l.lower()
         if 'date started' in low and 'description' in low:
             header = i
@@ -2174,7 +2346,7 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
 
     ci = {}
     for i, h in enumerate(hdr_parts):
-        hl = h.lower()
+        hl = h.lower().strip()
         if 'date started' in hl and 'date' not in ci:
             ci['date'] = i
         elif hl == 'amount' and 'amount' not in ci:
@@ -2189,6 +2361,8 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
             ci['state'] = i
         elif hl == 'type' and 'type' not in ci:
             ci['type'] = i
+        elif hl == 'beneficiary name' and 'beneficiary' not in ci:
+            ci['beneficiary'] = i
     if 'date' not in ci:
         ci['date'] = 0
     if 'amount' not in ci:
@@ -2220,9 +2394,11 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = abs(amount)
             elif ttype == 'FEE':
                 amount = -abs(amount)
-            cp = parts[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(parts) else ''
-            if not cp or cp == 'nan':
-                cp = ''
+            cp = ''
+            if 'counterparty' in ci and ci['counterparty'] < len(parts):
+                cp = parts[ci['counterparty']].strip()
+            if (not cp or cp == 'nan') and 'beneficiary' in ci and ci['beneficiary'] < len(parts):
+                cp = parts[ci['beneficiary']].strip()
             desc = parts[ci['description']] if ci['description'] < len(parts) else ''
             if not cp:
                 m = re.search(r'(?:To|from)\s+([^,]+)', desc)
@@ -2854,6 +3030,13 @@ def get_parser_by_ext(account_name: str, ext: str):
 
     # ========== XLSX / XLS ==========
     if ext in ('.xlsx', '.xls'):
+        # [FIX-11] Revolut ДО Industra (иначе AN14_*_Revolut уходит в industra_an14)
+        if 'revolut' in low:
+            if 'nb rev' in low or 'nb_rev' in low:
+                return parse_revolut_nb, 'revolut_nb'
+            if 'plavas' in low:
+                return parse_revolut_plavas, 'revolut_plavas'
+            return parse_revolut_an14, 'revolut_an14'
         if 'regina alfa' in low:
             return parse_regina_alfa_xlsx, 'regina_alfa_xlsx'
         if 'tinkoff' in low:
@@ -2888,6 +3071,7 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_dzibik_main_csob, 'dzibik_main_csob'
         if 'stalkin' in low or 'fio' in low:
             return parse_stalkin_ml2_fio, 'stalkin_ml2_fio'
+        # [FIX-9] Industra — расширенные маркеры заголовка
         if 'industra' in low or 'plavas' in low or 'p1 statement' in low or 'kl59' in low or 'an14' in low:
             if 'plavas' in low:
                 return parse_industra_plavas1, 'industra_plavas1'
@@ -2898,6 +3082,7 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_kapital_saida_azn_csv, 'kapital_saida_azn_csv'
         if 'mashreq' in low or ('nomiqa' in low and 'aed' in low):
             return parse_mashreq, 'mashreq'
+        # [FIX-1] MKB: сначала конкретные ветки (huf / eur), потом общий
         if 'budapest huf' in low or ('mkb' in low and 'huf' in low):
             return parse_budapest_huf_mkb, 'budapest_huf_mkb'
         if 'budapest eur' in low or ('mkb' in low and 'eur' in low):
@@ -2924,12 +3109,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_pasha_bank_xlsx, 'pasha_bank_xlsx'
         if 'pasha' in low:
             return parse_pasha_bank_xlsx, 'pasha_bank_xlsx'
-        if 'revolut' in low:
-            if 'nb rev' in low or 'nb_rev' in low:
-                return parse_revolut_nb, 'revolut_nb'
-            if 'plavas' in low:
-                return parse_revolut_plavas, 'revolut_plavas'
-            return parse_revolut_an14, 'revolut_an14'
         if 'unicredit' in low or 'garpiz' in low or 'twohills' in low or 'two hills' in low or 'b1 estate' in low or 'b1_estate' in low:
             if 'b1 estate' in low or 'b1_estate' in low:
                 return parse_unicredit_b1, 'unicredit_b1'
@@ -2950,6 +3129,13 @@ def get_parser_by_ext(account_name: str, ext: str):
 
     # ========== CSV ==========
     if ext == '.csv':
+        # [FIX-11] Revolut ДО Industra
+        if 'revolut' in low:
+            if 'nb rev' in low or 'nb_rev' in low:
+                return parse_revolut_nb, 'revolut_nb'
+            if 'plavas' in low:
+                return parse_revolut_plavas, 'revolut_plavas'
+            return parse_revolut_an14, 'revolut_an14'
         if 'regina alfa' in low:
             return parse_regina_alfa_xlsx, 'regina_alfa_xlsx'
         if 'tinkoff' in low:
@@ -3020,12 +3206,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_pasha_bank_xlsx, 'pasha_bank_csv'
         if 'pasha' in low:
             return parse_pasha_bank_xlsx, 'pasha_bank_csv'
-        if 'revolut' in low:
-            if 'nb rev' in low or 'nb_rev' in low:
-                return parse_revolut_nb, 'revolut_nb'
-            if 'plavas' in low:
-                return parse_revolut_plavas, 'revolut_plavas'
-            return parse_revolut_an14, 'revolut_an14'
         if 'unicredit' in low or 'garpiz' in low or 'twohills' in low or 'two hills' in low or 'b1 estate' in low or 'b1_estate' in low:
             if 'b1 estate' in low or 'b1_estate' in low:
                 return parse_unicredit_b1, 'unicredit_b1'
