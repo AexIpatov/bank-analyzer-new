@@ -6,6 +6,10 @@
 # [FIX-DUP-1] Убрана дублирующая таблица "Сводка по счетам":
 # оставлена только HTML-версия (.summary-table) в тёмно-зелёной палитре.
 # st.dataframe(summary_df, ...) удалён.
+#
+# [FIX-SALDO-1] В "Сводке по счетам" добавлен столбец "Сальдо операций":
+# Сальдо = Сумма приходных операций − Сумма расходных операций.
+# Выводится со знаком (может быть отрицательным), как в образце.
 
 import streamlit as st
 import pandas as pd
@@ -4273,7 +4277,7 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
     return [], msg
 
 
-# ==================== [FIX-SUM-1..7] СВОДКА ПО СЧЕТАМ ====================
+# ==================== [FIX-SUM-1..7 + FIX-SALDO-1] СВОДКА ПО СЧЕТАМ ====================
 
 def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     """
@@ -4284,6 +4288,10 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     - суммы расхода выводятся по модулю;
     - нулевые операции не попадают ни в приход, ни в расход;
     - сортировка по наименованию счёта.
+
+    [FIX-SALDO-1] Добавлен столбец «Сальдо операций»:
+    Сальдо = Сумма приходных операций − Сумма расходных операций.
+    Выводится со знаком (может быть отрицательным), как в образце.
     """
     columns = [
         "Наименование счета",
@@ -4291,6 +4299,8 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
         "Сумма приходных операций",
         "Количество расходных операций",
         "Сумма расходных операций",
+        # [FIX-SALDO-1] Шестой столбец сводки.
+        "Сальдо операций",
     ]
     if not rows:
         return pd.DataFrame(columns=columns)
@@ -4335,10 +4345,18 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
         ),
     }).reset_index()
 
+    # [FIX-SALDO-1] Сальдо = приход − расход (расход берётся по модулю).
+    # Например: 2545,65 − 3410,83 = −865,18; 1865,74 − 2456,25 = −590,51.
+    summary["Сальдо операций"] = (
+        summary["Сумма приходных операций"].astype(float)
+        - summary["Сумма расходных операций"].astype(float)
+    )
+
     summary = summary.sort_values("Наименование счета").reset_index(drop=True)
 
     summary["Сумма приходных операций"] = summary["Сумма приходных операций"].astype(float)
     summary["Сумма расходных операций"] = summary["Сумма расходных операций"].astype(float)
+    summary["Сальдо операций"] = summary["Сальдо операций"].astype(float)
 
     return summary[columns]
 
@@ -4507,6 +4525,7 @@ def _render_results(result: Dict):
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 
     # [FIX-DUP-1] Единственная таблица сводки — HTML в тёмно-зелёной палитре.
+    # [FIX-SALDO-1] В таблице теперь 6 столбцов, включая «Сальдо операций».
     st.markdown("---")
     st.markdown("### 📁 Сводка по счетам")
     summary_df = build_account_summary(all_tx)
@@ -4517,7 +4536,7 @@ def _render_results(result: Dict):
             f'<div class="summary-table">{summary_df.to_html(index=False, escape=False)}</div>',
             unsafe_allow_html=True,
         )
-        # st.dataframe(summary_df, ...) — УДАЛЕНО, чтобы не было двух таблиц.
+        # st.dataframe(summary_df, ...) — НЕ дублируем, чтобы не было двух таблиц.
 
     st.markdown("---")
     st.markdown("### 💾 Сохранить результат")
