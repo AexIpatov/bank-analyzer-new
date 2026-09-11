@@ -3469,6 +3469,45 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     return summary[columns]
 
 
+# ==================== [FIX-SPLIT-1..3] ЭКСПОРТ В EXCEL ====================
+
+def build_operations_excel(df_display: pd.DataFrame) -> BytesIO:
+    """
+    [FIX-SPLIT-1] Отдельный Excel только с операциями (лист 'Транзакции').
+    На вход — df_display без служебной колонки 'Сумма_число'.
+    """
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_display.to_excel(writer, sheet_name='Транзакции', index=False)
+    output.seek(0)
+    return output
+
+
+def build_summary_excel(summary_df: pd.DataFrame) -> BytesIO:
+    """
+    [FIX-SPLIT-2] Отдельный Excel только со сводкой (лист 'Сводка по счетам').
+    На вход — результат build_account_summary().
+    """
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        summary_df.to_excel(writer, sheet_name='Сводка по счетам', index=False)
+    output.seek(0)
+    return output
+
+
+def build_combined_excel(df_display: pd.DataFrame, summary_df: pd.DataFrame) -> BytesIO:
+    """
+    [FIX-SPLIT-3] Объединённый Excel: оба листа в одном файле.
+    Оставлен как дополнительная опция — не удаляем старую функциональность.
+    """
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_display.to_excel(writer, sheet_name='Транзакции', index=False)
+        summary_df.to_excel(writer, sheet_name='Сводка по счетам', index=False)
+    output.seek(0)
+    return output
+
+
 # ==================== ИНТЕРФЕЙС ====================
 
 def main():
@@ -3589,6 +3628,7 @@ def main():
                 df = pd.DataFrame(all_tx)
                 df['Сумма_число'] = df['Сумма']
                 df['Сумма'] = df['Сумма'].apply(format_amount)
+                df_display = df.drop(columns=['Сумма_число'])
 
                 st.markdown("---")
                 st.markdown("### 📊 Итоги")
@@ -3604,7 +3644,7 @@ def main():
 
                 st.markdown("---")
                 st.markdown("### 🧾 Детализация транзакций")
-                st.dataframe(df.drop(columns=['Сумма_число']), use_container_width=True, hide_index=True)
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
 
                 # [FIX-SUM-8] Вторая таблица — «Сводка по счетам» в UI.
                 st.markdown("---")
@@ -3621,23 +3661,64 @@ def main():
                     # Дублируем как st.dataframe — для сортировки/скачивания.
                     st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
-                # ===== Экспорт в Excel =====
-                output = BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df.drop(columns=['Сумма_число']).to_excel(writer, sheet_name='Транзакции', index=False)
-
-                    # [FIX-SUM-9] Заменяем старую группировку на корректную сводку
-                    # в требуемом формате (приход/расход: количество + сумма).
-                    summary_df.to_excel(writer, sheet_name='Сводка по счетам', index=False)
-                output.seek(0)
-
+                # ===== [FIX-SPLIT-4] РАЗДЕЛЬНОЕ СКАЧИВАНИЕ =====
+                st.markdown("---")
                 st.markdown("### 💾 Сохранить результат")
-                st.download_button(
-                    label="📥 Скачать Excel",
-                    data=output,
-                    file_name="анализ_банковских_выписок.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                st.markdown(
+                    "Скачайте **отдельно операции по выпискам** и **отдельно сводную таблицу**, "
+                    "или всё вместе одним файлом."
                 )
+
+                # Готовим три варианта Excel заранее.
+                ops_excel = build_operations_excel(df_display)
+                summary_excel = build_summary_excel(summary_df) if not summary_df.empty else None
+                combined_excel = build_combined_excel(df_display, summary_df) if not summary_df.empty else None
+
+                dl1, dl2, dl3 = st.columns(3)
+
+                with dl1:
+                    st.download_button(
+                        label="📥 Скачать операции по выпискам",
+                        data=ops_excel,
+                        file_name="операции_по_выпискам.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="download_operations_only",
+                    )
+
+                with dl2:
+                    if summary_excel is not None:
+                        st.download_button(
+                            label="📊 Скачать сводную таблицу",
+                            data=summary_excel,
+                            file_name="сводка_по_счетам.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="download_summary_only",
+                        )
+                    else:
+                        st.button(
+                            "📊 Сводная таблица пуста",
+                            disabled=True,
+                            key="summary_empty_btn",
+                        )
+
+                with dl3:
+                    if combined_excel is not None:
+                        st.download_button(
+                            label="📦 Скачать всё одним файлом",
+                            data=combined_excel,
+                            file_name="анализ_банковских_выписок.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="download_combined",
+                        )
+                    else:
+                        # Если сводки нет — отдаём хотя бы операции как «всё».
+                        st.download_button(
+                            label="📦 Скачать всё одним файлом",
+                            data=ops_excel,
+                            file_name="анализ_банковских_выписок.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="download_combined_ops_only",
+                        )
 
             if failed:
                 st.warning(f"⚠️ Не удалось обработать: {len(failed)} файлов")
