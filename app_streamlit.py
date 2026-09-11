@@ -1,21 +1,20 @@
-# [FIX-STATE-0] Полный app.py с универсальной обработкой выписок и защитой
-# от задвоения сводки через st.session_state. Все существующие парсеры,
-# CSS, UI, дампы, экспорт, метрики, build_account_summary и билдеры Excel
-# сохранены без изменений.
-#
-# [FIX-DUP-1] Убрана дублирующая таблица "Сводка по счетам":
-# оставлена только HTML-версия (.summary-table) в тёмно-зелёной палитре.
-# st.dataframe(summary_df, ...) удалён.
+# [FIX-INCOME-6..9] Полный app.py с исправленным расчётом прихода.
+# - [FIX-INCOME-6] _parse_bluor_csv: жёсткая отбраковка служебных строк
+#   по parts[3] (Начальный остаток / Дебет (D) / Кредит (C) / Конечный остаток).
+# - [FIX-INCOME-7] parse_any_format: убрана эвристика «первое ненулевое число»
+#   для строк без явной даты+суммы; защита от абсурдных сумм > 1e12.
+# - [FIX-INCOME-8] parse_xlsx_universal: сумма берётся только если ячейка —
+#   чистое число (regex ^-?\d[\d\s]*([.,]\d+)?$).
+# - [FIX-INCOME-9] build_account_summary: отбрасывает строки с |Сумма| > 1e12.
 
 import streamlit as st
 import pandas as pd
 import os
 import re
 import hashlib
-import chardet
 from datetime import datetime
 from io import BytesIO
-from typing import Dict, List, Tuple, Optional, Callable
+from typing import Dict, List, Tuple, Callable
 from docx import Document
 import pdfplumber
 
@@ -29,7 +28,6 @@ st.set_page_config(
 )
 
 # ==================== CSS СТИЛИ ====================
-# Палитра: тёмно-зелёный (цвет травы).
 
 st.markdown("""
 <style>
@@ -218,7 +216,6 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 2rem 0; }
 
 .footer-note { text-align: center; color: var(--ink-muted); font-size: 0.85rem; padding: 1.5rem 0 0.5rem 0; }
 
-/* [FIX-SUM-8] Стилизация второй таблицы — «Сводка по счетам» в тёмно-зелёной палитре. */
 .summary-table {
     border-radius: 16px;
     overflow: hidden;
@@ -312,7 +309,7 @@ def clean_account_name(filename: str) -> str:
     return name.strip() if name else 'Неизвестный счет'
 
 
-def parse_date(date_str: str) -> str:
+def parse_date(date_str) -> str:
     if date_str is None or pd.isna(date_str):
         return ''
     s = str(date_str).strip()
@@ -502,10 +499,6 @@ def pdf_all_tables(file_content: bytes) -> List[List[List[str]]]:
 
 
 def read_text_with_encoding(file_content: bytes) -> str:
-    """
-    Пробуем разные кодировки. Приоритет: UTF-8 (с BOM и без), ISO-8859-2 (latin-2, для венгерского),
-    CP1250 (чешский/словацкий/венгерский), CP1251 (кириллица), latin-1 (fallback).
-    """
     encodings = ['utf-8-sig', 'utf-8', 'iso-8859-2', 'cp1250', 'cp1251', 'latin-1']
     for enc in encodings:
         try:
@@ -529,26 +522,18 @@ def read_text_with_encoding(file_content: bytes) -> str:
 
 
 def _is_real_xls(file_content: bytes) -> bool:
-    """Магические байты старого XLS (BIFF) — D0 CF 11 E0."""
     return file_content[:4] == b'\xd0\xcf\x11\xe0'
 
 
 def _is_real_xlsx(file_content: bytes) -> bool:
-    """Магические байты XLSX (ZIP) — PK."""
     return file_content[:2] == b'PK'
 
 
-# [FIX-ANY-1] Новые детекторы реального типа по магическим байтам.
 def _is_real_pdf(file_content: bytes) -> bool:
-    """PDF — начинается с %PDF."""
     return file_content[:4] == b'%PDF'
 
 
 def _is_real_docx(file_content: bytes) -> bool:
-    """
-    DOCX — это ZIP (PK), но внутри обязательно есть 'word/' или
-    'wordprocessingml'. Проверяем первые 4 КБ.
-    """
     if file_content[:2] != b'PK':
         return False
     head = file_content[:4096]
@@ -562,10 +547,6 @@ def _is_real_docx(file_content: bytes) -> bool:
 
 
 def _looks_like_csv(file_content: bytes) -> bool:
-    """
-    [FIX-ANY-1] Эвристика CSV: в первых 2 КБ есть разделитель ; , или \t
-    и хотя бы 2 строки.
-    """
     try:
         head = file_content[:2048].decode('utf-8', errors='ignore')
     except Exception:
@@ -586,11 +567,6 @@ def _looks_like_csv(file_content: bytes) -> bool:
 
 
 def _detect_real_type(file_content: bytes, fallback_ext: str = '') -> str:
-    """
-    [FIX-ANY-2] Определяет реальный тип файла по магическим байтам.
-    Возвращает одно из: 'pdf', 'xls', 'xlsx', 'docx', 'csv', 'unknown'.
-    fallback_ext используется, если магические байты не опознаны.
-    """
     if not file_content:
         return 'unknown'
     if _is_real_pdf(file_content):
@@ -612,7 +588,6 @@ def _detect_real_type(file_content: bytes, fallback_ext: str = '') -> str:
 
 
 def _split_line(line: str, sep: str) -> List[str]:
-    """Разбивает строку CSV с учётом кавычек. [FIX-7] Поддерживает "" внутри поля."""
     parts = []
     cur = ''
     inq = False
@@ -634,6 +609,17 @@ def _split_line(line: str, sep: str) -> List[str]:
         i += 1
     parts.append(cur.strip())
     return [p.strip('"') for p in parts]
+
+
+# [FIX-INCOME-7] Защита от абсурдных сумм: реальные суммы < 1e12.
+MAX_REASONABLE_AMOUNT = 1e12
+
+
+def _is_reasonable_amount(v: float) -> bool:
+    try:
+        return abs(float(v)) < MAX_REASONABLE_AMOUNT
+    except Exception:
+        return False
 
 
 # ==================== CSOB ====================
@@ -681,7 +667,7 @@ def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
             if not is_amount:
                 continue
             amount = parse_amount(amount_str)
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             counterparty = ''
             if len(parts) > 13:
@@ -783,13 +769,15 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
                         break
         if has_date:
             if current_date and current_amount is not None:
-                transactions.append({
-                    'Дата': parse_date(str(current_date)),
-                    'Сумма': parse_amount(str(current_amount)),
-                    'Контрагент': '',
-                    'Наименование счета': account_name,
-                    'Описание': (current_desc or '')[:500]
-                })
+                amt = parse_amount(str(current_amount))
+                if amt != 0.0 and _is_reasonable_amount(amt):
+                    transactions.append({
+                        'Дата': parse_date(str(current_date)),
+                        'Сумма': amt,
+                        'Контрагент': '',
+                        'Наименование счета': account_name,
+                        'Описание': (current_desc or '')[:500]
+                    })
             current_date = date_val
             current_desc = ''
             current_amount = amount_val
@@ -813,13 +801,15 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
                 if amount_val is not None and current_amount is None:
                     current_amount = amount_val
     if current_date and current_amount is not None:
-        transactions.append({
-            'Дата': parse_date(str(current_date)),
-            'Сумма': parse_amount(str(current_amount)),
-            'Контрагент': '',
-            'Наименование счета': account_name,
-            'Описание': (current_desc or '')[:500]
-        })
+        amt = parse_amount(str(current_amount))
+        if amt != 0.0 and _is_reasonable_amount(amt):
+            transactions.append({
+                'Дата': parse_date(str(current_date)),
+                'Сумма': amt,
+                'Контрагент': '',
+                'Наименование счета': account_name,
+                'Описание': (current_desc or '')[:500]
+            })
     return transactions
 
 
@@ -838,7 +828,7 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
             code = m.group(2).strip()
             desc = re.sub(r'\s+', ' ', m.group(3)).strip()
             amount = parse_amount(m.group(4))
-            if not date or amount == 0.0:
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -865,7 +855,7 @@ def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             code = m.group(2).strip()
             desc = re.sub(r'\s+', ' ', m.group(3)).strip()
             amount = parse_amount(m.group(4))
-            if not date or amount == 0.0:
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -920,7 +910,7 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
             date = parse_date(m.group(1))
             amount = parse_amount(cells[amount_idx] if amount_idx < len(cells) else '')
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = re.sub(r'\s+', ' ', cells[desc_idx] if desc_idx < len(cells) else '').strip()
             if 'Внутренний перевод' in desc:
@@ -963,7 +953,7 @@ def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             date = parse_date(m.group(1))
             amount = parse_amount(m.group(3))
             desc = re.sub(r'\s+', ' ', m.group(5)).strip()
-            if not date or amount == 0.0:
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             if 'Внутренний перевод' in desc:
                 cp = 'Внутренний перевод'
@@ -989,19 +979,38 @@ def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 # ==================== BluOr Bank ====================
 
-def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    BluOr Bank CSV.
+# [FIX-INCOME-6] Жёсткие маркеры служебных строк BluOr.
+_BLUOR_SERVICE_MARKERS = [
+    'начальный остаток', 'конечный остаток',
+    'входящий остаток', 'исходящий остаток',
+    'opening balance', 'closing balance',
+    'starting balance', 'ending balance',
+    'дебет (d)', 'кредит (c)',
+    'debit (d)', 'credit (c)',
+    'saldo počáteční', 'saldo konečné',
+    'sākuma atlikums', 'beigu atlikums',
+    'total',  # BluOr в конце пишет просто "Total"
+]
 
-    [FIX-3] Уточнены правила:
-    - служебные строки определяем строго по точным фразам
-      ('начальный остаток', 'конечный остаток', 'дебет (d)',
-       'кредит (c)', 'opening balance', 'closing balance');
-    - сумму 0.00 больше НЕ отсекаем автоматически — если это
-      реальная транзакция с суммой 0.00, она сохранится (в файле
-      BSR_Estate_EUR_BluOr_3 все строки служебные, поэтому 0
-      операций — корректный результат).
+
+def _is_bluor_service_row(parts: List[str]) -> bool:
     """
+    [FIX-INCOME-6] Возвращает True, если строка — служебная (остатки/итоги).
+    Проверяем ЛЮБОЕ поле parts[2..4] и поле parts[3] — именно там BluOr
+    кладёт 'Начальный остаток' / 'Дебет (D)' / 'Кредит (C)' / 'Конечный остаток'.
+    """
+    for idx in (2, 3, 4):
+        if idx < len(parts):
+            v = parts[idx].strip().lower()
+            if not v:
+                continue
+            for marker in _BLUOR_SERVICE_MARKERS:
+                if marker in v:
+                    return True
+    return False
+
+
+def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -1010,23 +1019,13 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
     first_line = lines[0]
     sep = ';' if first_line.count(';') > first_line.count(',') else ','
 
-    service_markers = [
-        'начальный остаток', 'конечный остаток',
-        'входящий остаток', 'исходящий остаток',
-        'opening balance', 'closing balance',
-        'дебет (d)', 'кредит (c)',
-        'debit (d)', 'credit (c)',
-        'saldo počáteční', 'saldo konečné',
-        'sākuma atlikums', 'beigu atlikums',
-    ]
-
     for line in lines:
         parts = _split_line(line, sep)
         if len(parts) < 4:
             continue
         try:
-            joined_low = ' '.join(p.lower() for p in parts)
-            if any(m in joined_low for m in service_markers):
+            # [FIX-INCOME-6] Жёсткая отбраковка служебных строк ДО parse_amount.
+            if _is_bluor_service_row(parts):
                 continue
 
             date = None
@@ -1058,6 +1057,8 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
                         ttype = v
                         break
             if amount == 0.0 and not ttype:
+                continue
+            if not _is_reasonable_amount(amount):
                 continue
 
             desc = ''
@@ -1115,7 +1116,7 @@ def parse_bluor_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             desc = re.sub(r'\s+', ' ', m.group(3)).strip()
             amount = parse_amount(m.group(4))
             ttype = m.group(6)
-            if not date or amount == 0.0:
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             low = desc.lower()
             if any(w in low for w in ['starting balance', 'ending balance', 'total']):
@@ -1159,7 +1160,7 @@ def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict
             if not date:
                 continue
             amount = parse_amount(parts[1])
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -1200,7 +1201,7 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
             desc_raw = m.group(2).strip()
             desc = re.sub(r'\s+', ' ', desc_raw)
             amount = parse_amount(m.group(3).strip())
-            if not date or amount == 0.0:
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             low = desc.lower()
             if any(w in low for w in ['počáteční zůstatek', 'konečný zůstatek',
@@ -1232,7 +1233,7 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                     if re.match(r'^-?\d[\d\s]*[,.]\d{2}$', c.strip()):
                         amount_found = parse_amount(c)
                         break
-                if date_found and amount_found is not None and amount_found != 0.0:
+                if date_found and amount_found is not None and amount_found != 0.0 and _is_reasonable_amount(amount_found):
                     desc = ' | '.join([c for c in cells if c and c != date_found][:3])
                     result.append({
                         'Дата': date_found, 'Сумма': amount_found,
@@ -1257,7 +1258,7 @@ def parse_jenhor_unelma_pdf(file_content: bytes, account_name: str) -> List[Dict
             date = parse_date(m.group(1).strip())
             desc = re.sub(r'\s+', ' ', m.group(2)).strip()
             amount = parse_amount(m.group(3).strip())
-            if not date or amount == 0.0:
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             low = desc.lower()
             if any(w in low for w in ['počáteční zůstatek', 'konečný zůstatek',
@@ -1300,7 +1301,7 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
             if not date:
                 continue
             amount = parse_amount(parts[1])
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = parts[5] if len(parts) > 5 and parts[5] else (parts[6] if len(parts) > 6 else '')
             cp = parts[3] if len(parts) > 3 else ''
@@ -1317,16 +1318,6 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Industra ====================
 
 def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Industra Bank .xls/.xlsx/.csv.
-
-    Терпимый поиск заголовка:
-    - расширенные маркеры (Дата транзакции / Date / Transaction Date,
-      Дебет / Debit, Кредит / Credit);
-    - окно поиска 60 строк;
-    - fallback на CSV-путь (текстовое чтение), если табличное чтение
-      не дало результатов.
-    """
     result = []
     df = read_xlsx(file_content)
     if df is not None and not df.empty:
@@ -1399,7 +1390,7 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
                         if p != 0.0:
                             amount = p
                             found = True
-                if not found:
+                if not found or not _is_reasonable_amount(amount):
                     continue
                 cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
                 desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
@@ -1470,7 +1461,7 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
                 if p != 0.0:
                     amount = p
                     found = True
-            if not found:
+            if not found or not _is_reasonable_amount(amount):
                 continue
             cp = parts[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(parts) else ''
             desc = parts[ci['description']] if 'description' in ci and ci['description'] < len(parts) else ''
@@ -1539,7 +1530,7 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     if p != 0.0:
                         amount = p
                         found = True
-                if not found:
+                if not found or not _is_reasonable_amount(amount):
                     continue
                 cp = row[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
                 desc = row[ci['description']] if 'description' in ci and ci['description'] < len(row) else ''
@@ -1568,7 +1559,7 @@ def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[
             if not date:
                 continue
             amount = parse_amount(parts[2].replace(',', '.'))
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -1616,7 +1607,7 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
                 date = parse_date(m.group(1).strip())
                 amount = parse_amount(m.group(2).strip())
                 desc = m.group(5).strip()
-                if not date or amount == 0.0:
+                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 low = desc.lower()
                 if any(w in low for w in ['balance', 'saldo', 'start', 'end', 'period',
@@ -1647,7 +1638,7 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
                     if c and len(c) > 3 and re.search(r'[A-Za-zА-Яа-я]{3,}', c):
                         if desc_cell is None:
                             desc_cell = c
-                if date_cell and amount_cell is not None and amount_cell != 0.0:
+                if date_cell and amount_cell is not None and amount_cell != 0.0 and _is_reasonable_amount(amount_cell):
                     low = (desc_cell or '').lower()
                     if any(w in low for w in ['balance', 'saldo', 'start', 'end', 'period']):
                         continue
@@ -1675,7 +1666,7 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
                     continue
                 amount = parse_amount(row[1])
                 desc = row[4] if len(row) > 4 else ''
-                if not date or amount == 0.0:
+                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 low = (desc or '').lower()
                 if any(w in low for w in ['balance', 'saldo', 'start', 'end', 'period']):
@@ -1703,7 +1694,7 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
                 date = parse_date(m.group(1).strip())
                 amount = parse_amount(m.group(2).strip())
                 desc = m.group(5).strip()
-                if not date or amount == 0.0:
+                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 result.append({
                     'Дата': date, 'Сумма': -abs(amount),
@@ -1786,7 +1777,7 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
                     if p != 0.0:
                         amount = -abs(p)
                         found = True
-            if not found:
+            if not found or not _is_reasonable_amount(amount):
                 continue
             desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
             cp = ''
@@ -1827,6 +1818,8 @@ def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     amount = -abs(debit)
                 else:
                     continue
+                if not _is_reasonable_amount(amount):
+                    continue
                 cp = ''
                 for p in desc.split('/'):
                     p_clean = p.strip()
@@ -1844,13 +1837,9 @@ def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== MKB (Budapest) — ЕДИНЫЙ ПАРСЕР ====================
+# ==================== MKB (Budapest) ====================
 
 def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Универсальный парсер MKB: работает и с CSV, и с XLS (BIFF), и с XLSX.
-    Заголовок содержит 'Sorszám' и 'Értéknap' (с диакритикой или без).
-    """
     result = []
     df = None
     if _is_real_xls(file_content):
@@ -1957,7 +1946,7 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                         db = parse_amount(row.iloc[ci['debit']]) if ('debit' in ci and ci['debit'] < len(row)) else 0.0
                         if cr or db:
                             amount = abs(cr) - abs(db)
-                    if amount == 0.0:
+                    if amount == 0.0 or not _is_reasonable_amount(amount):
                         continue
                     desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
                     cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
@@ -2031,7 +2020,7 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                 db = parse_amount(parts[debit_idx]) if (debit_idx >= 0 and debit_idx < len(parts)) else 0.0
                 if cr or db:
                     amount = abs(cr) - abs(db)
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = parts[desc_idx] if 0 <= desc_idx < len(parts) else ''
             cp = parts[cp_idx] if 0 <= cp_idx < len(parts) else ''
@@ -2086,7 +2075,7 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 if not date:
                     continue
                 amount = parse_amount(row[ci.get('amount', 9)] if ci.get('amount', 9) < len(row) else '')
-                if amount == 0.0:
+                if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 desc = row[ci.get('description', 11)] if ci.get('description', 11) < len(row) else ''
                 cp = row[ci.get('counterparty', 0)] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
@@ -2122,7 +2111,7 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
             desc = re.sub(r'\s+', ' ', m.group(1)).strip()
             date = parse_date(m.group(2))
             amount = parse_amount(m.group(4))
-            if not date or amount == 0.0:
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             low = desc.lower()
             if any(w in low for w in ['saldo previo', 'nuevo saldo', 'transacciones']):
@@ -2157,7 +2146,7 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             desc = re.sub(r'\s+', ' ', m.group(1)).strip()
             date = parse_date(m.group(2))
             amount = parse_amount(m.group(4))
-            if not date or amount == 0.0:
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             low = desc.lower()
             if any(w in low for w in ['saldo previo', 'nuevo saldo', 'transacciones',
@@ -2179,7 +2168,7 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             try:
                 date = parse_date(m.group(1))
                 amount = parse_amount(m.group(3))
-                if not date or amount == 0.0:
+                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 result.append({
                     'Дата': date, 'Сумма': amount,
@@ -2259,7 +2248,7 @@ def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
             astr = str(av).strip().replace(',', '.').replace(' ', '')
             astr = re.sub(r'[A-Za-z]+$', '', astr).strip()
             amount = parse_amount(astr)
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             ttype = safe_str(row.iloc[ci['type']]) if 'type' in ci and ci['type'] < len(row) else ''
             if ttype in ('Д', 'D'):
@@ -2335,7 +2324,7 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
             amount = parse_amount(m.group(8))
             counterparty = re.sub(r'\s+', ' ', m.group(6)).strip()
             op_type = m.group(1).strip()
-            if not date or amount == 0.0:
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -2367,7 +2356,7 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = parse_amount(m.group(7))
                 counterparty = re.sub(r'\s+', ' ', m.group(5)).strip()
                 op_type = m.group(1).strip()
-                if not date or amount == 0.0:
+                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 result.append({
                     'Дата': date, 'Сумма': amount,
@@ -2383,11 +2372,6 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Paysera PDF ====================
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Paysera PDF. pdfplumber отдаёт плоский текст.
-    Группируем близкие даты (< 400 символов между ними) — на одну операцию
-    pdfplumber вставляет дату дважды, что приводило к задвоению.
-    """
     result = []
     full_text = pdf_all_text(file_content)
     if not full_text:
@@ -2442,7 +2426,7 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 chosen_amount = e['amount']
                 chosen_pos = e['start']
                 break
-        if chosen_amount is None or chosen_amount == 0.0:
+        if chosen_amount is None or chosen_amount == 0.0 or not _is_reasonable_amount(chosen_amount):
             continue
         desc = ''
         window_text = full_text[window_start:window_end]
@@ -2495,7 +2479,7 @@ def parse_rak_bank(file_content: bytes, account_name: str) -> List[Dict]:
             if not date:
                 continue
             amount = parse_amount(parts[2].replace(',', '.'))
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -2519,7 +2503,7 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 if not date:
                     continue
                 amount = parse_amount(row[2])
-                if amount == 0.0:
+                if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 result.append({
                     'Дата': date, 'Сумма': amount,
@@ -2534,12 +2518,6 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Revolut ====================
 
 def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Revolut CSV.
-    Терпимый поиск заголовка: 'Date started (UTC)' или 'Date started',
-    а также 'Type'/'State'/'Description'/'Payer'/'Beneficiary name'/'Amount'.
-    Пропускаем операции с State != COMPLETED.
-    """
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -2598,7 +2576,7 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
             if not date:
                 continue
             amount = parse_amount(parts[ci['amount']] if ci['amount'] < len(parts) else '')
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             ttype = parts[ci['type']].strip().upper() if 'type' in ci and ci['type'] < len(parts) else ''
             if ttype == 'TOPUP':
@@ -2657,7 +2635,7 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     if p != 0.0:
                         amount = p
                         break
-                if amount == 0.0:
+                if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 desc = row[5] if len(row) > 5 else ''
                 cp = ''
@@ -2717,7 +2695,7 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
             continue
         try:
             amount = parse_amount(parts[ci['amount']] if ci['amount'] < len(parts) else '')
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             date = parse_date(parts[ci['date']] if ci['date'] < len(parts) else '')
             if not date:
@@ -2789,7 +2767,7 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         for row in table[header_idx + 1:]:
             try:
                 amount = parse_amount(row[ci.get('amount', 1)] if ci.get('amount', 1) < len(row) else '')
-                if amount == 0.0:
+                if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 date = parse_date(row[ci.get('date', 3)] if ci.get('date', 3) < len(row) else '')
                 if not date:
@@ -2814,7 +2792,7 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = parse_amount(m.group(1))
                 date = parse_date(m.group(3))
                 desc = re.sub(r'\s+', ' ', m.group(4)).strip()
-                if not date or amount == 0.0:
+                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 result.append({
                     'Дата': date, 'Сумма': amount,
@@ -2867,7 +2845,7 @@ def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict]:
             if not date:
                 continue
             amount = parse_amount(parts[ci['amount']] if ci['amount'] < len(parts) else '')
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = parts[ci['description']] if ci['description'] < len(parts) else ''
             cp = desc
@@ -2902,7 +2880,7 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 if not date:
                     continue
                 amount = parse_amount(row[1] if len(row) > 1 else '')
-                if amount == 0.0:
+                if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 desc = row[5] if len(row) > 5 else ''
                 result.append({
@@ -2939,7 +2917,7 @@ def parse_saida_n26_csv(file_content: bytes, account_name: str) -> List[Dict]:
             if not date:
                 continue
             amount = parse_amount(parts[1].replace(',', '.'))
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -2958,12 +2936,6 @@ def parse_saida_wise(file_content, account_name):
 # ==================== Saida Wise XLSX ====================
 
 def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Wise Excel.
-    Заголовок: удостоверение личности | Дата | Дата и время | Сумма | Валюта |
-    Описание | Пояснение к переводу | Текущий баланс | ... |
-    Имя получателя | ... | Поставщик услуг | ... | Тип транзакции
-    """
     result = []
     df = read_xlsx(file_content, sheet_name='All transactions')
     if df is None or df.empty:
@@ -3023,7 +2995,7 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
             if pd.isna(av) or str(av).strip() in ['', 'nan']:
                 continue
             amount = parse_amount(str(av).strip().replace(',', '.'))
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
             note = safe_str(row.iloc[ci['note']]) if 'note' in ci and ci['note'] < len(row) else ''
@@ -3046,13 +3018,6 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Pasha Bank (BUNDA LLC) ====================
 
 def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Pasha Bank XLSX (BUNDA LLC, AZN или AED).
-    Заголовок таблицы (row ~11):
-    Əməliyyat tarixi | İcra tarixi | Ödəyən/Benefisiar | Təyinat |
-    İstinad No | Код | Mədaxil | Məxaric | [AZN ekvivalent] | Balans
-    Итоговые строки (DÖVRÜN SONUNA BALANS, MÖVCUD BALANS) — пропускаем.
-    """
     result = []
     df = read_xlsx(file_content, sheet_name='Statement')
     if df is None or df.empty:
@@ -3132,6 +3097,8 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = abs(credit)
             else:
                 amount = -abs(debit)
+            if not _is_reasonable_amount(amount):
+                continue
             cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
             cp = cp.replace('_x000D_', ' ').replace('\r', ' ').replace('\n', ' ')
             cp = re.sub(r'\s+', ' ', cp).strip()
@@ -3187,7 +3154,7 @@ def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 if not date:
                     continue
                 amount = parse_amount(row[amount_i] if amount_i < len(row) else '')
-                if amount == 0.0:
+                if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 desc = row[desc_i] if desc_i >= 0 and desc_i < len(row) else ''
                 cp = row[cp_i] if cp_i >= 0 and cp_i < len(row) else ''
@@ -3201,13 +3168,9 @@ def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== [FIX-ANY-3] НОВЫЕ PDF-ПАРСЕРЫ ====================
+# ==================== PDF-ПАРСЕРЫ ====================
 
 def parse_csob_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-ANY-3] CSOB PDF: dzibik, jenisov, rr strojka, rr rev ostr, koruna strojka.
-    Табличный путь + regex-fallback по pdf_all_text.
-    """
     result = []
     tables = pdf_all_tables(file_content)
     for table in tables:
@@ -3243,7 +3206,7 @@ def parse_csob_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 astr = row[ci.get('amount', 6)] if ci.get('amount', 6) < len(row) else ''
                 amount = parse_amount(astr)
-                if amount == 0.0:
+                if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 cp = row[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
                 desc = row[ci['description']] if 'description' in ci and ci['description'] < len(row) else ''
@@ -3270,7 +3233,7 @@ def parse_csob_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             date = parse_date(m.group(1))
             desc = re.sub(r'\s+', ' ', m.group(2)).strip()
             amount = parse_amount(m.group(3))
-            if not date or amount == 0.0:
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             low = desc.lower()
             if any(w in low for w in ['počáteční zůstatek', 'konečný zůstatek',
@@ -3288,10 +3251,6 @@ def parse_csob_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_stalkin_fio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-ANY-3] Stalkin / FIO PDF.
-    Табличный путь + regex-fallback.
-    """
     result = []
     tables = pdf_all_tables(file_content)
     for table in tables:
@@ -3325,7 +3284,7 @@ def parse_stalkin_fio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 if not date:
                     continue
                 amount = parse_amount(row[ci.get('amount', 1)] if ci.get('amount', 1) < len(row) else '')
-                if amount == 0.0:
+                if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 cp = row[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
                 desc = row[ci['description']] if 'description' in ci and ci['description'] < len(row) else ''
@@ -3352,7 +3311,7 @@ def parse_stalkin_fio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             date = parse_date(m.group(1))
             amount = parse_amount(m.group(2))
             desc = re.sub(r'\s+', ' ', m.group(3)).strip()
-            if not date or amount == 0.0:
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -3365,10 +3324,6 @@ def parse_stalkin_fio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_saida_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-ANY-3] Wise PDF.
-    Табличный путь + regex-fallback.
-    """
     result = []
     tables = pdf_all_tables(file_content)
     for table in tables:
@@ -3402,7 +3357,7 @@ def parse_saida_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 if not date:
                     continue
                 amount = parse_amount(row[ci.get('amount', 1)] if ci.get('amount', 1) < len(row) else '')
-                if amount == 0.0:
+                if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 desc = row[ci['description']] if 'description' in ci and ci['description'] < len(row) else ''
                 cp = row[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
@@ -3429,7 +3384,7 @@ def parse_saida_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             date = parse_date(m.group(1))
             desc = re.sub(r'\s+', ' ', m.group(2)).strip()
             amount = parse_amount(m.group(3))
-            if not date or amount == 0.0:
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -3442,10 +3397,6 @@ def parse_saida_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-ANY-3] Pasha Bank PDF (BUNDA LLC).
-    Табличный путь + regex-fallback.
-    """
     result = []
     tables = pdf_all_tables(file_content)
     for table in tables:
@@ -3483,6 +3434,8 @@ def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 if credit == 0.0 and debit == 0.0:
                     continue
                 amount = abs(credit) if credit != 0.0 else -abs(debit)
+                if not _is_reasonable_amount(amount):
+                    continue
                 desc = row[ci['description']] if 'description' in ci and ci['description'] < len(row) else ''
                 cp = row[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
                 result.append({
@@ -3511,7 +3464,7 @@ def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             v1 = parse_amount(m.group(3))
             v2 = parse_amount(m.group(4))
             amount = abs(v1) if v1 != 0.0 else -abs(v2)
-            if not date or amount == 0.0:
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -3523,7 +3476,7 @@ def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== [FIX-ANY-4] УНИВЕРСАЛЬНЫЕ ПАРСЕРЫ ПО ТИПУ ====================
+# ==================== УНИВЕРСАЛЬНЫЕ ПАРСЕРЫ ====================
 
 def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -3564,7 +3517,7 @@ def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
             if not date:
                 continue
             amount = parse_amount(parts[ci['amount']])
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = parts[ci['description']] if 'description' in ci and ci['description'] < len(parts) else ''
             cp = parts[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(parts) else ''
@@ -3576,6 +3529,21 @@ def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
         except Exception:
             continue
     return result
+
+
+# [FIX-INCOME-8] parse_xlsx_universal: сумма только если ячейка — чистое число.
+_NUMERIC_CELL_RE = re.compile(r'^-?[\d\s\u00a0]*[.,]?\d*$')
+
+
+def _cell_is_numeric(v) -> bool:
+    if v is None or pd.isna(v):
+        return False
+    if isinstance(v, (int, float)):
+        return True
+    s = str(v).strip()
+    if not s:
+        return False
+    return bool(_NUMERIC_CELL_RE.match(s))
 
 
 def parse_xlsx_universal(file_content: bytes, account_name: str) -> List[Dict]:
@@ -3618,10 +3586,11 @@ def parse_xlsx_universal(file_content: bytes, account_name: str) -> List[Dict]:
             if not date:
                 continue
             av = row.iloc[ci['amount']] if ci['amount'] < len(row) else None
-            if pd.isna(av):
+            # [FIX-INCOME-8] Не считаем сумму, если ячейка — не число.
+            if not _cell_is_numeric(av):
                 continue
             amount = parse_amount(str(av))
-            if amount == 0.0:
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
             cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
@@ -3664,7 +3633,7 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 if not date:
                     continue
                 amount = parse_amount(cells[amount_i] if amount_i < len(cells) else '')
-                if amount == 0.0:
+                if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 desc = cells[desc_i] if desc_i >= 0 and desc_i < len(cells) else ''
                 cp = cells[cp_i] if cp_i >= 0 and cp_i < len(cells) else ''
@@ -3691,7 +3660,7 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
             date = parse_date(m.group(1))
             desc = re.sub(r'\s+', ' ', m.group(2)).strip()
             amount = parse_amount(m.group(3))
-            if not date or amount == 0.0:
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -3703,11 +3672,10 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
+# [FIX-INCOME-7] parse_any_format: убрана эвристика «первое ненулевое число».
+# Теперь требуем, чтобы дата и сумма были в одной строке таблицы И сумма была
+# числом (не «Конечный остаток» и т.п.).
 def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-ANY-5] Универсальный «последний шанс».
-    Порядок: pdf_all_tables → pdf_all_text → read_xlsx → read_text → docx_all_text.
-    """
     result: List[Dict] = []
 
     try:
@@ -3735,8 +3703,10 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
             for i in range(len(row)):
                 if i == date_i:
                     continue
+                if not _cell_is_numeric(row[i]):
+                    continue
                 a = parse_amount(row[i])
-                if a != 0.0:
+                if a != 0.0 and _is_reasonable_amount(a):
                     amount = a
                     amount_i = i
                     break
@@ -3774,7 +3744,7 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 date = parse_date(m.group(1))
                 desc = re.sub(r'\s+', ' ', m.group(2)).strip()
                 amount = parse_amount(m.group(3))
-                if not date or amount == 0.0:
+                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 result.append({
                     'Дата': date, 'Сумма': amount,
@@ -3810,8 +3780,10 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
             for i, v in enumerate(row.values):
                 if i == date_i or pd.isna(v):
                     continue
+                if not _cell_is_numeric(v):
+                    continue
                 a = parse_amount(v)
-                if a != 0.0:
+                if a != 0.0 and _is_reasonable_amount(a):
                     amount = a
                     amount_i = i
                     break
@@ -3861,8 +3833,10 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 for i, p in enumerate(parts):
                     if i == date_i:
                         continue
+                    if not _cell_is_numeric(p):
+                        continue
                     a = parse_amount(p)
-                    if a != 0.0:
+                    if a != 0.0 and _is_reasonable_amount(a):
                         amount = a
                         amount_i = i
                         break
@@ -3900,7 +3874,7 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 date = parse_date(m.group(1))
                 desc = re.sub(r'\s+', ' ', m.group(2)).strip()
                 amount = parse_amount(m.group(3))
-                if not date or amount == 0.0:
+                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 result.append({
                     'Дата': date, 'Сумма': amount,
@@ -3918,7 +3892,6 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
 def get_parser_by_ext(account_name: str, ext: str):
     low = account_name.lower()
 
-    # ========== PDF ==========
     if ext == '.pdf':
         if 'regina alfa' in low:
             return parse_regina_alfa_pdf, 'regina_alfa_pdf'
@@ -3958,7 +3931,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_pasha_bank_pdf, 'pasha_bank_pdf'
         return parse_pdf_universal, 'pdf_universal'
 
-    # ========== DOCX ==========
     if ext == '.docx':
         if 'regina alfa' in low:
             return parse_regina_alfa_docx, 'regina_alfa_docx'
@@ -3972,9 +3944,8 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_paysera_docx, 'paysera_docx'
         if 'kapital' in low or ('saida' in low and 'azn' in low):
             return parse_kapital_saida_docx, 'kapital_saida_docx'
-        return None, None
+        return parse_docx_universal, 'docx_universal'
 
-    # ========== XLSX / XLS ==========
     if ext in ('.xlsx', '.xls'):
         if 'revolut' in low:
             if 'nb rev' in low or 'nb_rev' in low:
@@ -4068,9 +4039,8 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_wio_business, 'wio_business'
         if 'wise' in low:
             return parse_saida_wise_xlsx, 'saida_wise_xlsx'
-        return None, None
+        return parse_xlsx_universal, 'xlsx_universal'
 
-    # ========== CSV ==========
     if ext == '.csv':
         if 'revolut' in low:
             if 'nb rev' in low or 'nb_rev' in low:
@@ -4164,21 +4134,12 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_wio_business, 'wio_business'
         if 'wise' in low:
             return parse_saida_wise_xlsx, 'saida_wise_xlsx'
-        return None, None
+        return parse_csv_universal, 'csv_universal'
 
     return None, None
 
 
-# ==================== [FIX-ANY-6] ЦЕПОЧКА КАНДИДАТОВ ====================
-
-def _ext_to_type(ext: str) -> str:
-    ext = (ext or '').lower()
-    if ext.startswith('.'):
-        ext = ext[1:]
-    if ext in ('pdf', 'xls', 'xlsx', 'docx', 'csv'):
-        return ext
-    return ''
-
+# ==================== ЦЕПОЧКА КАНДИДАТОВ ====================
 
 def _get_universal_for_type(real_type: str):
     if real_type == 'pdf':
@@ -4193,9 +4154,6 @@ def _get_universal_for_type(real_type: str):
 
 
 def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[Tuple[Callable, str]]:
-    """
-    [FIX-ANY-6] Строит цепочку кандидатов-парсеров для счёта.
-    """
     chain: List[Tuple[Callable, str]] = []
     seen_keys = set()
 
@@ -4244,9 +4202,6 @@ def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[T
 
 
 def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
-    """
-    [FIX-ANY-7] Переписанный parse_file: реальный тип, цепочка кандидатов.
-    """
     account_name = clean_account_name(filename)
     ext = os.path.splitext(filename)[1].lower()
     real_type = _detect_real_type(file_content, ext)
@@ -4273,17 +4228,15 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
     return [], msg
 
 
-# ==================== [FIX-SUM-1..7] СВОДКА ПО СЧЕТАМ ====================
+# ==================== [FIX-INCOME-9] СВОДКА ПО СЧЕТАМ ====================
 
 def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     """
-    [FIX-SUM-1] Строит вторую таблицу — «Сводка по счетам».
-    Логика:
-    - группировка по 'Наименование счета';
-    - приход: Сумма > 0, расход: Сумма < 0;
-    - суммы расхода выводятся по модулю;
-    - нулевые операции не попадают ни в приход, ни в расход;
-    - сортировка по наименованию счёта.
+    Строит «Сводку по счетам».
+
+    [FIX-INCOME-9] Добавлена жёсткая отбраковка строк с |Сумма| >= 1e12 —
+    это артефакты парсинга (например, BluOr «Конечный остаток» 81228270300030.00).
+    Реальные суммы банковских операций < триллиона.
     """
     columns = [
         "Наименование счета",
@@ -4291,6 +4244,7 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
         "Сумма приходных операций",
         "Количество расходных операций",
         "Сумма расходных операций",
+        "Сальдо операций",
     ]
     if not rows:
         return pd.DataFrame(columns=columns)
@@ -4319,31 +4273,42 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     df["Сумма"] = df["Сумма"].map(_to_float)
     df["Наименование счета"] = df["Наименование счета"].fillna("").astype(str)
 
+    # [FIX-INCOME-9] Отбраковка абсурдных сумм.
+    mask_reasonable = df["Сумма"].abs() < MAX_REASONABLE_AMOUNT
+    df = df[mask_reasonable].copy()
+
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+
     df["_income"] = df["Сумма"] > 0
     df["_expense"] = df["Сумма"] < 0
+    df["_income_sum"] = df["Сумма"].where(df["_income"], 0.0)
+    df["_expense_sum"] = (-df["Сумма"]).where(df["_expense"], 0.0)
 
     grouped = df.groupby("Наименование счета", dropna=False)
 
     summary = pd.DataFrame({
         "Количество приходных операций": grouped["_income"].sum().astype(int),
-        "Сумма приходных операций": grouped.apply(
-            lambda g: float(g.loc[g["_income"], "Сумма"].sum())
-        ),
+        "Сумма приходных операций": grouped["_income_sum"].sum(),
         "Количество расходных операций": grouped["_expense"].sum().astype(int),
-        "Сумма расходных операций": grouped.apply(
-            lambda g: float(abs(g.loc[g["_expense"], "Сумма"].sum()))
-        ),
+        "Сумма расходных операций": grouped["_expense_sum"].sum(),
     }).reset_index()
+
+    summary["Сальдо операций"] = (
+        summary["Сумма приходных операций"].astype(float)
+        - summary["Сумма расходных операций"].astype(float)
+    )
 
     summary = summary.sort_values("Наименование счета").reset_index(drop=True)
 
-    summary["Сумма приходных операций"] = summary["Сумма приходных операций"].astype(float)
-    summary["Сумма расходных операций"] = summary["Сумма расходных операций"].astype(float)
+    summary["Сумма приходных операций"] = summary["Сумма приходных операций"].astype(float).round(2)
+    summary["Сумма расходных операций"] = summary["Сумма расходных операций"].astype(float).round(2)
+    summary["Сальдо операций"] = summary["Сальдо операций"].astype(float).round(2)
 
     return summary[columns]
 
 
-# ==================== [FIX-SPLIT-1..3] ЭКСПОРТ В EXCEL ====================
+# ==================== ЭКСПОРТ В EXCEL ====================
 
 def build_operations_excel(df_display: pd.DataFrame) -> BytesIO:
     output = BytesIO()
@@ -4370,14 +4335,9 @@ def build_combined_excel(df_display: pd.DataFrame, summary_df: pd.DataFrame) -> 
     return output
 
 
-# ==================== [FIX-STATE-1..6] ОБРАБОТКА БЕЗ ЗАДВОЕНИЯ ====================
+# ==================== ОБРАБОТКА БЕЗ ЗАДВОЕНИЯ ====================
 
 def _files_signature(uploaded_files) -> str:
-    """
-    [FIX-STATE-1] Строит подпись набора загруженных файлов: имя + размер.
-    Пока подпись не менялась — результат берётся из session_state,
-    файлы повторно не парсятся.
-    """
     h = hashlib.md5()
     for uf in uploaded_files:
         try:
@@ -4389,10 +4349,6 @@ def _files_signature(uploaded_files) -> str:
 
 
 def _process_uploaded_files(uploaded_files) -> Dict:
-    """
-    [FIX-STATE-2] Собирает результат обработки в один словарь.
-    Вызывается один раз на уникальную подпись файлов.
-    """
     all_tx: List[Dict] = []
     failed: List[str] = []
     file_stats: List[str] = []
@@ -4455,14 +4411,6 @@ def _process_uploaded_files(uploaded_files) -> Dict:
 
 
 def _render_results(result: Dict):
-    """
-    [FIX-STATE-3] Рендерит результат из session_state. Вызывается на каждом
-    rerun; данные не пересобираются.
-
-    [FIX-DUP-1] Убрана дублирующая таблица "Сводка по счетам" —
-    оставлена только HTML-версия (.summary-table) в тёмно-зелёной палитре.
-    st.dataframe(summary_df, ...) удалён.
-    """
     all_tx = result.get('all_tx', [])
     failed = result.get('failed', [])
     file_stats = result.get('file_stats', [])
@@ -4485,16 +4433,18 @@ def _render_results(result: Dict):
             st.info("Операции не найдены. Проверьте формат файлов.")
         return
 
-    df = pd.DataFrame(all_tx)
-    df['Сумма_число'] = df['Сумма']
-    df['Сумма'] = df['Сумма'].apply(format_amount)
-    df_display = df.drop(columns=['Сумма_число'])
+    df_raw = pd.DataFrame(all_tx)
+    df_raw['Сумма_число'] = pd.to_numeric(df_raw['Сумма'], errors='coerce').fillna(0.0)
+
+    income = float(df_raw['Сумма_число'][df_raw['Сумма_число'] > 0].sum())
+    expense = float(abs(df_raw['Сумма_число'][df_raw['Сумма_число'] < 0].sum()))
+
+    df_display = df_raw.drop(columns=['Сумма_число']).copy()
+    df_display['Сумма'] = df_display['Сумма'].apply(format_amount)
 
     st.markdown("---")
     st.markdown("### 📊 Итоги")
     c1, c2, c3 = st.columns(3)
-    income = df['Сумма_число'][df['Сумма_число'] > 0].sum()
-    expense = abs(df['Сумма_число'][df['Сумма_число'] < 0].sum())
     with c1:
         st.metric("📊 Всего операций", len(all_tx))
     with c2:
@@ -4506,18 +4456,21 @@ def _render_results(result: Dict):
     st.markdown("### 🧾 Детализация транзакций")
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 
-    # [FIX-DUP-1] Единственная таблица сводки — HTML в тёмно-зелёной палитре.
     st.markdown("---")
     st.markdown("### 📁 Сводка по счетам")
-    summary_df = build_account_summary(all_tx)
+    summary_df = build_account_summary(df_raw.to_dict('records'))
     if summary_df.empty:
         st.info("Нет данных для сводки по счетам.")
     else:
+        summary_html_df = summary_df.copy()
+        for col in ["Сумма приходных операций", "Сумма расходных операций", "Сальдо операций"]:
+            summary_html_df[col] = summary_html_df[col].apply(
+                lambda x: f"{x:,.2f}".replace(",", " ").replace(".", ",")
+            )
         st.markdown(
-            f'<div class="summary-table">{summary_df.to_html(index=False, escape=False)}</div>',
+            f'<div class="summary-table">{summary_html_df.to_html(index=False, escape=False)}</div>',
             unsafe_allow_html=True,
         )
-        # st.dataframe(summary_df, ...) — УДАЛЕНО, чтобы не было двух таблиц.
 
     st.markdown("---")
     st.markdown("### 💾 Сохранить результат")
@@ -4584,7 +4537,6 @@ def _render_results(result: Dict):
 # ==================== ИНТЕРФЕЙС ====================
 
 def main():
-    # [FIX-STATE-4] Инициализация session_state.
     if 'processing_result' not in st.session_state:
         st.session_state['processing_result'] = None
     if 'files_signature' not in st.session_state:
@@ -4658,9 +4610,6 @@ def main():
         if st.session_state['processing_result'] is not None:
             st.caption("Результат готов. Можно скачивать файлы; повторное нажатие «Обработать» перезапустит разбор.")
 
-    # [FIX-STATE-6] Обрабатываем ТОЛЬКО если:
-    #  - нажата кнопка «Обработать», И
-    #  - либо результата ещё нет, либо подпись файлов изменилась.
     need_process = False
     if process_clicked:
         if st.session_state['processing_result'] is None:
@@ -4676,7 +4625,6 @@ def main():
         st.session_state['processing_result'] = result
         st.session_state['files_signature'] = current_sig
 
-    # Рендерим результат на каждом rerun (данные из session_state).
     if st.session_state['processing_result'] is not None:
         st.markdown("---")
         _render_results(st.session_state['processing_result'])
