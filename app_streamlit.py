@@ -1934,134 +1934,113 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
-# ==================== Paysera PDF (ИСПРАВЛЕННЫЙ) ====================
+# ==================== Paysera PDF (НОВЫЙ АЛГОРИТМ) ====================
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Paysera PDF.
-    Проблема: в тексте есть баланс (Start balance / Final balance)
-    и сумма операции (-5.00 EUR). Баланс идёт РАНЬШЕ или РЯДОМ с суммой.
-    Мы должны взять ИМЕННО сумму операции — со знаком минус — рядом с датой.
+
+    pdfplumber отдаёт весь текст одной строкой (таблица склеена), поэтому
+    стратегии с '\\n' и MULTILINE не работают. Используем поиск по «окнам»
+    между датами.
+
+    Алгоритм:
+    1. Находим все даты вида YYYY-MM-DD HH:MM:SS.
+    2. Для каждой даты смотрим окно до следующей даты (или +2000 символов).
+    3. Внутри окна ищем РОВНО одну отрицательную сумму EUR (-5.00 EUR) —
+       это сумма операции (комиссия / платёж).
+    4. Исключаем положительные суммы, если рядом (в пределах 60 символов)
+       есть слова balance/turnover/final/start/debit/credit.
+    5. Описание: 'Purpose of payment:' или ключевые слова.
     """
     result = []
     full_text = pdf_all_text(file_content)
     if not full_text:
         return []
-    
-    # Стратегия 1: ищем ISO-дату + время + ОТРИЦАТЕЛЬНУЮ сумму EUR неподалёку
-    pattern1 = re.compile(
-        r'(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})'
-        r'[^\n]{0,200}?'
-        r'(-[\d\s]+[.,]\d{2})\s*EUR',
-        re.MULTILINE | re.DOTALL
-    )
-    for m in pattern1.finditer(full_text):
-        try:
-            date = parse_date(m.group(1))
-            amount = parse_amount(m.group(3))
-            if not date or amount == 0.0:
-                continue
-            # Ищем описание
-            head = full_text[max(0, m.start() - 300):m.start()]
-            desc = ''
-            for marker in ['Commission fee', 'Commission', 'Плата', 'Перевод',
-                           'Payment', 'Transfer', 'Fee']:
-                if marker in head:
-                    desc = marker
-                    break
-            if not desc:
-                tail = full_text[m.end():m.end() + 500]
-                purpose_match = re.search(r'Purpose of payment:\s*([^\n]{1,200})', tail)
-                if purpose_match:
-                    desc = purpose_match.group(1).strip()
-            if not desc:
-                desc = 'Paysera operation'
-            result.append({
-                'Дата': date, 'Сумма': amount,
-                'Контрагент': 'Paysera LT',
-                'Наименование счета': account_name,
-                'Описание': desc[:500]
-            })
-        except Exception:
+
+    # Находим все даты с временем
+    date_pattern = re.compile(r'(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})')
+    date_matches = list(date_pattern.finditer(full_text))
+    if not date_matches:
+        return []
+
+    # Находим все суммы EUR (и положительные, и отрицательные)
+    eur_pattern = re.compile(r'([+\-]?\d[\d\s]*[.,]\d{2})\s*EUR')
+    eur_matches = []
+    for m in eur_pattern.finditer(full_text):
+        eur_matches.append({
+            'start': m.start(),
+            'end': m.end(),
+            'amount': parse_amount(m.group(1)),
+            'raw': m.group(1),
+        })
+
+    STOP_WORDS = ['balance', 'turnover', 'final', 'start', 'debit', 'credit',
+                  'start balance', 'final balance']
+
+    for i, dm in enumerate(date_matches):
+        date_str = dm.group(1)
+        date = parse_date(date_str)
+        if not date:
             continue
-    
-    # Стратегия 2: ищем первую EUR-сумму после даты, если она НЕ является балансом
-    if not result:
-        eur_matches = []
-        for m in re.finditer(r'(-?\d[\d\s]*[.,]\d{2})\s*EUR', full_text):
-            eur_matches.append((m.start(), m.end(), parse_amount(m.group(1))))
-        date_matches = list(re.finditer(r'(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}', full_text))
-        for dm in date_matches:
-            date = parse_date(dm.group(1))
-            if not date:
-                continue
-            pos_date_end = dm.end()
-            amount_found = None
-            for (pos, endpos, amount) in eur_matches:
-                if pos >= pos_date_end:
-                    # Проверяем 80 символов перед суммой — не служебная ли это строка
-                    pre = full_text[max(0, pos - 80):pos].lower()
-                    if any(w in pre for w in ['balance', 'turnover', 'final', 'start']):
-                        continue
-                    amount_found = amount
-                    break
-            if amount_found is None or amount_found == 0.0:
-                continue
-            desc = ''
-            head = full_text[max(0, pos_date_end - 300):pos_date_end]
-            for marker in ['Commission fee', 'Commission', 'Плата', 'Перевод',
-                           'Payment', 'Transfer', 'Fee']:
-                if marker in head:
+        # Окно до следующей даты или +2000 символов
+        window_start = dm.end()
+        if i + 1 < len(date_matches):
+            window_end = date_matches[i + 1].start()
+        else:
+            window_end = window_start + 2000
+        if window_end <= window_start:
+            continue
+
+        # Все EUR-суммы в окне
+        window_eur = [e for e in eur_matches if window_start <= e['start'] < window_end]
+
+        # Приоритет 1: отрицательная сумма EUR в окне
+        negative = [e for e in window_eur if e['amount'] < 0]
+        # Приоритет 2: положительная сумма EUR, но не «balance»
+        positive = [e for e in window_eur if e['amount'] > 0]
+
+        chosen_amount = None
+        chosen_pos = None
+        if negative:
+            chosen = negative[0]
+            chosen_amount = chosen['amount']
+            chosen_pos = chosen['start']
+        elif positive:
+            for e in positive:
+                pre = full_text[max(0, e['start'] - 60):e['start']].lower()
+                if any(w in pre for w in STOP_WORDS):
+                    continue
+                chosen_amount = e['amount']
+                chosen_pos = e['start']
+                break
+        if chosen_amount is None or chosen_amount == 0.0:
+            continue
+
+        # Описание: сначала Purpose of payment:
+        desc = ''
+        window_text = full_text[window_start:window_end]
+        purpose_match = re.search(r'Purpose of payment\s*:\s*([^\.]{1,200}?)(?:\.|$)', window_text, re.IGNORECASE)
+        if purpose_match:
+            desc = purpose_match.group(1).strip()
+        if not desc:
+            # Ключевые слова в окне
+            head = full_text[max(0, chosen_pos - 120):chosen_pos]
+            for marker in ['Commission fee', 'Commission', 'Плата за', 'Плата',
+                           'Payment', 'Transfer', 'Fee', 'Sąskaitos palaikymo mokestis']:
+                if marker.lower() in head.lower() or marker.lower() in window_text.lower():
                     desc = marker
                     break
-            if not desc:
-                tail = full_text[dm.end():dm.end() + 500]
-                purpose_match = re.search(r'Purpose of payment:\s*([^\n]{1,200})', tail)
-                if purpose_match:
-                    desc = purpose_match.group(1).strip()
-            if not desc:
-                desc = 'Paysera operation'
-            result.append({
-                'Дата': date, 'Сумма': amount_found,
-                'Контрагент': 'Paysera LT',
-                'Наименование счета': account_name,
-                'Описание': desc[:500]
-            })
-    
-    # Стратегия 3: fallback — берём "Commission fee" блок и извлекаем
-    # первую отрицательную сумму EUR, идущую после даты в этом блоке
-    if not result:
-        for marker in ['Commission fee', 'Commission', 'Плата', 'Перевод']:
-            idx = full_text.find(marker)
-            if idx == -1:
-                continue
-            block = full_text[idx:idx + 600]
-            dm = re.search(r'(\d{4}-\d{2}-\d{2})', block)
-            if not dm:
-                continue
-            date = parse_date(dm.group(1))
-            # Ищем отрицательную сумму EUR после даты
-            am = re.search(r'(-[\d\s]+[.,]\d{2})\s*EUR', block[dm.end():])
-            if not am:
-                # Ищем просто первую сумму EUR (если отрицательной нет)
-                am = re.search(r'(\d[\d\s]*[.,]\d{2})\s*EUR', block[dm.end():])
-            if am and date:
-                amount = parse_amount(am.group(1))
-                # Если это положительное число — считаем его расходом, но только если
-                # вокруг нет слова balance/turnover
-                pre_pos = dm.end() + am.start()
-                pre = block[max(0, pre_pos - 60):pre_pos].lower()
-                if any(w in pre for w in ['balance', 'turnover', 'final', 'start']):
-                    continue
-                if amount != 0.0:
-                    result.append({
-                        'Дата': date, 'Сумма': -abs(amount) if amount > 0 else amount,
-                        'Контрагент': 'Paysera LT',
-                        'Наименование счета': account_name,
-                        'Описание': marker
-                    })
-                    break
-    
+        if not desc:
+            desc = 'Paysera operation'
+
+        result.append({
+            'Дата': date, 'Сумма': chosen_amount,
+            'Контрагент': 'Paysera LT',
+            'Наименование счета': account_name,
+            'Описание': desc[:500]
+        })
+
     # Дедупликация по (дата, сумма)
     seen = set()
     deduped = []
