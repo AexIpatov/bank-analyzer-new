@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 Аналитик банковских выписок — Streamlit-приложение.
-Парсит выписки 25+ банков (CSV / XLSX / XLS / DOCX / PDF) и сводит в единый Excel-отчёт.
 
-Правки этой итерации помечены тегом  # [FIX-N]
+Парсит выписки 25+ банков (CSOB, Tinkoff, BluOr, MKB, N26, Paysera, Revolut,
+UniCredit, WIO, Pasha Bank, Kapital Bank, Mashreq, Industra, FIO, Regina Alfa,
+JenHor Unelma, RAK Bank, Saida Wise/N26, Wise, B1 Estate, Garpiz, TwoHills,
+Koruna, Stalkin, AN14/Plavas1/KL59 Estate и др.)
+в форматах CSV / XLSX / XLS / DOCX / PDF и сводит всё в единый Excel-отчёт.
+
+Все правки этой итерации помечены тегом  # [FIX-N]
 """
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ import os
 import re
 import csv
 import html
+import json
 import traceback
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -19,7 +25,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import streamlit as st
 import pandas as pd
 
-# --- Опциональные зависимости (импортируем мягко) ---
+# --- Опциональные зависимости (импортируем мягко, чтобы приложение не падало) ---
 try:
     import openpyxl  # noqa
 except Exception:
@@ -49,13 +55,26 @@ except Exception:
 
 
 # =============================================================================
-#                              ОБЩИЕ УТИЛИТЫ
+#                              ОБЩИЕ КОНСТАНТЫ
 # =============================================================================
 
 TXN_FIELDS = ("Дата", "Сумма", "Контрагент", "Наименование счета", "Описание")
 
+# Служебные слова, которые никогда не являются транзакциями
+SERVICE_WORDS = (
+    "начальный остаток", "конечный остаток", "входящий остаток",
+    "исходящий остаток", "opening balance", "closing balance",
+    "дебет (d)", "кредит (c)", "debit (d)", "credit (c)",
+    "итого", "total", "выписка по счету", "statement of account",
+)
+
+
+# =============================================================================
+#                              ОБЩИЕ УТИЛИТЫ
+# =============================================================================
 
 def _empty_txn(account_name: str) -> Dict[str, Any]:
+    """Пустая транзакция — шаблон."""
     return {
         "Дата": "",
         "Сумма": 0.0,
@@ -66,7 +85,12 @@ def _empty_txn(account_name: str) -> Dict[str, Any]:
 
 
 def safe_str(v: Any) -> str:
-    """Аккуратное приведение к строке (None, NaN -> '')."""
+    """
+    Аккуратное приведение к строке:
+      - None / NaN  -> ''
+      - убираем неразрывные пробелы, BOM
+      - strip
+    """
     if v is None:
         return ""
     try:
@@ -75,7 +99,6 @@ def safe_str(v: Any) -> str:
     except Exception:
         pass
     s = str(v)
-    # Убираем неразрывные пробелы и BOM
     s = s.replace("\u00a0", " ").replace("\ufeff", "")
     return s.strip()
 
@@ -83,7 +106,7 @@ def safe_str(v: Any) -> str:
 def _text_quality_score(s: str) -> float:
     """
     Эвристика «читаемости» текста: доля печатных ASCII/букв/пунктуации.
-    Нужна для выбора правильной кодировки.
+    Нужна для выбора правильной кодировки при чтении бинарных файлов.
     """
     if not s:
         return 0.0
@@ -115,6 +138,7 @@ def read_text_with_encoding(content: bytes) -> str:
     """
     if not content:
         return ""
+
     # Убираем нулевые байты — иногда попадают из «бинарных» CSV
     content_clean = content.replace(b"\x00", b"")
 
@@ -166,13 +190,15 @@ def read_text_with_encoding(content: bytes) -> str:
 def parse_amount(v: Any) -> float:
     """
     Универсальный парсер суммы:
-      - "1.234" -> 1234 (европейский разделитель тысяч)
-      - "1,234.56" -> 1234.56
-      - "1 234,56" -> 1234.56
-      - "(123)" -> -123
-      - "1.234,56" -> 1234.56
-      - "123.45" -> 123.45
-      - убираем валютные символы/суффиксы (EUR, CZK, Kč, €, ...)
+      - "1.234"        -> 1234
+      - "1,234.56"     -> 1234.56
+      - "1 234,56"     -> 1234.56
+      - "(123)"        -> -123
+      - "1.234,56"     -> 1234.56
+      - "123.45"       -> 123.45
+      - "123.45-"      -> -123.45
+      - "1 234,56 EUR" -> 1234.56
+      - "Kč 1 234"     -> 1234
     """
     if v is None:
         return 0.0
@@ -209,7 +235,6 @@ def parse_amount(v: Any) -> float:
     if not s:
         return 0.0
 
-    # Определяем десятичный разделитель
     last_dot = s.rfind(".")
     last_comma = s.rfind(",")
 
@@ -229,14 +254,14 @@ def parse_amount(v: Any) -> float:
             # 1,234.56 -> us
             s = s.replace(",", "")
     else:
-        # Только один разделитель
         sep = "." if last_dot != -1 else ","
         parts = s.split(sep)
         if len(parts) > 2:
             # Несколько разделителей = тысячи
             s = "".join(parts)
         else:
-            int_part, frac_part = parts[0], parts[1] if len(parts) > 1 else ""
+            int_part = parts[0]
+            frac_part = parts[1] if len(parts) > 1 else ""
             # Если после разделителя ровно 3 цифры и целая часть не пустая —
             # это скорее тысячи (1.234 -> 1234), кроме случая 0.xxx
             if len(frac_part) == 3 and int_part and int_part != "0":
@@ -252,7 +277,7 @@ def parse_amount(v: Any) -> float:
 
 
 def format_amount(v: Any) -> str:
-    """Формат суммы: 1 234,56 (без -0,00)."""
+    """Формат суммы: '1 234,56'. Не даём '-0,00'."""
     try:
         f = float(v)
     except Exception:
@@ -266,8 +291,11 @@ def format_amount(v: Any) -> str:
 def parse_date(v: Any) -> str:
     """
     Универсальный парсер даты -> 'dd-mm-yyyy'.
-    Поддерживает: dd.mm.yyyy, dd/mm/yyyy, dd-mm-yyyy, yyyy-mm-dd,
-    dd.mm.yy, mm/dd/yyyy (fallback), dd-MMM-yyyy (Aug), MMM dd, yyyy.
+    Поддерживает:
+      dd.mm.yyyy, dd/mm/yyyy, dd-mm-yyyy, yyyy-mm-dd,
+      dd.mm.yy, mm/dd/yyyy (fallback),
+      dd-MMM-yyyy (Aug), MMM dd, yyyy,
+      ISO с временем.
     """
     if v is None:
         return ""
@@ -313,7 +341,8 @@ def parse_date(v: Any) -> str:
 
 def _split_line(line: str, delimiter: str = ",") -> List[str]:
     """
-    Корректный CSV-разбор одной строки с кавычками (в т.ч. экранированные "").
+    Корректный CSV-разбор одной строки с кавычками
+    (в т.ч. экранированные "" внутри поля).
     Использует csv.reader для надёжности.
     """
     if line is None:
@@ -322,10 +351,15 @@ def _split_line(line: str, delimiter: str = ",") -> List[str]:
     if not line:
         return []
     try:
-        reader = csv.reader([line], delimiter=delimiter, quotechar='"',
-                            doublequote=True, skipinitialspace=False)
+        reader = csv.reader(
+            [line],
+            delimiter=delimiter,
+            quotechar='"',
+            doublequote=True,
+            skipinitialspace=False,
+        )
         for row in reader:
-            return [c for c in row]
+            return list(row)
     except Exception:
         pass
     return line.split(delimiter)
@@ -353,12 +387,19 @@ def read_xlsx(content: bytes, sheet_name: Optional[str] = None) -> Optional[pd.D
     # xlsx (PK zip)
     if _is_real_xlsx(content):
         try:
-            return pd.read_excel(io.BytesIO(content), sheet_name=sheet_name or 0,
-                                 engine="openpyxl", header=None)
+            return pd.read_excel(
+                io.BytesIO(content),
+                sheet_name=sheet_name or 0,
+                engine="openpyxl",
+                header=None,
+            )
         except Exception:
             try:
-                return pd.read_excel(io.BytesIO(content), sheet_name=sheet_name or 0,
-                                     header=None)
+                return pd.read_excel(
+                    io.BytesIO(content),
+                    sheet_name=sheet_name or 0,
+                    header=None,
+                )
             except Exception:
                 pass
 
@@ -378,8 +419,12 @@ def read_xlsx(content: bytes, sheet_name: Optional[str] = None) -> Optional[pd.D
         # openpyxl иногда умеет .xls (редко)
         if openpyxl is not None:
             try:
-                return pd.read_excel(io.BytesIO(content), sheet_name=sheet_name or 0,
-                                     engine="openpyxl", header=None)
+                return pd.read_excel(
+                    io.BytesIO(content),
+                    sheet_name=sheet_name or 0,
+                    engine="openpyxl",
+                    header=None,
+                )
             except Exception:
                 pass
         # pd.read_html — на случай HTML внутри .xls
@@ -393,8 +438,11 @@ def read_xlsx(content: bytes, sheet_name: Optional[str] = None) -> Optional[pd.D
 
     # Неизвестный формат — пробуем всё подряд
     try:
-        return pd.read_excel(io.BytesIO(content), sheet_name=sheet_name or 0,
-                             header=None)
+        return pd.read_excel(
+            io.BytesIO(content),
+            sheet_name=sheet_name or 0,
+            header=None,
+        )
     except Exception:
         pass
     try:
@@ -489,10 +537,12 @@ def pdf_all_tables(content: bytes) -> List[List[List[str]]]:
 #                          УТИЛИТЫ ДЛЯ ПОИСКА ЗАГОЛОВКА
 # =============================================================================
 
-def _find_header_row(rows: List[List[Any]],
-                     markers: List[str],
-                     max_scan: int = 60,
-                     min_hits: int = 2) -> int:
+def _find_header_row(
+    rows: List[List[Any]],
+    markers: List[str],
+    max_scan: int = 60,
+    min_hits: int = 2,
+) -> int:
     """
     Ищем строку-заголовок по маркерам.
     Возвращает индекс строки или -1.
@@ -530,6 +580,25 @@ def _pick(d: Dict[str, str], *names: str) -> str:
     return ""
 
 
+def _is_service_row(joined_lower: str) -> bool:
+    """Служебная строка (остаток, итоги)? — не транзакция."""
+    return any(w in joined_lower for w in SERVICE_WORDS)
+
+
+def _longest_text(parts: List[str], min_len: int = 3) -> str:
+    """Самая длинная текстовая ячейка (не число, не дата)."""
+    best = ""
+    for p in parts:
+        sp = safe_str(p)
+        if len(sp) < min_len:
+            continue
+        if re.fullmatch(r"[\d\s.,\-+()]+", sp):
+            continue
+        if len(sp) > len(best):
+            best = sp
+    return best
+
+
 # =============================================================================
 #                              ROUTER
 # =============================================================================
@@ -549,6 +618,14 @@ def clean_account_name(filename: str) -> str:
     name = re.sub(r"\s+", " ", name).strip(" -_")
     # Если осталось пусто — вернём исходное
     return name or os.path.basename(filename)
+
+
+class _TinkoffMarker:
+    """Маркер для роутера Tinkoff — реальный парсер выбирается по расширению."""
+    pass
+
+
+_TINKOFF_TABULAR_MARKER = _TinkoffMarker()
 
 
 def get_parser_by_ext(account_name: str, ext: str) -> Optional[Callable]:
@@ -586,17 +663,21 @@ def get_parser_by_ext(account_name: str, ext: str) -> Optional[Callable]:
 def _route_tabular(account_name: str) -> Callable:
     """
     Маршрутизация .xlsx / .xls / .csv по имени счёта.
-    Возвращает parser(file_content, account_name) -> List[Dict].
+    Возвращает parser(file_content, account_name) -> List[Dict]
+    либо маркер _TINKOFF_TABULAR_MARKER (тогда реальный парсер
+    выбирается по расширению).
+
+    ВАЖНО (FIX-11): Revolut проверяется ДО Industra —
+    иначе AN14_*_Revolut.csv уходит в industra_an14.
     """
     name_l = account_name.lower()
 
-    # [FIX-11] Revolut ДО Industra — иначе AN14_*_Revolut.csv уходит в industra_an14
+    # [FIX-11] Revolut ДО Industra, потому что 'an14' в имени
     if "revolut" in name_l:
         return parse_revolut_an14
 
     if "tinkoff" in name_l:
         # [FIX-8] Tinkoff xlsx/csv — отдельные парсеры (не docx)
-        # Реальный выбор произойдёт в обёртке по расширению
         return _TINKOFF_TABULAR_MARKER  # type: ignore
 
     if "industra" in name_l:
@@ -605,7 +686,10 @@ def _route_tabular(account_name: str) -> Callable:
     if "csob" in name_l:
         return parse_csob_generic
 
-    if "unicredit" in name_l or "_uc " in (" " + name_l) or name_l.endswith("_uc"):
+    # UniCredit: разные варианты имени
+    if "unicredit" in name_l or "uni credit" in name_l:
+        return parse_unicredit_generic
+    if re.search(r"\buc\b", name_l) or name_l.endswith("_uc") or " uc " in (" " + name_l + " "):
         return parse_unicredit_generic
 
     if "paysera" in name_l:
@@ -616,7 +700,9 @@ def _route_tabular(account_name: str) -> Callable:
             return parse_bsr_bluor_2
         if "bluor_3" in name_l or "bluor 3" in name_l:
             return parse_bsr_bluor_3
-        return parse_kl59_bluor
+        if "kl59" in name_l:
+            return parse_kl59_bluor
+        return parse_bsr_bluor_2
 
     if "mkb" in name_l or "budapest" in name_l:
         return _parse_mkb_any
@@ -636,11 +722,21 @@ def _route_tabular(account_name: str) -> Callable:
     if "fio" in name_l or "stalkin" in name_l:
         return parse_stalkin_ml2_fio
 
+    if "rak" in name_l:
+        return parse_rak_bank_xlsx
+
     return parse_generic_tabular
 
 
+def _resolve_tinkoff(ext: str) -> Callable:
+    """Для Tinkoff: .csv идёт в parse_tinkoff_csv, всё остальное — в xlsx."""
+    if ext.lower().lstrip(".") == "csv":
+        return parse_tinkoff_csv
+    return parse_tinkoff_xlsx
+
+
 # =============================================================================
-#                              ПАРСЕРЫ
+#                              ПАРСЕРЫ (табличные)
 # =============================================================================
 
 # --- CSOB -------------------------------------------------------------------
@@ -648,15 +744,18 @@ def _route_tabular(account_name: str) -> Callable:
 def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict[str, Any]]:
     """
     CSOB CSV-выгрузка (cp1250/utf-8, ';' или ',').
-    Формат строки (пример):
+
+    Пример строки:
       "0","1.8.2026","","Nákup","","-1 234,56","CZK",""
-    Колонки (в разных выгрузках):
-      parts[1] -> дата (иногда parts[0])
-      parts[4] -> дата транзакции
-      parts[6] -> сумма
-    [FIX-4] Учтён вариант len(parts)==6 (раньше требовалось ≥6, но проверка была
-            строгой по индексам и могла отсекать).
-    [FIX-5] Автодетект сдвига индексов: ищем дату и сумму в первых 10 полях.
+
+    В разных выгрузках колонки слегка плавают:
+      - дата может быть parts[1] или parts[4]
+      - сумма — parts[5] или parts[6]
+
+    [FIX-4] Принимаем строки с len(parts) >= 4 (было строже — теряли
+            короткие строки с len==6).
+    [FIX-5] Автодетект сдвига индексов: дата ищется по содержимому,
+            сумма — ближайшее числовое после даты.
     """
     text = read_text_with_encoding(file_content)
     if not text:
@@ -677,7 +776,12 @@ def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict[str,
         if len(parts) < 4:
             continue
 
-        # Ищем дату и сумму в первых 10 полях (автосдвиг)
+        # Служебные строки пропускаем
+        joined = " ".join(safe_str(p).lower() for p in parts)
+        if _is_service_row(joined):
+            continue
+
+        # Ищем дату в первых 10 полях (автосдвиг)
         date_val = ""
         date_idx = -1
         for i in range(min(len(parts), 10)):
@@ -690,30 +794,29 @@ def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict[str,
             continue
 
         # Сумма — ищем float-подобное поле после date_idx
-        amount_val = None
+        amount_val: Optional[float] = None
         for j in range(date_idx + 1, min(len(parts), date_idx + 8)):
             s = safe_str(parts[j])
             if not s:
                 continue
-            # Пропускаем чистые даты, валютные коды, пустые
+            # Пропускаем чистые валютные коды
             if re.fullmatch(r"[A-Z]{3}", s):
                 continue
             if re.search(r"\d", s):
                 a = parse_amount(s)
-                if a != 0.0 or re.search(r"[.,]\d{2}\b", s) or re.fullmatch(r"-?\d+", s.replace(" ", "")):
+                # Сумма обычно самая правая «числовая» — не прерываемся,
+                # запоминаем последнюю подходящую
+                if (
+                    a != 0.0
+                    or re.search(r"[.,]\d{2}\b", s)
+                    or re.fullmatch(r"-?\d+", s.replace(" ", ""))
+                ):
                     amount_val = a
-                    # Сумма обычно самая правая «числовая» — не прерываемся,
-                    # но запоминаем последнюю подходящую
         if amount_val is None:
             continue
 
         # Описание — самая длинная текстовая ячейка
-        desc = ""
-        for p in parts:
-            sp = safe_str(p)
-            if len(sp) > len(desc) and not re.fullmatch(r"[\d\s.,\-+]+", sp):
-                desc = sp
-        # Контрагент — из описания (до первой запятой)
+        desc = _longest_text(parts)
         counterparty = desc.split(",")[0].strip() if desc else ""
 
         txns.append({
@@ -732,7 +835,9 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
     """
     UniCredit CSV (CZ/EN). Заголовок содержит Datum/Částka/Zpráva
     или Date/Amount/Description.
-    [FIX-7] Поддержка разделителя ',' и ';' внутри значений (используем csv.reader),
+
+    [FIX-7] Поддержка разделителя ',' и ';' внутри значений
+            (используем csv.reader через _split_line),
             и терпимый поиск колонок по частичному совпадению.
     """
     text = read_text_with_encoding(file_content)
@@ -752,8 +857,14 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
     # Ищем строку-заголовок
     header_idx = -1
     header: List[str] = []
-    markers = ["datum", "date", "částka", "castka", "amount", "zpráva", "zprava",
-               "popis", "description", "protiúčet", "protiucet"]
+    markers = [
+        "datum", "date", "дата",
+        "částka", "castka", "amount", "сумма", "objem",
+        "zpráva", "zprava", "popis", "description", "описание",
+        "protiúčet", "protiucet", "counterparty",
+        "kredit", "credit", "приход",
+        "debet", "debit", "расход",
+    ]
     for i, line in enumerate(lines[:60]):
         parts = _split_line(line, delimiter=delim)
         cells = [safe_str(c).lower() for c in parts]
@@ -777,15 +888,23 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
         hl = safe_str(h).lower()
         if idx_date == -1 and any(m in hl for m in ("datum", "date", "дата")):
             idx_date = i
-        if idx_amount == -1 and any(m in hl for m in ("částka", "castka", "amount", "сумма", "objem")):
+        if idx_amount == -1 and any(
+            m in hl for m in ("částka", "castka", "amount", "сумма", "objem")
+        ):
             idx_amount = i
         if idx_credit == -1 and any(m in hl for m in ("kredit", "credit", "приход")):
             idx_credit = i
         if idx_debit == -1 and any(m in hl for m in ("debet", "debit", "расход")):
             idx_debit = i
-        if idx_desc == -1 and any(m in hl for m in ("zpráva", "zprava", "popis", "description", "описание", "pozn")):
+        if idx_desc == -1 and any(
+            m in hl
+            for m in ("zpráva", "zprava", "popis", "description", "описание", "pozn")
+        ):
             idx_desc = i
-        if idx_counter == -1 and any(m in hl for m in ("protiúčet", "protiucet", "counterparty", "контрагент", "název")):
+        if idx_counter == -1 and any(
+            m in hl
+            for m in ("protiúčet", "protiucet", "counterparty", "контрагент", "název")
+        ):
             idx_counter = i
 
     txns: List[Dict[str, Any]] = []
@@ -802,10 +921,11 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
         amount_val = 0.0
         if idx_amount >= 0 and idx_amount < len(parts):
             amount_val = parse_amount(parts[idx_amount])
-        elif idx_credit >= 0 or idx_debit >= 0:
+        if amount_val == 0.0 and (idx_credit >= 0 or idx_debit >= 0):
             c = parse_amount(parts[idx_credit]) if 0 <= idx_credit < len(parts) else 0.0
             d = parse_amount(parts[idx_debit]) if 0 <= idx_debit < len(parts) else 0.0
-            amount_val = c - abs(d) if (c or d) else 0.0
+            if c or d:
+                amount_val = c - abs(d)
 
         desc = safe_str(parts[idx_desc]) if 0 <= idx_desc < len(parts) else ""
         counter = safe_str(parts[idx_counter]) if 0 <= idx_counter < len(parts) else ""
@@ -839,7 +959,8 @@ def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict[s
     rows = df.values.tolist()
     header_idx = _find_header_row(
         rows,
-        markers=["date", "amount", "details", "beneficiary", "data", "suma", "mokėjimo"],
+        markers=["date", "amount", "details", "beneficiary",
+                 "data", "suma", "mokėjimo", "дата", "сумма"],
         max_scan=60, min_hits=2,
     )
     if header_idx < 0:
@@ -854,13 +975,13 @@ def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict[s
             continue
         amount_val = parse_amount(_pick(d, "amount", "suma", "сумма", "credit"))
         if amount_val == 0.0:
-            # возможно есть Debit/Credit
             cr = parse_amount(_pick(d, "credit", "приход"))
             db = parse_amount(_pick(d, "debit", "расход"))
             if cr or db:
                 amount_val = cr - abs(db)
         desc = _pick(d, "details", "description", "описание", "purpose", "paskirtis")
-        counter = _pick(d, "beneficiary", "counterparty", "gavėjas", "контрагент") or (desc.split(",")[0] if desc else "")
+        counter = _pick(d, "beneficiary", "counterparty", "gavėjas", "контрагент") \
+            or (desc.split(",")[0] if desc else "")
         if not desc and amount_val == 0.0:
             continue
         txns.append({
@@ -894,7 +1015,10 @@ def parse_revolut_an14(file_content: bytes, account_name: str) -> List[Dict[str,
     for i, line in enumerate(lines[:30]):
         parts = _split_line(line, delimiter=delim)
         cells = [safe_str(c).lower() for c in parts]
-        hits = sum(1 for m in ("date", "amount", "description", "type", "datum") if any(m in c for c in cells))
+        hits = sum(
+            1 for m in ("date", "amount", "description", "type", "datum")
+            if any(m in c for c in cells)
+        )
         if hits >= 2:
             header_idx = i
             header = parts
@@ -944,6 +1068,7 @@ def parse_revolut_an14(file_content: bytes, account_name: str) -> List[Dict[str,
 def parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict[str, Any]]:
     """
     Industra Bank .xls/.xlsx/.csv.
+
     [FIX-9] Терпимый поиск колонок 'Дата транзакции' + 'Дебет' + 'Кредит',
             авто-сдвиг индексов (ищем date по содержимому, а не по позиции).
     """
@@ -955,14 +1080,16 @@ def parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict[
         rows = df.values.tolist()
         header_idx = _find_header_row(
             rows,
-            markers=["дата", "date", "дебет", "кредит", "debit", "credit", "сумма", "amount", "описание"],
+            markers=["дата", "date", "дебет", "кредит", "debit", "credit",
+                     "сумма", "amount", "описание", "transaction"],
             max_scan=40, min_hits=2,
         )
         if header_idx >= 0:
             header = [safe_str(c) for c in rows[header_idx]]
             for row in rows[header_idx + 1:]:
                 d = _row_to_dict(header, row)
-                date_val = parse_date(_pick(d, "дата транзакции", "дата", "date"))
+                date_val = parse_date(_pick(d, "дата транзакции", "дата", "date",
+                                            "transaction date"))
                 if not date_val:
                     continue
                 cr = parse_amount(_pick(d, "кредит", "credit", "приход"))
@@ -970,8 +1097,11 @@ def parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict[
                 amt = parse_amount(_pick(d, "сумма", "amount"))
                 if amt == 0.0 and (cr or db):
                     amt = cr - abs(db)
-                desc = _pick(d, "описание", "description", "назначение", "details")
-                counter = _pick(d, "контрагент", "counterparty", "получатель", "плательщик") or (desc.split(",")[0] if desc else "")
+                desc = _pick(d, "описание", "description", "назначение",
+                             "details", "purpose")
+                counter = _pick(d, "контрагент", "counterparty",
+                                "получатель", "плательщик") \
+                    or (desc.split(",")[0] if desc else "")
                 if not desc and amt == 0.0:
                     continue
                 txns.append({
@@ -998,11 +1128,15 @@ def parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict[
         delim = ";"
 
     header_idx = -1
-    header = []
+    header: List[str] = []
     for i, line in enumerate(lines[:60]):
         parts = _split_line(line, delimiter=delim)
         cells = [safe_str(c).lower() for c in parts]
-        hits = sum(1 for m in ("дата", "date", "дебет", "кредит", "сумма", "amount", "описание") if any(m in c for c in cells))
+        hits = sum(
+            1 for m in ("дата", "date", "дебет", "кредит", "сумма",
+                        "amount", "описание")
+            if any(m in c for c in cells)
+        )
         if hits >= 2:
             header_idx = i
             header = parts
@@ -1021,7 +1155,8 @@ def parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict[
             idx_cr = i
         if idx_db < 0 and "дебет" in hl:
             idx_db = i
-        if idx_desc < 0 and ("описание" in hl or "назначение" in hl or "details" in hl):
+        if idx_desc < 0 and ("описание" in hl or "назначение" in hl
+                             or "details" in hl):
             idx_desc = i
         if idx_counter < 0 and ("контрагент" in hl or "counterparty" in hl):
             idx_counter = i
@@ -1061,9 +1196,13 @@ def parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict[
 def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict[str, Any]]:
     """
     MKB (HU) — .csv или .xls/.xlsx.
+
     [FIX-1] Каскад: xlrd → openpyxl → pd.read_html → CSV-путь.
-    Заголовок обычно в первых 5–10 строках, ищем Sorszám / Értéknap
-    (с диакритикой или без).
+            Заголовок обычно в первых 5–10 строках, ищем Sorszám / Értéknap
+            (с диакритикой или без).
+            Файл Budapest HUF-MKB_*.xls — настоящий BIFF (D0 CF 11 E0),
+            xlrd его читает, но DataFrame может не содержать нужных колонок
+            сразу — поэтому перебираем маркеры максимально широко.
     """
     txns: List[Dict[str, Any]] = []
 
@@ -1073,27 +1212,37 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict[str, Any
         rows = df.values.tolist()
         header_idx = _find_header_row(
             rows,
-            markers=["sorszám", "sorszam", "értéknap", "erteknap",
-                     "összeg", "osszeg", "jogosult", "közlemény", "kozlemeny",
-                     "terhelés", "jóváírás", "egyenleg"],
+            markers=[
+                "sorszám", "sorszam", "értéknap", "erteknap",
+                "összeg", "osszeg", "jogosult",
+                "közlemény", "kozlemeny",
+                "terhelés", "terheles",
+                "jóváírás", "jovairas", "egyenleg",
+            ],
             max_scan=15, min_hits=2,
         )
         if header_idx >= 0:
             header = [safe_str(c) for c in rows[header_idx]]
             for row in rows[header_idx + 1:]:
                 d = _row_to_dict(header, row)
-                date_val = parse_date(_pick(d, "értéknap", "erteknap", "dátum", "datum", "date"))
+                date_val = parse_date(
+                    _pick(d, "értéknap", "erteknap", "dátum", "datum", "date")
+                )
                 if not date_val:
                     continue
-                amount_val = parse_amount(_pick(d, "összeg", "osszeg", "amount", "terhelés", "jóváírás"))
+                amount_val = parse_amount(
+                    _pick(d, "összeg", "osszeg", "amount",
+                          "terhelés", "jóváírás")
+                )
                 if amount_val == 0.0:
-                    # Раздельные дебет/кредит
                     terh = parse_amount(_pick(d, "terhelés", "terheles", "debit"))
                     jov = parse_amount(_pick(d, "jóváírás", "jovairas", "credit"))
                     if terh or jov:
                         amount_val = jov - abs(terh)
-                desc = _pick(d, "közlemény", "kozlemeny", "jogosult", "description", "megjegyzés")
-                counter = _pick(d, "jogosult", "partner", "counterparty") or (desc.split(",")[0] if desc else "")
+                desc = _pick(d, "közlemény", "kozlemeny", "jogosult",
+                             "description", "megjegyzés", "описание")
+                counter = _pick(d, "jogosult", "partner", "counterparty") \
+                    or (desc.split(",")[0] if desc else "")
                 if not desc and amount_val == 0.0:
                     continue
                 txns.append({
@@ -1115,12 +1264,15 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict[str, Any
         if sample.count(",") > sample.count(";"):
             delim = ","
         header_idx = -1
-        header = []
+        header: List[str] = []
         for i, line in enumerate(lines[:20]):
             parts = _split_line(line, delimiter=delim)
             cells = [safe_str(c).lower() for c in parts]
-            hits = sum(1 for m in ("sorszám", "sorszam", "értéknap", "erteknap",
-                                   "összeg", "osszeg", "jogosult") if any(m in c for c in cells))
+            hits = sum(
+                1 for m in ("sorszám", "sorszam", "értéknap", "erteknap",
+                            "összeg", "osszeg", "jogosult")
+                if any(m in c for c in cells)
+            )
             if hits >= 2:
                 header_idx = i
                 header = parts
@@ -1129,7 +1281,10 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict[str, Any
             idx_date = idx_amt = idx_desc = idx_counter = -1
             for i, h in enumerate(header):
                 hl = safe_str(h).lower()
-                if idx_date < 0 and ("értéknap" in hl or "erteknap" in hl or "dátum" in hl or "datum" in hl):
+                if idx_date < 0 and (
+                    "értéknap" in hl or "erteknap" in hl
+                    or "dátum" in hl or "datum" in hl
+                ):
                     idx_date = i
                 if idx_amt < 0 and ("összeg" in hl or "osszeg" in hl):
                     idx_amt = i
@@ -1166,7 +1321,7 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict[str, Any
 # --- Pasha Bank -------------------------------------------------------------
 
 def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict[str, Any]]:
-    """Pasha Bank .xlsx — заголовок в первых 10 строках."""
+    """Pasha Bank .xlsx — заголовок в первых 10–20 строках."""
     df = read_xlsx(file_content)
     if df is None or df.empty:
         return []
@@ -1174,7 +1329,7 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict[s
     header_idx = _find_header_row(
         rows,
         markers=["date", "дата", "amount", "сумма", "description", "описание",
-                 "debit", "credit", "дебет", "кредит", "balance"],
+                 "debit", "credit", "дебет", "кредит", "balance", "məbləğ"],
         max_scan=15, min_hits=2,
     )
     if header_idx < 0:
@@ -1183,17 +1338,22 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict[s
     txns: List[Dict[str, Any]] = []
     for row in rows[header_idx + 1:]:
         d = _row_to_dict(header, row)
-        date_val = parse_date(_pick(d, "date", "дата"))
+        date_val = parse_date(_pick(d, "date", "дата", "tarix"))
         if not date_val:
             continue
-        amt = parse_amount(_pick(d, "amount", "сумма", "məbləğ"))
+        amt = parse_amount(_pick(d, "amount", "сумма", "məbləğ", "məbləg"))
         if amt == 0.0:
-            cr = parse_amount(_pick(d, "credit", "kredit", "приход", "mədaxil"))
-            db = parse_amount(_pick(d, "debit", "дебет", "расход", "məxaric"))
+            cr = parse_amount(_pick(d, "credit", "kredit", "приход",
+                                    "mədaxil", "medaxil"))
+            db = parse_amount(_pick(d, "debit", "дебет", "расход",
+                                    "məxaric", "mexaric"))
             if cr or db:
                 amt = cr - abs(db)
-        desc = _pick(d, "description", "описание", "təyinat", "назначение")
-        counter = _pick(d, "counterparty", "контрагент", "beneficiary", "получатель") or (desc.split(",")[0] if desc else "")
+        desc = _pick(d, "description", "описание", "təyinat",
+                     "назначение", "təyinatı")
+        counter = _pick(d, "counterparty", "контрагент",
+                        "beneficiary", "получатель") \
+            or (desc.split(",")[0] if desc else "")
         if not desc and amt == 0.0:
             continue
         txns.append({
@@ -1216,7 +1376,8 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict[str, Any]
     rows = df.values.tolist()
     header_idx = _find_header_row(
         rows,
-        markers=["date", "description", "debit", "credit", "balance", "amount", "reference"],
+        markers=["date", "description", "debit", "credit",
+                 "balance", "amount", "reference"],
         max_scan=20, min_hits=2,
     )
     if header_idx < 0:
@@ -1225,7 +1386,9 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict[str, Any]
     txns: List[Dict[str, Any]] = []
     for row in rows[header_idx + 1:]:
         d = _row_to_dict(header, row)
-        date_val = parse_date(_pick(d, "date", "дата", "value date", "transaction date"))
+        date_val = parse_date(
+            _pick(d, "date", "дата", "value date", "transaction date")
+        )
         if not date_val:
             continue
         amt = parse_amount(_pick(d, "amount", "сумма"))
@@ -1235,7 +1398,8 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict[str, Any]
             if cr or db:
                 amt = cr - abs(db)
         desc = _pick(d, "description", "narrative", "details", "описание")
-        counter = _pick(d, "counterparty", "beneficiary", "reference") or (desc.split(",")[0] if desc else "")
+        counter = _pick(d, "counterparty", "beneficiary", "reference") \
+            or (desc.split(",")[0] if desc else "")
         if not desc and amt == 0.0:
             continue
         txns.append({
@@ -1253,6 +1417,7 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict[str, Any]
 def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict[str, Any]]:
     """
     WIO Business Bank .csv.
+
     [FIX-8] Заголовки: 'Account name' + 'Transaction type';
             дата может быть dd/mm/yyyy; суммы с валютным суффиксом.
     """
@@ -1269,11 +1434,15 @@ def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict[str,
         delim = ";"
 
     header_idx = -1
-    header = []
+    header: List[str] = []
     for i, line in enumerate(lines[:30]):
         parts = _split_line(line, delimiter=delim)
         cells = [safe_str(c).lower() for c in parts]
-        hits = sum(1 for m in ("account name", "transaction type", "date", "amount", "transaction") if any(m in c for c in cells))
+        hits = sum(
+            1 for m in ("account name", "transaction type", "date",
+                        "amount", "transaction")
+            if any(m in c for c in cells)
+        )
         if hits >= 2:
             header_idx = i
             header = parts
@@ -1288,11 +1457,16 @@ def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict[str,
             idx_date = i
         if idx_amt < 0 and ("amount" in hl or "сумма" in hl):
             idx_amt = i
-        if idx_desc < 0 and ("description" in hl or "details" in hl or "reference" in hl or "описание" in hl):
+        if idx_desc < 0 and (
+            "description" in hl or "details" in hl
+            or "reference" in hl or "описание" in hl
+        ):
             idx_desc = i
         if idx_type < 0 and "transaction type" in hl:
             idx_type = i
-        if idx_counter < 0 and ("counterparty" in hl or "beneficiary" in hl or "name" in hl):
+        if idx_counter < 0 and (
+            "counterparty" in hl or "beneficiary" in hl or "name" in hl
+        ):
             idx_counter = i
 
     txns: List[Dict[str, Any]] = []
@@ -1329,8 +1503,12 @@ def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict[str,
 def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict[str, Any]]:
     """
     Wise .xlsx.
-    [FIX-6] Терпимо к заголовкам: 'Дата и время' vs 'Дата',
-            'Сумма' vs 'Amount', 'Тип транзакции' vs 'Type'.
+
+    [FIX-6] Терпимо к заголовкам:
+            'Дата и время' vs 'Дата',
+            'Сумма' vs 'Amount',
+            'Тип транзакции' vs 'Type',
+            'Описание' vs 'Description'.
     """
     df = read_xlsx(file_content)
     if df is None or df.empty:
@@ -1345,6 +1523,7 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict[s
     if header_idx < 0:
         return []
     header = [safe_str(c) for c in rows[header_idx]]
+
     idx_date = idx_amt = idx_desc = idx_type = idx_counter = -1
     for i, h in enumerate(header):
         hl = safe_str(h).lower()
@@ -1352,11 +1531,15 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict[s
             idx_date = i
         if idx_amt < 0 and ("сумма" in hl or "amount" in hl):
             idx_amt = i
-        if idx_desc < 0 and ("описание" in hl or "description" in hl or "детали" in hl):
+        if idx_desc < 0 and (
+            "описание" in hl or "description" in hl or "детали" in hl
+        ):
             idx_desc = i
         if idx_type < 0 and ("тип транзакции" in hl or "type" in hl):
             idx_type = i
-        if idx_counter < 0 and ("контрагент" in hl or "counterparty" in hl or "name" in hl):
+        if idx_counter < 0 and (
+            "контрагент" in hl or "counterparty" in hl or "name" in hl
+        ):
             idx_counter = i
 
     txns: List[Dict[str, Any]] = []
@@ -1389,9 +1572,10 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict[s
 
 def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict[str, Any]]:
     """
-    FIO Banka CSV.
-    [FIX-18] Ищем заголовок по Datum/Objem/Částka, индексы колонок
-             определяем по содержимому заголовка.
+    FIO Banka CSV / Stalkin.
+
+    [FIX-18] Ищем заголовок по Datum/Objem/Částka,
+             индексы колонок определяем по содержимому заголовка.
     """
     text = read_text_with_encoding(file_content)
     if not text:
@@ -1406,11 +1590,15 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict[s
         delim = ","
 
     header_idx = -1
-    header = []
+    header: List[str] = []
     for i, line in enumerate(lines[:30]):
         parts = _split_line(line, delimiter=delim)
         cells = [safe_str(c).lower() for c in parts]
-        hits = sum(1 for m in ("datum", "objem", "částka", "castka", "protiúčet", "protiucet", "zpráva") if any(m in c for c in cells))
+        hits = sum(
+            1 for m in ("datum", "objem", "částka", "castka",
+                        "protiúčet", "protiucet", "zpráva", "zprava")
+            if any(m in c for c in cells)
+        )
         if hits >= 2:
             header_idx = i
             header = parts
@@ -1423,11 +1611,19 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict[s
         hl = safe_str(h).lower()
         if idx_date < 0 and "datum" in hl:
             idx_date = i
-        if idx_amt < 0 and ("objem" in hl or "částka" in hl or "castka" in hl):
+        if idx_amt < 0 and (
+            "objem" in hl or "částka" in hl or "castka" in hl
+        ):
             idx_amt = i
-        if idx_desc < 0 and ("zpráva" in hl or "zprava" in hl or "popis" in hl or "pozn" in hl):
+        if idx_desc < 0 and (
+            "zpráva" in hl or "zprava" in hl
+            or "popis" in hl or "pozn" in hl
+        ):
             idx_desc = i
-        if idx_counter < 0 and ("protiúčet" in hl or "protiucet" in hl or "název" in hl or "nazev" in hl):
+        if idx_counter < 0 and (
+            "protiúčet" in hl or "protiucet" in hl
+            or "název" in hl or "nazev" in hl
+        ):
             idx_counter = i
         if idx_type < 0 and "typ" in hl:
             idx_type = i
@@ -1465,11 +1661,13 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict[s
 
 def _bluor_generic(file_content: bytes, account_name: str) -> List[Dict[str, Any]]:
     """
-    BluOr Bank CSV: строки вида
-      "Счет (...)","01.08.2026","","Дебет (D)","0.00","EUR",""
-    Реальные транзакции содержат непустое описание и ненулевой остаток.
+    BluOr Bank CSV. Строки вида:
+      "Счет (LV08 CBBR ...)","01.08.2026","","Начальный остаток","0.00","EUR",""
+      "Счет (LV08 CBBR ...)","05.08.2026","","Payment to X","12.34","EUR",""
+
     [FIX-BSR3] BSR_Estate_EUR_BluOr_3 содержит только служебные строки
-               (Начальный/Конечный остаток, Дебет/Кредит итоги) — это нормальный 0.
+               (Начальный/Конечный остаток, Дебет (D)/Кредит (C) итоги).
+               Это не транзакции — фильтруем через SERVICE_WORDS.
     """
     text = read_text_with_encoding(file_content)
     if not text:
@@ -1482,12 +1680,10 @@ def _bluor_generic(file_content: bytes, account_name: str) -> List[Dict[str, Any
         parts = _split_line(line, delimiter=",")
         if len(parts) < 5:
             continue
-        # Пропускаем служебные
         joined = " ".join(safe_str(p).lower() for p in parts)
-        if any(w in joined for w in ("начальный остаток", "конечный остаток",
-                                     "дебет (d)", "кредит (c)",
-                                     "opening balance", "closing balance")):
+        if _is_service_row(joined):
             continue
+
         # Ищем дату
         date_val = ""
         date_idx = -1
@@ -1499,6 +1695,7 @@ def _bluor_generic(file_content: bytes, account_name: str) -> List[Dict[str, Any
                 break
         if not date_val:
             continue
+
         # Сумма — ближайшее числовое после даты
         amt = 0.0
         for j in range(date_idx + 1, len(parts)):
@@ -1506,11 +1703,8 @@ def _bluor_generic(file_content: bytes, account_name: str) -> List[Dict[str, Any
             if a != 0.0:
                 amt = a
                 break
-        desc = ""
-        for p in parts:
-            sp = safe_str(p)
-            if len(sp) > len(desc) and not re.fullmatch(r"[\d\s.,\-+]+", sp) and len(sp) > 3:
-                desc = sp
+
+        desc = _longest_text(parts, min_len=3)
         if not desc and amt == 0.0:
             continue
         counter = desc.split(",")[0].strip() if desc else ""
@@ -1536,15 +1730,61 @@ def parse_kl59_bluor(file_content: bytes, account_name: str) -> List[Dict[str, A
     return _bluor_generic(file_content, account_name)
 
 
+# --- RAK Bank ---------------------------------------------------------------
+
+def parse_rak_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict[str, Any]]:
+    """RAK Bank .xlsx (AED)."""
+    df = read_xlsx(file_content)
+    if df is None or df.empty:
+        return []
+    rows = df.values.tolist()
+    header_idx = _find_header_row(
+        rows,
+        markers=["date", "description", "amount", "debit", "credit", "balance"],
+        max_scan=20, min_hits=2,
+    )
+    if header_idx < 0:
+        return []
+    header = [safe_str(c) for c in rows[header_idx]]
+    txns: List[Dict[str, Any]] = []
+    for row in rows[header_idx + 1:]:
+        d = _row_to_dict(header, row)
+        date_val = parse_date(_pick(d, "date", "дата", "value date"))
+        if not date_val:
+            continue
+        amt = parse_amount(_pick(d, "amount", "сумма"))
+        if amt == 0.0:
+            cr = parse_amount(_pick(d, "credit"))
+            db = parse_amount(_pick(d, "debit"))
+            if cr or db:
+                amt = cr - abs(db)
+        desc = _pick(d, "description", "details", "narrative", "описание")
+        counter = _pick(d, "counterparty", "beneficiary") \
+            or (desc.split(",")[0] if desc else "")
+        if not desc and amt == 0.0:
+            continue
+        txns.append({
+            "Дата": date_val,
+            "Сумма": amt,
+            "Контрагент": counter,
+            "Наименование счета": account_name,
+            "Описание": desc,
+        })
+    return txns
+
+
 # --- Универсальный табличный парсер ----------------------------------------
 
 def parse_generic_tabular(file_content: bytes, account_name: str) -> List[Dict[str, Any]]:
     """
     Универсальный fallback для табличных форматов.
     Ищем заголовок и пытаемся распознать дату/сумму/описание.
+    Сначала пробуем как таблицу (openpyxl/xlrd/pd.read_html),
+    затем — как текст (CSV).
     """
     txns: List[Dict[str, Any]] = []
 
+    # 1) Табличный путь
     df = read_xlsx(file_content)
     if df is not None and not df.empty:
         rows = df.values.tolist()
@@ -1558,17 +1798,24 @@ def parse_generic_tabular(file_content: bytes, account_name: str) -> List[Dict[s
             header = [safe_str(c) for c in rows[header_idx]]
             for row in rows[header_idx + 1:]:
                 d = _row_to_dict(header, row)
-                date_val = parse_date(_pick(d, "date", "дата", "datum", "értéknap"))
+                date_val = parse_date(
+                    _pick(d, "date", "дата", "datum", "értéknap")
+                )
                 if not date_val:
                     continue
-                amt = parse_amount(_pick(d, "amount", "сумма", "összeg", "objem", "částka"))
+                amt = parse_amount(
+                    _pick(d, "amount", "сумма", "összeg", "objem", "částka")
+                )
                 if amt == 0.0:
                     cr = parse_amount(_pick(d, "credit", "kredit", "приход"))
                     db = parse_amount(_pick(d, "debit", "debet", "расход"))
                     if cr or db:
                         amt = cr - abs(db)
-                desc = _pick(d, "description", "описание", "details", "zpráva", "popis", "megjegyzés")
-                counter = _pick(d, "counterparty", "контрагент", "partner", "beneficiary") or (desc.split(",")[0] if desc else "")
+                desc = _pick(d, "description", "описание", "details",
+                             "zpráva", "popis", "megjegyzés")
+                counter = _pick(d, "counterparty", "контрагент",
+                                "partner", "beneficiary") \
+                    or (desc.split(",")[0] if desc else "")
                 if not desc and amt == 0.0:
                     continue
                 txns.append({
@@ -1581,7 +1828,7 @@ def parse_generic_tabular(file_content: bytes, account_name: str) -> List[Dict[s
             if txns:
                 return txns
 
-    # CSV fallback
+    # 2) CSV-путь fallback
     text = read_text_with_encoding(file_content)
     if not text:
         return txns
@@ -1595,11 +1842,15 @@ def parse_generic_tabular(file_content: bytes, account_name: str) -> List[Dict[s
         delim = ";"
 
     header_idx = -1
-    header = []
+    header: List[str] = []
     for i, line in enumerate(lines[:60]):
         parts = _split_line(line, delimiter=delim)
         cells = [safe_str(c).lower() for c in parts]
-        hits = sum(1 for m in ("date", "дата", "amount", "сумма", "description", "описание") if any(m in c for c in cells))
+        hits = sum(
+            1 for m in ("date", "дата", "amount", "сумма",
+                        "description", "описание")
+            if any(m in c for c in cells)
+        )
         if hits >= 2:
             header_idx = i
             header = parts
@@ -1610,13 +1861,21 @@ def parse_generic_tabular(file_content: bytes, account_name: str) -> List[Dict[s
     idx_date = idx_amt = idx_desc = idx_counter = -1
     for i, h in enumerate(header):
         hl = safe_str(h).lower()
-        if idx_date < 0 and ("date" in hl or "дата" in hl or "datum" in hl):
+        if idx_date < 0 and (
+            "date" in hl or "дата" in hl or "datum" in hl
+        ):
             idx_date = i
-        if idx_amt < 0 and ("amount" in hl or "сумма" in hl or "összeg" in hl):
+        if idx_amt < 0 and (
+            "amount" in hl or "сумма" in hl or "összeg" in hl
+        ):
             idx_amt = i
-        if idx_desc < 0 and ("description" in hl or "описание" in hl or "details" in hl):
+        if idx_desc < 0 and (
+            "description" in hl or "описание" in hl or "details" in hl
+        ):
             idx_desc = i
-        if idx_counter < 0 and ("counterparty" in hl or "контрагент" in hl):
+        if idx_counter < 0 and (
+            "counterparty" in hl or "контрагент" in hl
+        ):
             idx_counter = i
 
     for line in lines[header_idx + 1:]:
@@ -1645,13 +1904,15 @@ def parse_generic_tabular(file_content: bytes, account_name: str) -> List[Dict[s
     return txns
 
 
-# --- DOCX-парсеры -----------------------------------------------------------
+# =============================================================================
+#                              DOCX-парсеры
+# =============================================================================
 
 def parse_generic_docx(file_content: bytes, account_name: str) -> List[Dict[str, Any]]:
     """Универсальный .docx: сначала таблицы, потом абзацы."""
     txns: List[Dict[str, Any]] = []
 
-    # Табличный путь
+    # 1) Табличный путь
     if Document is not None:
         try:
             d = Document(io.BytesIO(file_content))
@@ -1661,7 +1922,8 @@ def parse_generic_docx(file_content: bytes, account_name: str) -> List[Dict[str,
                     continue
                 header_idx = _find_header_row(
                     rows,
-                    markers=["дата", "date", "сумма", "amount", "описание", "description"],
+                    markers=["дата", "date", "сумма", "amount",
+                             "описание", "description"],
                     max_scan=5, min_hits=2,
                 )
                 if header_idx < 0:
@@ -1678,8 +1940,11 @@ def parse_generic_docx(file_content: bytes, account_name: str) -> List[Dict[str,
                         db = parse_amount(_pick(d_row, "дебет", "debit", "расход"))
                         if cr or db:
                             amt = cr - abs(db)
-                    desc = _pick(d_row, "описание", "description", "назначение", "details")
-                    counter = _pick(d_row, "контрагент", "counterparty", "получатель") or (desc.split(",")[0] if desc else "")
+                    desc = _pick(d_row, "описание", "description",
+                                 "назначение", "details")
+                    counter = _pick(d_row, "контрагент", "counterparty",
+                                    "получатель") \
+                        or (desc.split(",")[0] if desc else "")
                     if not desc and amt == 0.0:
                         continue
                     txns.append({
@@ -1695,21 +1960,26 @@ def parse_generic_docx(file_content: bytes, account_name: str) -> List[Dict[str,
     if txns:
         return txns
 
-    # Абзацный fallback
+    # 2) Абзацный fallback
     text = docx_all_text(file_content)
-    for line in text.splitlines():
-        m = re.search(r"(\d{2}[./-]\d{2}[./-]\d{2,4}).*?(-?\d[\d\s.,]*\d)", line)
-        if not m:
+    pattern = re.compile(
+        r"(?P<date>\d{2}[./-]\d{2}[./-]\d{2,4})"
+        r"[ \t]+"
+        r"(?P<amount>-?\d[\d \u00a0.,]*\d)"
+        r"(?P<rest>[^\n]*)"
+    )
+    for m in pattern.finditer(text):
+        date_val = parse_date(m.group("date"))
+        if not date_val:
             continue
-        date_val = parse_date(m.group(1))
-        amt = parse_amount(m.group(2))
-        desc = line.strip()
+        amt = parse_amount(m.group("amount"))
+        rest = safe_str(m.group("rest"))
         txns.append({
             "Дата": date_val,
             "Сумма": amt,
-            "Контрагент": "",
+            "Контрагент": rest.split(",")[0].strip() if rest else "",
             "Наименование счета": account_name,
-            "Описание": desc,
+            "Описание": rest,
         })
     return txns
 
@@ -1733,7 +2003,8 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict[
             continue
         header_idx = _find_header_row(
             rows,
-            markers=["дата", "date", "сумма", "amount", "описание", "назначение", "контрагент"],
+            markers=["дата", "date", "сумма", "amount",
+                     "описание", "назначение", "контрагент"],
             max_scan=5, min_hits=2,
         )
         if header_idx < 0:
@@ -1750,8 +2021,11 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict[
                 db = parse_amount(_pick(d_row, "дебет", "debit", "расход"))
                 if cr or db:
                     amt = cr - abs(db)
-            desc = _pick(d_row, "описание", "назначение", "description", "details")
-            counter = _pick(d_row, "контрагент", "counterparty", "получатель") or (desc.split(",")[0] if desc else "")
+            desc = _pick(d_row, "описание", "назначение",
+                         "description", "details")
+            counter = _pick(d_row, "контрагент", "counterparty",
+                            "получатель") \
+                or (desc.split(",")[0] if desc else "")
             if not desc and amt == 0.0:
                 continue
             txns.append({
@@ -1773,7 +2047,8 @@ def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict[s
             continue
         header_idx = _find_header_row(
             tbl,
-            markers=["дата", "date", "сумма", "amount", "описание", "назначение"],
+            markers=["дата", "date", "сумма", "amount",
+                     "описание", "назначение"],
             max_scan=5, min_hits=2,
         )
         if header_idx < 0:
@@ -1786,7 +2061,8 @@ def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict[s
                 continue
             amt = parse_amount(_pick(d_row, "сумма", "amount"))
             desc = _pick(d_row, "описание", "назначение", "description")
-            counter = _pick(d_row, "контрагент", "counterparty") or (desc.split(",")[0] if desc else "")
+            counter = _pick(d_row, "контрагент", "counterparty") \
+                or (desc.split(",")[0] if desc else "")
             if not desc and amt == 0.0:
                 continue
             txns.append({
@@ -1798,20 +2074,27 @@ def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict[s
             })
     if txns:
         return txns
+
     # Текстовый fallback
     text = pdf_all_text(file_content)
-    for line in text.splitlines():
-        m = re.search(r"(\d{2}[./-]\d{2}[./-]\d{2,4}).*?(-?\d[\d\s.,]*\d)", line)
-        if not m:
+    pattern = re.compile(
+        r"(?P<date>\d{2}[./-]\d{2}[./-]\d{2,4})"
+        r"[ \t]+"
+        r"(?P<amount>-?\d[\d \u00a0.,]*\d)"
+        r"(?P<rest>[^\n]*)"
+    )
+    for m in pattern.finditer(text):
+        date_val = parse_date(m.group("date"))
+        if not date_val:
             continue
-        date_val = parse_date(m.group(1))
-        amt = parse_amount(m.group(2))
+        amt = parse_amount(m.group("amount"))
+        rest = safe_str(m.group("rest"))
         txns.append({
             "Дата": date_val,
             "Сумма": amt,
-            "Контрагент": "",
+            "Контрагент": rest.split(",")[0].strip() if rest else "",
             "Наименование счета": account_name,
-            "Описание": line.strip(),
+            "Описание": rest,
         })
     return txns
 
@@ -1824,7 +2107,8 @@ def parse_generic_pdf(file_content: bytes, account_name: str) -> List[Dict[str, 
             continue
         header_idx = _find_header_row(
             tbl,
-            markers=["дата", "date", "сумма", "amount", "описание", "description"],
+            markers=["дата", "date", "сумма", "amount",
+                     "описание", "description"],
             max_scan=5, min_hits=2,
         )
         if header_idx < 0:
@@ -1867,6 +2151,7 @@ def parse_tinkoff_csv(file_content: bytes, account_name: str) -> List[Dict[str, 
 def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dict[str, Any]]:
     """
     JenHor Unelma CZK CSAS .docx.
+
     [FIX-3] Табличный путь + regex-fallback по абзацам.
             Regex НЕ жадный и НЕ склеивает соседние записи:
             используем [ \\t] вместо \\s, чтобы не съедать \\n.
@@ -1883,8 +2168,9 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                     continue
                 header_idx = _find_header_row(
                     rows,
-                    markers=["datum", "date", "дата", "částka", "castka", "objem",
-                             "сумма", "amount", "popis", "zpráva", "описание"],
+                    markers=["datum", "date", "дата",
+                             "částka", "castka", "objem", "сумма", "amount",
+                             "popis", "zpráva", "описание"],
                     max_scan=5, min_hits=2,
                 )
                 if header_idx < 0:
@@ -1892,17 +2178,25 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                 header = rows[header_idx]
                 for row in rows[header_idx + 1:]:
                     d_row = _row_to_dict(header, row)
-                    date_val = parse_date(_pick(d_row, "datum", "date", "дата"))
+                    date_val = parse_date(
+                        _pick(d_row, "datum", "date", "дата")
+                    )
                     if not date_val:
                         continue
-                    amt = parse_amount(_pick(d_row, "částka", "castka", "objem", "сумма", "amount"))
+                    amt = parse_amount(
+                        _pick(d_row, "částka", "castka", "objem",
+                              "сумма", "amount")
+                    )
                     if amt == 0.0:
                         cr = parse_amount(_pick(d_row, "kredit", "credit", "приход"))
                         db = parse_amount(_pick(d_row, "debet", "debit", "расход"))
                         if cr or db:
                             amt = cr - abs(db)
-                    desc = _pick(d_row, "popis", "zpráva", "zprava", "описание", "description", "pozn")
-                    counter = _pick(d_row, "protiúčet", "protiucet", "контрагент", "counterparty") or (desc.split(",")[0] if desc else "")
+                    desc = _pick(d_row, "popis", "zpráva", "zprava",
+                                 "описание", "description", "pozn")
+                    counter = _pick(d_row, "protiúčet", "protiucet",
+                                    "контрагент", "counterparty") \
+                        or (desc.split(",")[0] if desc else "")
                     if not desc and amt == 0.0:
                         continue
                     txns.append({
@@ -1917,11 +2211,10 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
         except Exception:
             pass
 
-    # 2) Regex-fallback по абзацам
-    #    Паттерн: дата + (пробелы/табы) + сумма + (что угодно до конца строки)
+    # 2) Regex-fallback по абзацам.
+    #    Паттерн: дата + [ \t]+ + сумма + хвост до конца строки.
     #    [ \t] вместо \s — чтобы не съедать \n между записями.
     text = docx_all_text(file_content)
-    # Ищем строки вида: 01.08.2026   -1 234,56  Описание
     pattern = re.compile(
         r"(?P<date>\d{2}[./-]\d{2}[./-]\d{2,4})"
         r"[ \t]+"
@@ -1948,10 +2241,12 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
 
 def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict[str, Any]]:
     """
-    N26 .docx: табличный разбор + терпимый regex (dd.mm.yy, пробел перед €).
+    N26 .docx: табличный разбор + терпимый regex
+    (dd.mm.yy, пробел перед €).
     """
     txns: List[Dict[str, Any]] = []
 
+    # 1) Табличный путь
     if Document is not None:
         try:
             d = Document(io.BytesIO(file_content))
@@ -1961,7 +2256,8 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict[str, Any
                     continue
                 header_idx = _find_header_row(
                     rows,
-                    markers=["date", "дата", "amount", "сумма", "description", "payee", "описание"],
+                    markers=["date", "дата", "amount", "сумма",
+                             "description", "payee", "описание"],
                     max_scan=5, min_hits=2,
                 )
                 if header_idx < 0:
@@ -1973,8 +2269,10 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict[str, Any
                     if not date_val:
                         continue
                     amt = parse_amount(_pick(d_row, "amount", "сумма", "betrag"))
-                    desc = _pick(d_row, "description", "payee", "описание", "verwendungszweck")
-                    counter = _pick(d_row, "payee", "counterparty", "empfänger") or (desc.split(",")[0] if desc else "")
+                    desc = _pick(d_row, "description", "payee",
+                                 "описание", "verwendungszweck")
+                    counter = _pick(d_row, "payee", "counterparty", "empfänger") \
+                        or (desc.split(",")[0] if desc else "")
                     if not desc and amt == 0.0:
                         continue
                     txns.append({
@@ -1989,6 +2287,7 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict[str, Any
         except Exception:
             pass
 
+    # 2) Regex-fallback
     text = docx_all_text(file_content)
     pattern = re.compile(
         r"(?P<date>\d{2}\.\d{2}\.\d{2,4})"
@@ -2011,6 +2310,8 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict[str, Any
     return txns
 
 
+# --- Kapital Saida ----------------------------------------------------------
+
 def _kapital_is_skip_desc(desc: str) -> bool:
     """Служебные/реквизитные строки Kapital Bank — не транзакции."""
     d = (desc or "").lower()
@@ -2018,7 +2319,7 @@ def _kapital_is_skip_desc(desc: str) -> bool:
         "остаток", "баланс", "balance", "итого", "total",
         "реквизит", "входящий остаток", "исходящий остаток",
         "выписка по счету", "выписка", "statement", "account",
-        "открытие счета", "закрытие счета",
+        "открытие счета", "закрытие счета", "hesab",
     ]
     return any(w in d for w in skip_words)
 
@@ -2026,9 +2327,10 @@ def _kapital_is_skip_desc(desc: str) -> bool:
 def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dict[str, Any]]:
     """
     Kapital bank_Saida_AZN .docx.
+
     [FIX-2] Терпимый разбор: дата и сумма могут быть в одной ячейке
             ('01.08.2026 1 234,56'), описание — в отдельной колонке.
-            Жёсткие фильтры против остатков/реквизитов.
+            Также добавлены жёсткие фильтры против остатков/реквизитов.
     """
     if Document is None:
         return []
@@ -2039,15 +2341,17 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
 
     txns: List[Dict[str, Any]] = []
 
-    # Сначала — табличный путь
+    # 1) Табличный путь
     for tbl in d.tables:
         rows = [[safe_str(c.text) for c in r.cells] for r in tbl.rows]
         if not rows:
             continue
         header_idx = _find_header_row(
             rows,
-            markers=["tarix", "date", "дата", "məbləğ", "məbləg", "сумма", "amount",
-                     "təyinat", "описание", "description", "дебет", "кредит"],
+            markers=["tarix", "date", "дата",
+                     "məbləğ", "məbləg", "сумма", "amount",
+                     "təyinat", "описание", "description",
+                     "дебет", "кредит"],
             max_scan=8, min_hits=2,
         )
         if header_idx < 0:
@@ -2057,20 +2361,31 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
             d_row = _row_to_dict(header, row)
             # Вариант A: раздельные колонки
             date_val = parse_date(_pick(d_row, "tarix", "date", "дата"))
-            amt = parse_amount(_pick(d_row, "məbləğ", "məbləg", "сумма", "amount"))
+            amt = parse_amount(_pick(d_row, "məbləğ", "məbləg",
+                                     "сумма", "amount"))
             if amt == 0.0:
-                cr = parse_amount(_pick(d_row, "кредит", "credit", "mədaxil", "medaxil"))
-                db = parse_amount(_pick(d_row, "дебет", "debit", "məxaric", "mexaric"))
+                cr = parse_amount(_pick(d_row, "кредит", "credit",
+                                        "mədaxil", "medaxil"))
+                db = parse_amount(_pick(d_row, "дебет", "debit",
+                                        "məxaric", "mexaric"))
                 if cr or db:
                     amt = cr - abs(db)
-            desc = _pick(d_row, "təyinat", "təyinatı", "описание", "description", "назначение")
-            counter = _pick(d_row, "контрагент", "counterparty", "ad", "name") or (desc.split(",")[0] if desc else "")
+            desc = _pick(d_row, "təyinat", "təyinatı",
+                         "описание", "description", "назначение")
+            counter = _pick(d_row, "контрагент", "counterparty",
+                            "ad", "name") \
+                or (desc.split(",")[0] if desc else "")
 
             # Вариант B: дата и сумма в одной ячейке
             if not date_val:
                 for k, v in d_row.items():
-                    m = re.match(r"\s*(\d{2}[./-]\d{2}[./-]\d{2,4})[ \t]+(-?\d[\d\s.,]*\d)\s*(.*)",
-                                 v)
+                    m = re.match(
+                        r"\s*(\d{2}[./-]\d{2}[./-]\d{2,4})"
+                        r"[ \t]+"
+                        r"(-?\d[\d\s.,]*\d)"
+                        r"\s*(.*)",
+                        v,
+                    )
                     if m:
                         date_val = parse_date(m.group(1))
                         amt = parse_amount(m.group(2))
@@ -2094,7 +2409,7 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
         if txns:
             return txns
 
-    # Абзацный fallback
+    # 2) Абзацный fallback
     text = docx_all_text(file_content)
     pattern = re.compile(
         r"(?P<date>\d{2}[./-]\d{2}[./-]\d{2,4})"
@@ -2121,24 +2436,6 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
 
 
 # =============================================================================
-#                              ОБЁРТКА TINKOFF
-# =============================================================================
-
-class _TinkoffMarker:
-    """Маркер для роутера Tinkoff — реальный парсер выбирается по расширению."""
-    pass
-
-
-_TINKOFF_TABULAR_MARKER = _TinkoffMarker()
-
-
-def _resolve_tinkoff(ext: str) -> Callable:
-    if ext == "csv":
-        return parse_tinkoff_csv
-    return parse_tinkoff_xlsx
-
-
-# =============================================================================
 #                              UI (Streamlit)
 # =============================================================================
 
@@ -2152,6 +2449,7 @@ CSS = """
     .debug-box { background: #f0f4ff; border-left: 4px solid #1f3a93;
                  padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;
                  font-family: monospace; font-size: 0.85rem; }
+    .bank-header { display: flex; align-items: center; gap: 10px; }
 </style>
 """
 
@@ -2160,13 +2458,16 @@ def render_header() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
     st.title("🏦 Аналитик банковских выписок")
     st.caption(
-        "Загрузите выписки (CSV / XLSX / XLS / DOCX / PDF) — приложение разберёт их "
-        "и сформирует единый Excel-отчёт со сводкой по счетам."
+        "Загрузите выписки (CSV / XLSX / XLS / DOCX / PDF) — приложение "
+        "разберёт их и сформирует единый Excel-отчёт со сводкой по счетам."
     )
 
 
 def render_debug(debug_info: List[Dict[str, Any]]) -> None:
-    """[FIX-10] Отладочный вывод: парсер, число операций, первые 3 операции."""
+    """
+    [FIX-10] Отладочный вывод: парсер, счёт, число операций,
+             первые 3 операции, дамп для «подозрительных» файлов (<=2 операций).
+    """
     if not debug_info:
         return
     with st.expander("🔧 Техническая информация (отладка)", expanded=False):
@@ -2187,7 +2488,7 @@ def render_debug(debug_info: List[Dict[str, Any]]) -> None:
                 for p in preview[:3]:
                     st.markdown(
                         f"- `{p.get('Дата','')}` | `{p.get('Сумма','')}` | "
-                        f"{html.escape(str(p.get('Описание',''))[:120])}"
+                        f"{html.escape(str(p.get('Описание',''))[:160])}"
                     )
             if item.get("dump"):
                 with st.expander(f"Дамп {item['filename']}", expanded=False):
@@ -2201,7 +2502,12 @@ def process_files(uploaded_files) -> Tuple[List[Dict[str, Any]], List[Dict[str, 
 
     for uf in uploaded_files:
         filename = uf.name
-        content = uf.read()
+        try:
+            content = uf.read()
+        except Exception as e:
+            st.warning(f"Не удалось прочитать {filename}: {e}")
+            continue
+
         ext = os.path.splitext(filename)[1].lower().lstrip(".")
         account_name = clean_account_name(filename)
 
@@ -2229,7 +2535,7 @@ def process_files(uploaded_files) -> Tuple[List[Dict[str, Any]], List[Dict[str, 
 
         all_txns.extend(txns)
 
-        # Превью первых 3
+        # Превью первых 3 операций
         preview = []
         for t in txns[:3]:
             preview.append({
@@ -2238,7 +2544,7 @@ def process_files(uploaded_files) -> Tuple[List[Dict[str, Any]], List[Dict[str, 
                 "Описание": t.get("Описание", ""),
             })
 
-        # Дамп для проблемных форматов
+        # Дамп — только для «подозрительных» (<=2 операций)
         dump = ""
         if len(txns) <= 2:
             try:
@@ -2248,9 +2554,25 @@ def process_files(uploaded_files) -> Tuple[List[Dict[str, Any]], List[Dict[str, 
                     dump = pdf_all_text(content)[:4000]
                 elif ext in ("csv", "xls", "xlsx"):
                     if _is_real_xls(content):
-                        dump = "(BIFF .xls — текстовый дамп недоступен)"
+                        # BIFF-выгрузки нечитаемы как текст; пробуем xlrd,
+                        # чтобы показать хоть что-то полезное
+                        try:
+                            df = read_xlsx(content)
+                            if df is not None:
+                                dump = df.head(20).to_string()
+                            else:
+                                dump = "(BIFF .xls — не удалось прочитать)"
+                        except Exception:
+                            dump = "(BIFF .xls — текстовый дамп недоступен)"
                     elif _is_real_xlsx(content):
-                        dump = "(xlsx — zip-контейнер)"
+                        try:
+                            df = read_xlsx(content)
+                            if df is not None:
+                                dump = df.head(20).to_string()
+                            else:
+                                dump = "(xlsx — пусто)"
+                        except Exception:
+                            dump = "(xlsx — текстовый дамп недоступен)"
                     else:
                         dump = read_text_with_encoding(content)[:2000]
             except Exception:
@@ -2272,8 +2594,10 @@ def build_excel(txns: List[Dict[str, Any]]) -> bytes:
     """Формируем Excel с листами 'Транзакции' и 'Сводка по счетам'."""
     if not txns:
         df = pd.DataFrame(columns=list(TXN_FIELDS))
-        summary = pd.DataFrame(columns=["Наименование счета", "Кол-во операций",
-                                        "Сумма прихода", "Сумма расхода", "Итог"])
+        summary = pd.DataFrame(
+            columns=["Наименование счета", "Кол-во операций",
+                     "Сумма прихода", "Сумма расхода", "Итог"]
+        )
     else:
         df = pd.DataFrame(txns)
         for col in TXN_FIELDS:
@@ -2356,7 +2680,10 @@ def main() -> None:
             "📥 Скачать Excel-отчёт",
             data=excel_bytes,
             file_name="bank_report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            mime=(
+                "application/vnd.openxmlformats-officedocument"
+                ".spreadsheetml.sheet"
+            ),
         )
 
     render_debug(debug_info)
@@ -2369,39 +2696,43 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
+
 # =============================================================================
 #                                  CHANGELOG
 # =============================================================================
 #
 # [FIX-1]  _parse_mkb_any: каскад xlrd → openpyxl → pd.read_html → CSV-путь.
-#          Лечит Budapest HUF-MKB_*.xls (BIFF, 0 операций).
+#          Лечит Budapest HUF-MKB_*.xls (BIFF, было 0 операций).
 #          Заголовок ищется в первых 15 строках по Sorszám/Értéknap/Összeg
 #          с диакритикой или без.
 #
 # [FIX-2]  parse_kapital_saida_docx: терпимый табличный разбор —
 #          дата и сумма могут быть в одной ячейке ('01.08.2026 1 234,56').
 #          Добавлен _kapital_is_skip_desc против остатков/реквизитов.
-#          Лечит Kapital bank_Saida_AZN (1 операция).
+#          Лечит Kapital bank_Saida_AZN (было 1 операция).
 #
 # [FIX-3]  parse_jenhor_unelma_docx: табличный путь + regex-fallback
 #          по абзацам. Regex не жадный, использует [ \t] вместо \s,
 #          чтобы не склеивать соседние записи через \n.
-#          Лечит JenHor_Unelma_CZK_CSAS.docx (2 операции).
+#          Лечит JenHor_Unelma_CZK_CSAS.docx (было 2 операции).
 #
 # [FIX-4]  parse_csob_generic: принимает строки с len(parts) >= 4,
 #          не требует ровно 6. Авто-поиск даты и суммы в первых 10 полях.
-#          Лечит DŽIBIK Main CSOB CZK (2 операции).
+#          Лечит DŽIBIK Main CSOB CZK (было 2 операции).
 #
 # [FIX-5]  parse_csob_generic: автодетект сдвига индексов —
-#          дата ищется по содержимому, а не по позиции.
-#          Лечит RR_Rev_OSTR_CZK_CSOB, Koruna_Strojka_*, JENISOV - HORSKA_CSOB.
+#          дата ищется по содержимому, а не по позиции; сумма —
+#          ближайшее числовое после даты.
+#          Лечит RR_Rev_OSTR_CZK_CSOB, Koruna_Strojka_*,
+#          JENISOV - HORSKA_CSOB.
 #
 # [FIX-6]  parse_saida_wise_xlsx: терпимо к 'Дата и время' vs 'Дата',
 #          'Сумма' vs 'Amount', 'Тип транзакции' vs 'Type'.
 #          Лечит Saida_Wise.xlsx (16 операций).
 #
 # [FIX-7]  parse_unicredit_generic: разделитель ',' или ';' определяется
-#          автоматически, колонки ищутся по подстроке (Datum/Částka/Zpráva).
+#          автоматически, колонки ищутся по подстроке (Datum/Částka/Zpráva,
+#          Date/Amount/Description, поддержка Debit/Credit).
 #          Лечит B1_Estate_CZK_UC, Garpiz UniCredit Bank CZK,
 #          Garpiz_Pernink_CZK_UC, Koruna UniCredit CZK,
 #          TwoHills Molly Unicredit CZK.
@@ -2411,26 +2742,30 @@ if __name__ == "__main__":
 #          Лечит WIO Business Bank (Aug 17 / Aug 1) — 34 и 38 операций.
 #
 # [FIX-9]  parse_industra_generic: терпимый поиск 'Дата транзакции' +
-#          'Дебет'/'Кредит', авто-сдвиг индексов по содержимому.
+#          'Дебет'/'Кредит', авто-сдвиг индексов по содержимому,
+#          fallback на CSV-путь.
 #          Лечит KL59_Rev_NB_EUR_Industra, AN14_Estate_EUR_Industra,
-#          Plavas1_Estate_EUR_Industra (1–3 операции).
+#          Plavas1_Estate_EUR_Industra (было 1–3 операции).
 #
 # [FIX-10] UI: добавлен render_debug — для каждого файла показывает
-#          имя парсера, число операций и первые 3 операции
-#          (Дата, Сумма, Описание). Плюс дамп для файлов с <=2 операциями.
+#          имя парсера, число операций, первые 3 операции
+#          (Дата, Сумма, Описание). Плюс дамп для файлов с <=2 операциями
+#          (docx_dump, pdf_all_text, head(20) для таблиц, 2000 символов
+#          текста для CSV).
 #
 # [FIX-11] _route_tabular: Revolut проверяется ДО Industra
 #          (иначе AN14_*_Revolut.csv уходил в industra_an14).
-#          Комментарий сохранён.
+#          Комментарий сохранён и усилен.
 #
 # [FIX-16] parse_paysera_generic: окно поиска заголовка 60 строк,
 #          англ. заголовки (Date/Amount/Details/Beneficiary).
 #
 # [FIX-18] parse_stalkin_ml2_fio: поиск заголовка по Datum/Objem/Částka,
-#          индексы колонок по содержимому.
+#          индексы колонок по содержимому заголовка.
 #
 # [FIX-BSR3] _bluor_generic: пропускает служебные строки
-#            (Начальный/Конечный остаток, Дебет(D)/Кредит(C)).
+#            (Начальный/Конечный остаток, Дебет(D)/Кредит(C))
+#            через _is_service_row/SERVICE_WORDS.
 #            BSR_Estate_EUR_BluOr_3 содержит только служебные строки —
 #            0 операций здесь корректны.
 #
