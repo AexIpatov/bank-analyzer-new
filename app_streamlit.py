@@ -409,27 +409,66 @@ def read_text_with_encoding(file_content: bytes) -> str:
     """
     Пробуем разные кодировки. Приоритет: UTF-8 (с BOM и без), ISO-8859-2 (latin-2, для венгерского),
     CP1250 (чешский/словацкий/венгерский), CP1251 (кириллица), latin-1 (fallback).
+
+    ВАЖНО: проверка \\ufffd полезна только для многобайтных кодировок.
+    Для однобайтных (cp1251, cp1250, iso-8859-2) replacement char не появляется,
+    поэтому используем эвристику качества текста: доля «печатных» символов.
     """
     encodings = ['utf-8-sig', 'utf-8', 'iso-8859-2', 'cp1250', 'cp1251', 'latin-1']
+    best_text = ''
+    best_enc = None
+    best_score = -1.0
+
     for enc in encodings:
         try:
             content = file_content.decode(enc)
-            if enc not in ('latin-1',):
-                bad = sum(1 for c in content if c == '\ufffd')
-                if bad > len(content) * 0.001:
-                    continue
-            if content.startswith('\ufeff'):
-                content = content[1:]
-            return content
         except Exception:
             continue
-    try:
-        content = file_content.decode('latin-1')
-        if content.startswith('\ufeff'):
-            content = content[1:]
-        return content
-    except Exception:
-        return ''
+
+        score = _text_quality_score(content)
+        if score > best_score:
+            best_score = score
+            best_text = content
+            best_enc = enc
+
+    if best_enc is None:
+        try:
+            best_text = file_content.decode('latin-1')
+            best_enc = 'latin-1'
+        except Exception:
+            return ''
+
+    if best_text.startswith('\ufeff'):
+        best_text = best_text[1:]
+    return best_text
+
+
+def _text_quality_score(text: str) -> float:
+    """
+    Эвристика «читаемости» текста для выбора кодировки.
+    Чем выше — тем лучше. Штрафуем управляющие символы и replacement char,
+    премируем буквы/цифры/обычную пунктуацию.
+    """
+    if not text:
+        return 0.0
+    sample = text[:5000]
+    total = len(sample)
+    good = 0.0
+    bad = 0.0
+    for ch in sample:
+        o = ord(ch)
+        if ch.isalnum() or ch in " \t\r\n.,;:!?()[]{}\"'+-*/\\|@#$%^&*_=<>~`«»—–№°":
+            good += 1
+        elif o < 0x20 and ch not in "\t\r\n":
+            bad += 2
+        elif o == 0xFFFD:
+            bad += 3
+        elif 0x80 <= o <= 0x9F:
+            bad += 2
+        else:
+            good += 0.5
+    return (good - bad) / max(total, 1)
+
 
 def _is_real_xls(file_content: bytes) -> bool:
     """Магические байты старого XLS (BIFF) — D0 CF 11 E0."""
@@ -440,18 +479,30 @@ def _is_real_xlsx(file_content: bytes) -> bool:
     return file_content[:2] == b'PK'
 
 def _split_line(line: str, sep: str) -> List[str]:
-    """Разбивает строку CSV с учётом кавычек."""
-    parts = []
+    """
+    Разбивает строку CSV с учётом кавычек.
+    Поддерживает экранированные кавычки "" внутри поля в кавычках.
+    Использовать вместо line.split(sep) во всех CSV-парсерах.
+    """
+    parts: List[str] = []
     cur = ''
     inq = False
-    for ch in line:
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
         if ch == '"':
+            if inq and i + 1 < n and line[i + 1] == '"':
+                cur += '"'
+                i += 2
+                continue
             inq = not inq
         elif ch == sep and not inq:
             parts.append(cur.strip())
             cur = ''
         else:
             cur += ch
+        i += 1
     parts.append(cur.strip())
     return [p.strip('"') for p in parts]
 
@@ -474,7 +525,7 @@ def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
     for line in lines[header_idx + 1:]:
         if not line:
             continue
-        parts = [p.strip() for p in line.split(';')]
+        parts = _split_line(line, ';')
         while parts and parts[-1] == '':
             parts.pop()
         if len(parts) < 7:
@@ -632,56 +683,101 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
         })
     return transactions
 
+
+def _regina_extract_row_from_line(line: str) -> Optional[Tuple[str, str, str, float]]:
+    """
+    Извлекает (date_str, code, desc, amount) из одной линии Regina Alfa.
+    Валюта 'RUR'/'RUB' опциональна и может быть в конце строки
+    либо отсутствовать (типично для PDF с переносами).
+    Возвращает None, если строка не похожа на операцию.
+    """
+    if not line:
+        return None
+
+    # Срезаем ведущий RUR/RUB — часто появляется в PDF при переносе валюты на новую строку.
+    line = re.sub(r'^\s*(?:RUR|RUB)\s+', '', line)
+
+    # Вариант 1: дата | код | описание | сумма [валюта]
+    m = re.match(
+        r'^[ \t]*(\d{2}\.\d{2}\.\d{4})[ \t]+([A-Z0-9_]+)[ \t]+(.+?)[ \t]+'
+        r'(-?[\d \t\u00a0]*[.,]\d{2})'
+        r'(?:[ \t]+(RUR|RUB|USD|EUR|₽|\$|€))?[ \t]*$',
+        line,
+    )
+    if m:
+        return (
+            m.group(1).strip(),
+            m.group(2).strip(),
+            re.sub(r'\s+', ' ', m.group(3)).strip(),
+            parse_amount(m.group(4)),
+        )
+
+    # Вариант 2: дата | сумма [валюта] | описание
+    m = re.match(
+        r'^[ \t]*(\d{2}\.\d{2}\.\d{4})[ \t]+'
+        r'(-?[\d \t\u00a0]*[.,]\d{2})'
+        r'(?:[ \t]+(RUR|RUB|USD|EUR|₽|\$|€))?[ \t]+(.+?)[ \t]*$',
+        line,
+    )
+    if m:
+        return (
+            m.group(1).strip(),
+            '',
+            re.sub(r'\s+', ' ', m.group(4)).strip(),
+            parse_amount(m.group(2)),
+        )
+
+    return None
+
+
 def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Regina Alfa DOCX.
+    Раньше regex требовал 'RUR' в конце — теперь валюта опциональна.
+    """
     full_text = docx_all_text(file_content)
     if not full_text:
         return []
-    pattern = re.compile(
-        r'(\d{2}\.\d{2}\.\d{4})\s*([A-Z0-9_]+)\s*(.+?)(-?[\d\s]+,\d{2})\s*RUR',
-        re.DOTALL
-    )
-    result = []
-    for m in pattern.finditer(full_text):
-        try:
-            date = parse_date(m.group(1).strip())
-            code = m.group(2).strip()
-            desc = re.sub(r'\s+', ' ', m.group(3)).strip()
-            amount = parse_amount(m.group(4))
-            if not date or amount == 0.0:
-                continue
-            result.append({
-                'Дата': date, 'Сумма': amount,
-                'Контрагент': '', 'Наименование счета': account_name,
-                'Описание': f"{code} {desc}"[:500]
-            })
-        except Exception:
+    result: List[Dict] = []
+    for raw_line in full_text.splitlines():
+        parsed = _regina_extract_row_from_line(raw_line)
+        if parsed is None:
             continue
+        date_str, code, desc, amount = parsed
+        date = parse_date(date_str)
+        if not date or amount == 0.0:
+            continue
+        result.append({
+            'Дата': date, 'Сумма': amount,
+            'Контрагент': '', 'Наименование счета': account_name,
+            'Описание': (f"{code} {desc}".strip())[:500]
+        })
     return result
 
+
 def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Regina Alfa PDF.
+    В PDF валюта 'RUR' может переноситься на отдельную строку — поэтому regex
+    больше не требует её в конце. Плюс срезаем ведущий 'RUR'/'RUB'.
+    """
     full_text = pdf_all_text(file_content)
     if not full_text:
         return []
-    pattern = re.compile(
-        r'(\d{2}\.\d{2}\.\d{4})\s*([A-Z0-9_]+)\s*(.+?)(-?[\d\s]+,\d{2})\s*RUR',
-        re.DOTALL
-    )
-    result = []
-    for m in pattern.finditer(full_text):
-        try:
-            date = parse_date(m.group(1).strip())
-            code = m.group(2).strip()
-            desc = re.sub(r'\s+', ' ', m.group(3)).strip()
-            amount = parse_amount(m.group(4))
-            if not date or amount == 0.0:
-                continue
-            result.append({
-                'Дата': date, 'Сумма': amount,
-                'Контрагент': '', 'Наименование счета': account_name,
-                'Описание': f"{code} {desc}"[:500]
-            })
-        except Exception:
+    result: List[Dict] = []
+    for raw_line in full_text.splitlines():
+        parsed = _regina_extract_row_from_line(raw_line)
+        if parsed is None:
             continue
+        date_str, code, desc, amount = parsed
+        date = parse_date(date_str)
+        if not date or amount == 0.0:
+            continue
+        result.append({
+            'Дата': date, 'Сумма': amount,
+            'Контрагент': '', 'Наименование счета': account_name,
+            'Описание': (f"{code} {desc}".strip())[:500]
+        })
     return result
 
 # ==================== Tinkoff ====================
@@ -751,17 +847,150 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
+def _parse_tinkoff_tabular(rows: List[List[str]], account_name: str) -> List[Dict]:
+    """
+    Общая логика разбора Tinkoff для табличных источников (XLSX/CSV).
+    На вход — список строк (первая должна быть заголовком).
+    Ищет в заголовке 'Дата и время операции' / 'Сумма в валюте операции' / 'Описание операции'.
+    """
+    result: List[Dict] = []
+    if not rows:
+        return result
+
+    hdr = [str(c).strip() if c is not None else '' for c in rows[0]]
+    date_idx = amount_idx = desc_idx = -1
+    for i, h in enumerate(hdr):
+        if 'Дата и время операции' in h:
+            date_idx = i
+        elif 'Сумма в валюте операции' in h:
+            amount_idx = i
+        elif 'Описание операции' in h:
+            desc_idx = i
+    if date_idx == -1:
+        date_idx = 0
+    if amount_idx == -1:
+        amount_idx = 2
+    if desc_idx == -1:
+        desc_idx = 4
+
+    for cells in rows[1:]:
+        cells = [str(c).strip() if c is not None else '' for c in cells]
+        if len(cells) < 3:
+            continue
+        try:
+            m = re.match(r'(\d{2}\.\d{2}\.\d{4})', cells[date_idx] if date_idx < len(cells) else '')
+            if not m:
+                continue
+            date = parse_date(m.group(1))
+            amount = parse_amount(cells[amount_idx] if amount_idx < len(cells) else '')
+            if amount == 0.0:
+                continue
+            desc = re.sub(r'\s+', ' ', cells[desc_idx] if desc_idx < len(cells) else '').strip()
+            if 'Внутренний перевод' in desc:
+                cp = 'Внутренний перевод'
+            elif 'Внешний перевод' in desc:
+                cp = 'Внешний перевод'
+            elif 'Перевод себе' in desc:
+                cp = 'Перевод себе'
+            elif 'Плата за' in desc:
+                cp = 'Т-Банк'
+            elif 'Перевод' in desc:
+                cp = 'Перевод'
+            else:
+                cp = desc[:60]
+            result.append({
+                'Дата': date, 'Сумма': amount,
+                'Контрагент': cp, 'Наименование счета': account_name,
+                'Описание': desc[:500]
+            })
+        except Exception:
+            continue
+    return result
+
+
+def parse_tinkoff_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Отдельный парсер Tinkoff .xlsx.
+    Раньше .xlsx уходил в parse_tinkoff_docx — падал (openpyxl-файл не открывается python-docx).
+    Теперь: читаем таблицу без заголовка, ищем строку-заголовок по маркерам и передаём
+    остальные строки в _parse_tinkoff_tabular.
+    """
+    df = read_xlsx(file_content, sheet_name=None, header=None)
+    if df is None or df.empty:
+        # Пробуем перебрать все листы вручную
+        try:
+            xls = pd.ExcelFile(BytesIO(file_content))
+            for sh in xls.sheet_names:
+                candidate = read_xlsx(file_content, sheet_name=sh, header=None)
+                if candidate is not None and not candidate.empty:
+                    df = candidate
+                    break
+        except Exception:
+            df = None
+    if df is None or df.empty:
+        return []
+
+    # Ищем строку-заголовок
+    header_row = -1
+    for idx, row in df.iterrows():
+        if idx > 50:
+            break
+        rs = ' '.join(str(x) for x in row.values if pd.notna(x))
+        if 'Дата и время операции' in rs and 'Сумма' in rs:
+            header_row = idx
+            break
+    if header_row == -1:
+        return []
+
+    rows: List[List[str]] = []
+    for i in range(header_row, len(df)):
+        row = df.iloc[i].tolist()
+        rows.append(['' if pd.isna(c) else str(c) for c in row])
+    return _parse_tinkoff_tabular(rows, account_name)
+
+
+def parse_tinkoff_csv(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Отдельный парсер Tinkoff .csv.
+    Раньше .csv тоже уходил в parse_tinkoff_docx — падал.
+    Разделитель определяем динамически, разбор — через _split_line.
+    """
+    content = read_text_with_encoding(file_content)
+    lines = [l.rstrip('\r') for l in content.split('\n') if l.strip()]
+    if not lines:
+        return []
+
+    # Ищем строку-заголовок
+    header_idx = -1
+    for i, l in enumerate(lines[:60]):
+        low = l.lower()
+        if 'дата и время операции' in low and 'сумма' in low:
+            header_idx = i
+            break
+    if header_idx == -1:
+        return []
+
+    first = lines[header_idx]
+    sep = ',' if first.count(',') >= first.count(';') else ';'
+    rows: List[List[str]] = []
+    for l in lines[header_idx:]:
+        rows.append(_split_line(l, sep))
+    return _parse_tinkoff_tabular(rows, account_name)
+
+
 def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     full_text = pdf_all_text(file_content)
     if not full_text:
         return []
     result = []
+    # ВАЖНО: \s в regex не должен съедать \n — между частями используем [ \t].
     pattern = re.compile(
-        r'(\d{2}\.\d{2}\.\d{4})\s+\d{2}:\d{2}\s+'
-        r'(\d{2}\.\d{2}\.\d{4})\s+\d{2}:\d{2}\s+'
-        r'([+\-]?[\d\s]+[.,]\d{2})\s*[₽PР]\s*'
-        r'([+\-]?[\d\s]+[.,]\d{2})\s*[₽PР]\s*'
-        r'([^\n]{2,300}?)(?:\s+7596|\s+—|\n|$)',
+        r'(\d{2}\.\d{2}\.\d{4})[ \t]+\d{2}:\d{2}[ \t]+'
+        r'(\d{2}\.\d{2}\.\d{4})[ \t]+\d{2}:\d{2}[ \t]+'
+        r'([+\-]?[\d \t\u00a0]+[.,]\d{2})[ \t]*[₽PР][ \t]*'
+        r'([+\-]?[\d \t\u00a0]+[.,]\d{2})[ \t]*[₽PР][ \t]*'
+        r'([^\n]{2,300}?)(?:[ \t]+7596|[ \t]+—|\n|$)',
         re.MULTILINE
     )
     for m in pattern.finditer(full_text):
@@ -917,6 +1146,11 @@ def parse_bluor_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== JenHor Unelma ====================
 
 def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    JenHor Unelma CSV.
+    Раньше использовался split(';') — ломалось на ';' внутри кавычек.
+    Теперь _split_line.
+    """
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -930,7 +1164,7 @@ def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict
     if header == -1:
         return []
     for line in lines[header + 1:]:
-        parts = [p.strip() for p in line.split(';')]
+        parts = _split_line(line, ';')
         if len(parts) < 3:
             continue
         try:
@@ -1236,11 +1470,15 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Kapital bank Saida AZN ====================
 
 def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Kapital Bank AZN CSV.
+    Раньше был split(';') — заменено на _split_line.
+    """
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     for line in lines:
-        parts = [p.strip() for p in line.split(';')]
+        parts = _split_line(line, ';')
         if len(parts) < 3:
             continue
         try:
@@ -1281,12 +1519,13 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
         for row in table.rows:
             cells = [c.text.strip() for c in row.cells]
             table_rows_text.append(cells)
+    # ВАЖНО: между частями используем [ \t], а не \s, чтобы не съедать \n.
     pattern = re.compile(
-        r'(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})\s+'
-        r'([\d\s]+[.,]\d{1,2})\s+'
-        r'([\d\s]+[.,]\d{1,2})\s+'
-        r'([\d\s]+[.,]\d{1,2})\s+'
-        r'([A-Za-z][A-Za-z0-9\s\-\./]{2,120})',
+        r'(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})[ \t]+'
+        r'([\d \t\u00a0]+[.,]\d{1,2})[ \t]+'
+        r'([\d \t\u00a0]+[.,]\d{1,2})[ \t]+'
+        r'([\d \t\u00a0]+[.,]\d{1,2})[ \t]+'
+        r'([A-Za-z][A-Za-z0-9 \t\-\./]{2,120})',
         re.MULTILINE
     )
     for line in lines:
@@ -1369,11 +1608,11 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
     if not result:
         full_text = pdf_all_text(file_content)
         pattern = re.compile(
-            r'(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})\s+'
-            r'([\d\s]+[.,]\d{1,2})\s+'
-            r'([\d\s]+[.,]\d{1,2})\s+'
-            r'([\d\s]+[.,]\d{1,2})\s+'
-            r'([A-Za-z][A-Za-z0-9\s\-\./]{2,80})',
+            r'(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})[ \t]+'
+            r'([\d \t\u00a0]+[.,]\d{1,2})[ \t]+'
+            r'([\d \t\u00a0]+[.,]\d{1,2})[ \t]+'
+            r'([\d \t\u00a0]+[.,]\d{1,2})[ \t]+'
+            r'([A-Za-z][A-Za-z0-9 \t\-\./]{2,80})',
             re.MULTILINE
         )
         for m in pattern.finditer(full_text):
@@ -1525,6 +1764,7 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Универсальный парсер MKB: работает и с CSV, и с XLS, и с XLSX.
     Заголовок содержит 'Sorszám' и 'Értéknap'.
+    ВАЖНО: BOM уже удаляется в read_text_with_encoding, но дополнительно чистим здесь.
     """
     result = []
     df = None
@@ -1544,6 +1784,7 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
     # 2) Если не получилось — пробуем как CSV
     if df is None or df.empty:
         content = read_text_with_encoding(file_content)
+        content = content.replace('\ufeff', '')
         lines = [l.strip() for l in content.split('\n') if l.strip()]
         if not lines:
             return []
@@ -1996,10 +2237,13 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
 
 # ==================== Paysera PDF ====================
 
+# Магическое число для группировки дат в Paysera PDF вынесено в константу.
+PAYSERA_PDF_DATE_GROUP_WINDOW = 400
+
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Paysera PDF. pdfplumber отдаёт плоский текст.
-    Группируем близкие даты (< 400 символов между ними) — на одну операцию
+    Группируем близкие даты (< PAYSERA_PDF_DATE_GROUP_WINDOW символов между ними) — на одну операцию,
     pdfplumber вставляет дату дважды, что приводило к задвоению.
     """
     result = []
@@ -2015,7 +2259,7 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     groups = []
     cur = {'date': raw_dates[0].group(1), 'start': raw_dates[0].start(), 'end': raw_dates[0].end()}
     for dm in raw_dates[1:]:
-        if dm.start() - cur['end'] < 400:
+        if dm.start() - cur['end'] < PAYSERA_PDF_DATE_GROUP_WINDOW:
             cur['end'] = dm.end()
         else:
             groups.append(cur)
@@ -2066,8 +2310,7 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         desc = ''
         window_text = full_text[window_start:window_end]
         purpose_match = re.search(
-            r'Purpose of payment\s*:\s*([^\.]{1,200}?)(?:\.|$)',
-            window_text, re.IGNORECASE
+            r'Purpose of payment\s*:\s*([^\.]{1,200}?)(?:\.|$)', window_text, re.IGNORECASE
         )
         if purpose_match:
             desc = purpose_match.group(1).strip()
@@ -2102,11 +2345,15 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== RAK BANK ====================
 
 def parse_rak_bank(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    RAK Bank CSV.
+    Раньше был split(';') — заменено на _split_line.
+    """
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     for line in lines:
-        parts = [p.strip() for p in line.split(';')]
+        parts = _split_line(line, ';')
         if len(parts) < 3:
             continue
         try:
@@ -2281,6 +2528,10 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== UniCredit ====================
 
 def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    UniCredit CSV.
+    Раньше был split(';') и в заголовке, и в строках — заменено на _split_line.
+    """
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -2293,7 +2544,7 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
             break
     if header == -1:
         return []
-    hdr_parts = [p.strip() for p in lines[header].split(';')]
+    hdr_parts = _split_line(lines[header], ';')
     ci = {}
     for i, h in enumerate(hdr_parts):
         hc = h.strip()
@@ -2314,7 +2565,7 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
     if 'counterparty' not in ci:
         ci['counterparty'] = 9
     for line in lines[header + 1:]:
-        parts = [p.strip() for p in line.split(';')]
+        parts = _split_line(line, ';')
         while parts and parts[-1] == '':
             parts.pop()
         if len(parts) < 3:
@@ -2438,16 +2689,19 @@ def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict]:
             break
     if header == -1:
         return []
-    hdr_parts = [p.strip().strip('"') for p in lines[header].split(',')]
+    # Определяем разделитель по строке заголовка, разбираем через _split_line.
+    _wio_sep = ',' if lines[header].count(',') >= lines[header].count(';') else ';'
+    hdr_parts = _split_line(lines[header], _wio_sep)
     ci = {}
     for i, h in enumerate(hdr_parts):
-        if h == 'Amount':
+        hc = h.strip()
+        if hc == 'Amount':
             ci['amount'] = i
-        elif h == 'Date':
+        elif hc == 'Date':
             ci['date'] = i
-        elif h == 'Description':
+        elif hc == 'Description':
             ci['description'] = i
-        elif h == 'Notes':
+        elif hc == 'Notes':
             ci['notes'] = i
     if 'amount' not in ci:
         ci['amount'] = 10
@@ -2456,7 +2710,7 @@ def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict]:
     if 'description' not in ci:
         ci['description'] = 9
     for line in lines[header + 1:]:
-        parts = _split_line(line, ',')
+        parts = _split_line(line, _wio_sep)
         if len(parts) < 3:
             continue
         try:
@@ -2513,6 +2767,10 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Saida N26 (CSV) ====================
 
 def parse_saida_n26_csv(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Saida N26 CSV.
+    Раньше был split(';') — заменено на _split_line.
+    """
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -2526,7 +2784,7 @@ def parse_saida_n26_csv(file_content: bytes, account_name: str) -> List[Dict]:
     if header == -1:
         return []
     for line in lines[header + 1:]:
-        parts = [p.strip() for p in line.split(';')]
+        parts = _split_line(line, ';')
         if len(parts) < 3:
             continue
         try:
@@ -2745,13 +3003,18 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Универсальный PDF fallback ====================
 
 def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Универсальный PDF fallback.
+    Раньше заголовок искался только в первых 5 строках — теперь по всей таблице.
+    """
     result = []
     tables = pdf_all_tables(file_content)
     for table in tables:
         if not table or len(table) < 2:
             continue
         header_idx = -1
-        for i, row in enumerate(table[:5]):
+        # Ищем заголовок по всей таблице, а не только в первых 5 строках.
+        for i, row in enumerate(table):
             joined = ' '.join(row).lower()
             if ('date' in joined or 'дата' in joined) and ('amount' in joined or 'сумма' in joined or 'sum' in joined):
                 header_idx = i
@@ -2796,6 +3059,115 @@ def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 # ==================== МАРШРУТИЗАЦИЯ ====================
+
+def _route_tabular(account_name: str):
+    """
+    Общая маршрутизация для .xlsx / .xls / .csv.
+    Возвращает (parser, key) или (None, None).
+    Раньше этот блок дублировался дважды (для .xlsx/.xls и для .csv) —
+    теперь он один.
+
+    Для Tinkoff возвращаем маркер '__tinkoff_tabular__', чтобы вызывающая
+    сторона выбрала нужную реализацию по расширению
+    (parse_tinkoff_xlsx или parse_tinkoff_csv).
+    """
+    low = account_name.lower()
+
+    if 'regina alfa' in low:
+        return parse_regina_alfa_xlsx, 'regina_alfa_xlsx'
+    if 'tinkoff' in low:
+        return '__tinkoff_tabular__', None
+    if 'bluor' in low:
+        if 'kl59' in low:
+            return parse_kl59_bluor, 'kl59_bluor'
+        if 'bsr' in low and '3' in low:
+            return parse_bsr_bluor_3, 'bsr_bluor_3'
+        if 'bsr' in low:
+            return parse_bsr_bluor_2, 'bsr_bluor_2'
+        return parse_kl59_bluor, 'kl59_bluor'
+    if 'jenhor' in low or 'unelma' in low:
+        return parse_jenhor_unelma_csv, 'jenhor_unelma_csv'
+    if 'csob' in low:
+        if 'dzibik' in low:
+            return parse_dzibik_main_csob, 'dzibik_main_csob'
+        if 'jenisov' in low and 'eur' in low:
+            return parse_jenisov_csob_eur, 'jenisov_csob_eur'
+        if 'jenisov' in low:
+            return parse_jenisov_csob_czk, 'jenisov_csob_czk'
+        if 'rr strojka' in low and 'eur' in low:
+            return parse_rr_strojka_eur_csob, 'rr_strojka_eur_csob'
+        if 'rr strojka' in low:
+            return parse_rr_strojka_czk_csob, 'rr_strojka_czk_csob'
+        if 'rr rev ostr' in low:
+            return parse_rr_rev_ostr_csob, 'rr_rev_ostr_csob'
+        if 'koruna strojka' in low and 'eur' in low:
+            return parse_koruna_strojka_eur_csob, 'koruna_strojka_eur_csob'
+        if 'koruna strojka' in low:
+            return parse_koruna_strojka_czk_csob, 'koruna_strojka_czk_csob'
+        return parse_dzibik_main_csob, 'dzibik_main_csob'
+    if 'stalkin' in low or 'fio' in low:
+        return parse_stalkin_ml2_fio, 'stalkin_ml2_fio'
+    if 'industra' in low or 'plavas' in low or 'p1 statement' in low or 'kl59' in low or 'an14' in low:
+        if 'plavas' in low:
+            return parse_industra_plavas1, 'industra_plavas1'
+        if 'kl59' in low:
+            return parse_industra_kl59, 'industra_kl59'
+        return parse_industra_an14, 'industra_an14'
+    if 'kapital' in low or ('saida' in low and 'azn' in low):
+        return parse_kapital_saida_azn_csv, 'kapital_saida_azn_csv'
+    if 'mashreq' in low or ('nomiqa' in low and 'aed' in low):
+        return parse_mashreq, 'mashreq'
+    if 'budapest huf' in low or ('mkb' in low and 'huf' in low):
+        return parse_budapest_huf_mkb, 'budapest_huf_mkb'
+    if 'budapest eur' in low or ('mkb' in low and 'eur' in low):
+        return parse_budapest_eur_mkb, 'budapest_eur_mkb'
+    if 'mkb' in low or 'budapest' in low:
+        return parse_budapest_huf_mkb, 'budapest_huf_mkb'
+    if 'saida' in low and 'wise' in low:
+        return parse_saida_wise_xlsx, 'saida_wise_xlsx'
+    if 'n26' in low:
+        return parse_saida_n26_csv, 'saida_n26_csv'
+    if 'paysera' in low:
+        if 'baltic' in low:
+            return parse_paysera_baltic_xlsx, 'paysera_baltic_xlsx'
+        if 'sveciy' in low:
+            return parse_paysera_sveciy_xlsx, 'paysera_sveciy_xlsx'
+        if 'property' in low:
+            return parse_paysera_property, 'paysera_property'
+        if 'rerum' in low:
+            return parse_paysera_rerum, 'paysera_rerum'
+        return parse_paysera_baltic_xlsx, 'paysera_baltic_xlsx'
+    if 'rak' in low and 'bank' in low:
+        return parse_rak_bank, 'rak_bank'
+    if 'bunda' in low and 'pasha' in low:
+        return parse_pasha_bank_xlsx, 'pasha_bank_xlsx'
+    if 'pasha' in low:
+        return parse_pasha_bank_xlsx, 'pasha_bank_xlsx'
+    if 'revolut' in low:
+        if 'nb rev' in low or 'nb_rev' in low:
+            return parse_revolut_nb, 'revolut_nb'
+        if 'plavas' in low:
+            return parse_revolut_plavas, 'revolut_plavas'
+        return parse_revolut_an14, 'revolut_an14'
+    if 'unicredit' in low or 'garpiz' in low or 'twohills' in low or 'two hills' in low \
+            or 'b1 estate' in low or 'b1_estate' in low:
+        if 'b1 estate' in low or 'b1_estate' in low:
+            return parse_unicredit_b1, 'unicredit_b1'
+        if 'pernink' in low:
+            return parse_garpiz_pernink, 'garpiz_pernink'
+        if 'garpiz' in low:
+            return parse_garpiz_unicredit, 'garpiz_unicredit'
+        if 'twohills' in low or 'two hills' in low:
+            return parse_twohills_unicredit, 'twohills_unicredit'
+        if 'koruna' in low:
+            return parse_koruna_unicredit, 'koruna_unicredit'
+        return parse_unicredit_b1, 'unicredit_b1'
+    if 'wio' in low:
+        return parse_wio_business, 'wio_business'
+    if 'wise' in low:
+        return parse_saida_wise_xlsx, 'saida_wise_xlsx'
+    return None, None
+
 
 def get_parser_by_ext(account_name: str, ext: str):
     low = account_name.lower()
@@ -2850,194 +3222,20 @@ def get_parser_by_ext(account_name: str, ext: str):
 
     # ========== XLSX / XLS ==========
     if ext in ('.xlsx', '.xls'):
-        if 'regina alfa' in low:
-            return parse_regina_alfa_xlsx, 'regina_alfa_xlsx'
-        if 'tinkoff' in low:
-            return parse_tinkoff_docx, 'tinkoff_docx'
-        if 'bluor' in low:
-            if 'kl59' in low:
-                return parse_kl59_bluor, 'kl59_bluor'
-            if 'bsr' in low and '3' in low:
-                return parse_bsr_bluor_3, 'bsr_bluor_3'
-            if 'bsr' in low:
-                return parse_bsr_bluor_2, 'bsr_bluor_2'
-            return parse_kl59_bluor, 'kl59_bluor'
-        if 'jenhor' in low or 'unelma' in low:
-            return parse_jenhor_unelma_csv, 'jenhor_unelma_csv'
-        if 'csob' in low:
-            if 'dzibik' in low:
-                return parse_dzibik_main_csob, 'dzibik_main_csob'
-            if 'jenisov' in low and 'eur' in low:
-                return parse_jenisov_csob_eur, 'jenisov_csob_eur'
-            if 'jenisov' in low:
-                return parse_jenisov_csob_czk, 'jenisov_csob_czk'
-            if 'rr strojka' in low and 'eur' in low:
-                return parse_rr_strojka_eur_csob, 'rr_strojka_eur_csob'
-            if 'rr strojka' in low:
-                return parse_rr_strojka_czk_csob, 'rr_strojka_czk_csob'
-            if 'rr rev ostr' in low:
-                return parse_rr_rev_ostr_csob, 'rr_rev_ostr_csob'
-            if 'koruna strojka' in low and 'eur' in low:
-                return parse_koruna_strojka_eur_csob, 'koruna_strojka_eur_csob'
-            if 'koruna strojka' in low:
-                return parse_koruna_strojka_czk_csob, 'koruna_strojka_czk_csob'
-            return parse_dzibik_main_csob, 'dzibik_main_csob'
-        if 'stalkin' in low or 'fio' in low:
-            return parse_stalkin_ml2_fio, 'stalkin_ml2_fio'
-        if 'industra' in low or 'plavas' in low or 'p1 statement' in low or 'kl59' in low or 'an14' in low:
-            if 'plavas' in low:
-                return parse_industra_plavas1, 'industra_plavas1'
-            if 'kl59' in low:
-                return parse_industra_kl59, 'industra_kl59'
-            return parse_industra_an14, 'industra_an14'
-        if 'kapital' in low or ('saida' in low and 'azn' in low):
-            return parse_kapital_saida_azn_csv, 'kapital_saida_azn_csv'
-        if 'mashreq' in low or ('nomiqa' in low and 'aed' in low):
-            return parse_mashreq, 'mashreq'
-        if 'budapest huf' in low or ('mkb' in low and 'huf' in low):
-            return parse_budapest_huf_mkb, 'budapest_huf_mkb'
-        if 'budapest eur' in low or ('mkb' in low and 'eur' in low):
-            return parse_budapest_eur_mkb, 'budapest_eur_mkb'
-        if 'mkb' in low or 'budapest' in low:
-            return parse_budapest_huf_mkb, 'budapest_huf_mkb'
-        if 'saida' in low and 'wise' in low:
-            return parse_saida_wise_xlsx, 'saida_wise_xlsx'
-        if 'n26' in low:
-            return parse_saida_n26_csv, 'saida_n26_csv'
-        if 'paysera' in low:
-            if 'baltic' in low:
-                return parse_paysera_baltic_xlsx, 'paysera_baltic_xlsx'
-            if 'sveciy' in low:
-                return parse_paysera_sveciy_xlsx, 'paysera_sveciy_xlsx'
-            if 'property' in low:
-                return parse_paysera_property, 'paysera_property'
-            if 'rerum' in low:
-                return parse_paysera_rerum, 'paysera_rerum'
-            return parse_paysera_baltic_xlsx, 'paysera_baltic_xlsx'
-        if 'rak' in low and 'bank' in low:
-            return parse_rak_bank, 'rak_bank'
-        if 'bunda' in low and 'pasha' in low:
-            return parse_pasha_bank_xlsx, 'pasha_bank_xlsx'
-        if 'pasha' in low:
-            return parse_pasha_bank_xlsx, 'pasha_bank_xlsx'
-        if 'revolut' in low:
-            if 'nb rev' in low or 'nb_rev' in low:
-                return parse_revolut_nb, 'revolut_nb'
-            if 'plavas' in low:
-                return parse_revolut_plavas, 'revolut_plavas'
-            return parse_revolut_an14, 'revolut_an14'
-        if 'unicredit' in low or 'garpiz' in low or 'twohills' in low or 'two hills' in low or 'b1 estate' in low or 'b1_estate' in low:
-            if 'b1 estate' in low or 'b1_estate' in low:
-                return parse_unicredit_b1, 'unicredit_b1'
-            if 'pernink' in low:
-                return parse_garpiz_pernink, 'garpiz_pernink'
-            if 'garpiz' in low:
-                return parse_garpiz_unicredit, 'garpiz_unicredit'
-            if 'twohills' in low or 'two hills' in low:
-                return parse_twohills_unicredit, 'twohills_unicredit'
-            if 'koruna' in low:
-                return parse_koruna_unicredit, 'koruna_unicredit'
-            return parse_unicredit_b1, 'unicredit_b1'
-        if 'wio' in low:
-            return parse_wio_business, 'wio_business'
-        if 'wise' in low:
-            return parse_saida_wise_xlsx, 'saida_wise_xlsx'
+        parser, key = _route_tabular(account_name)
+        if parser == '__tinkoff_tabular__':
+            return parse_tinkoff_xlsx, 'tinkoff_xlsx'
+        if parser is not None:
+            return parser, key
         return None, None
 
     # ========== CSV ==========
     if ext == '.csv':
-        if 'regina alfa' in low:
-            return parse_regina_alfa_xlsx, 'regina_alfa_xlsx'
-        if 'tinkoff' in low:
-            return parse_tinkoff_docx, 'tinkoff_docx'
-        if 'bluor' in low:
-            if 'kl59' in low:
-                return parse_kl59_bluor, 'kl59_bluor'
-            if 'bsr' in low and '3' in low:
-                return parse_bsr_bluor_3, 'bsr_bluor_3'
-            if 'bsr' in low:
-                return parse_bsr_bluor_2, 'bsr_bluor_2'
-            return parse_kl59_bluor, 'kl59_bluor'
-        if 'jenhor' in low or 'unelma' in low:
-            return parse_jenhor_unelma_csv, 'jenhor_unelma_csv'
-        if 'csob' in low:
-            if 'dzibik' in low:
-                return parse_dzibik_main_csob, 'dzibik_main_csob'
-            if 'jenisov' in low and 'eur' in low:
-                return parse_jenisov_csob_eur, 'jenisov_csob_eur'
-            if 'jenisov' in low:
-                return parse_jenisov_csob_czk, 'jenisov_csob_czk'
-            if 'rr strojka' in low and 'eur' in low:
-                return parse_rr_strojka_eur_csob, 'rr_strojka_eur_csob'
-            if 'rr strojka' in low:
-                return parse_rr_strojka_czk_csob, 'rr_strojka_czk_csob'
-            if 'rr rev ostr' in low:
-                return parse_rr_rev_ostr_csob, 'rr_rev_ostr_csob'
-            if 'koruna strojka' in low and 'eur' in low:
-                return parse_koruna_strojka_eur_csob, 'koruna_strojka_eur_csob'
-            if 'koruna strojka' in low:
-                return parse_koruna_strojka_czk_csob, 'koruna_strojka_czk_csob'
-            return parse_dzibik_main_csob, 'dzibik_main_csob'
-        if 'stalkin' in low or 'fio' in low:
-            return parse_stalkin_ml2_fio, 'stalkin_ml2_fio'
-        if 'industra' in low or 'plavas' in low or 'p1 statement' in low or 'kl59' in low or 'an14' in low:
-            if 'plavas' in low:
-                return parse_industra_plavas1, 'industra_plavas1'
-            if 'kl59' in low:
-                return parse_industra_kl59, 'industra_kl59'
-            return parse_industra_an14, 'industra_an14'
-        if 'kapital' in low or ('saida' in low and 'azn' in low):
-            return parse_kapital_saida_azn_csv, 'kapital_saida_azn_csv'
-        if 'mashreq' in low or ('nomiqa' in low and 'aed' in low):
-            return parse_mashreq, 'mashreq'
-        if 'budapest huf' in low or ('mkb' in low and 'huf' in low):
-            return parse_budapest_huf_mkb, 'budapest_huf_mkb'
-        if 'budapest eur' in low or ('mkb' in low and 'eur' in low):
-            return parse_budapest_eur_mkb, 'budapest_eur_mkb'
-        if 'mkb' in low or 'budapest' in low:
-            return parse_budapest_eur_mkb, 'budapest_eur_mkb'
-        if 'saida' in low and 'wise' in low:
-            return parse_saida_wise_xlsx, 'saida_wise_xlsx'
-        if 'n26' in low:
-            return parse_saida_n26_csv, 'saida_n26_csv'
-        if 'paysera' in low:
-            if 'baltic' in low:
-                return parse_paysera_baltic_xlsx, 'paysera_baltic_xlsx'
-            if 'sveciy' in low:
-                return parse_paysera_sveciy_xlsx, 'paysera_sveciy_xlsx'
-            if 'property' in low:
-                return parse_paysera_property, 'paysera_property'
-            if 'rerum' in low:
-                return parse_paysera_rerum, 'paysera_rerum'
-            return parse_paysera_baltic_xlsx, 'paysera_baltic_xlsx'
-        if 'rak' in low and 'bank' in low:
-            return parse_rak_bank, 'rak_bank'
-        if 'bunda' in low and 'pasha' in low:
-            return parse_pasha_bank_xlsx, 'pasha_bank_csv'
-        if 'pasha' in low:
-            return parse_pasha_bank_xlsx, 'pasha_bank_csv'
-        if 'revolut' in low:
-            if 'nb rev' in low or 'nb_rev' in low:
-                return parse_revolut_nb, 'revolut_nb'
-            if 'plavas' in low:
-                return parse_revolut_plavas, 'revolut_plavas'
-            return parse_revolut_an14, 'revolut_an14'
-        if 'unicredit' in low or 'garpiz' in low or 'twohills' in low or 'two hills' in low or 'b1 estate' in low or 'b1_estate' in low:
-            if 'b1 estate' in low or 'b1_estate' in low:
-                return parse_unicredit_b1, 'unicredit_b1'
-            if 'pernink' in low:
-                return parse_garpiz_pernink, 'garpiz_pernink'
-            if 'garpiz' in low:
-                return parse_garpiz_unicredit, 'garpiz_unicredit'
-            if 'twohills' in low or 'two hills' in low:
-                return parse_twohills_unicredit, 'twohills_unicredit'
-            if 'koruna' in low:
-                return parse_koruna_unicredit, 'koruna_unicredit'
-            return parse_unicredit_b1, 'unicredit_b1'
-        if 'wio' in low:
-            return parse_wio_business, 'wio_business'
-        if 'wise' in low:
-            return parse_saida_wise_xlsx, 'saida_wise_xlsx'
+        parser, key = _route_tabular(account_name)
+        if parser == '__tinkoff_tabular__':
+            return parse_tinkoff_csv, 'tinkoff_csv'
+        if parser is not None:
+            return parser, key
         return None, None
 
     return None, None
