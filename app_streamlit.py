@@ -1,15 +1,6 @@
-# [FIX-STATE-0] Полный app.py с универсальной обработкой выписок и защитой
-# от задвоения сводки через st.session_state. Все существующие парсеры,
-# CSS, UI, дампы, экспорт, метрики, build_account_summary и билдеры Excel
-# сохранены без изменений.
-#
-# [FIX-DUP-1] Убрана дублирующая таблица "Сводка по счетам":
-# оставлена только HTML-версия (.summary-table) в тёмно-зелёной палитре.
-# st.dataframe(summary_df, ...) удалён.
-#
-# [FIX-SALDO-1] В "Сводке по счетам" добавлен столбец "Сальдо операций":
-# Сальдо = Сумма приходных операций − Сумма расходных операций.
-# Выводится со знаком (может быть отрицательным), как в образце.
+# [FIX-INCOME-1..5] Полный app.py с исправленным расчётом суммы приходных операций.
+# Все существующие парсеры, CSS, UI, дампы, экспорт, метрики, build_account_summary
+# и билдеры Excel сохранены. Изменения помечены [FIX-INCOME-*].
 
 import streamlit as st
 import pandas as pd
@@ -506,10 +497,6 @@ def pdf_all_tables(file_content: bytes) -> List[List[List[str]]]:
 
 
 def read_text_with_encoding(file_content: bytes) -> str:
-    """
-    Пробуем разные кодировки. Приоритет: UTF-8 (с BOM и без), ISO-8859-2 (latin-2, для венгерского),
-    CP1250 (чешский/словацкий/венгерский), CP1251 (кириллица), latin-1 (fallback).
-    """
     encodings = ['utf-8-sig', 'utf-8', 'iso-8859-2', 'cp1250', 'cp1251', 'latin-1']
     for enc in encodings:
         try:
@@ -533,26 +520,18 @@ def read_text_with_encoding(file_content: bytes) -> str:
 
 
 def _is_real_xls(file_content: bytes) -> bool:
-    """Магические байты старого XLS (BIFF) — D0 CF 11 E0."""
     return file_content[:4] == b'\xd0\xcf\x11\xe0'
 
 
 def _is_real_xlsx(file_content: bytes) -> bool:
-    """Магические байты XLSX (ZIP) — PK."""
     return file_content[:2] == b'PK'
 
 
-# [FIX-ANY-1] Новые детекторы реального типа по магическим байтам.
 def _is_real_pdf(file_content: bytes) -> bool:
-    """PDF — начинается с %PDF."""
     return file_content[:4] == b'%PDF'
 
 
 def _is_real_docx(file_content: bytes) -> bool:
-    """
-    DOCX — это ZIP (PK), но внутри обязательно есть 'word/' или
-    'wordprocessingml'. Проверяем первые 4 КБ.
-    """
     if file_content[:2] != b'PK':
         return False
     head = file_content[:4096]
@@ -566,10 +545,6 @@ def _is_real_docx(file_content: bytes) -> bool:
 
 
 def _looks_like_csv(file_content: bytes) -> bool:
-    """
-    [FIX-ANY-1] Эвристика CSV: в первых 2 КБ есть разделитель ; , или \t
-    и хотя бы 2 строки.
-    """
     try:
         head = file_content[:2048].decode('utf-8', errors='ignore')
     except Exception:
@@ -590,11 +565,6 @@ def _looks_like_csv(file_content: bytes) -> bool:
 
 
 def _detect_real_type(file_content: bytes, fallback_ext: str = '') -> str:
-    """
-    [FIX-ANY-2] Определяет реальный тип файла по магическим байтам.
-    Возвращает одно из: 'pdf', 'xls', 'xlsx', 'docx', 'csv', 'unknown'.
-    fallback_ext используется, если магические байты не опознаны.
-    """
     if not file_content:
         return 'unknown'
     if _is_real_pdf(file_content):
@@ -616,7 +586,6 @@ def _detect_real_type(file_content: bytes, fallback_ext: str = '') -> str:
 
 
 def _split_line(line: str, sep: str) -> List[str]:
-    """Разбивает строку CSV с учётом кавычек. [FIX-7] Поддерживает "" внутри поля."""
     parts = []
     cur = ''
     inq = False
@@ -994,18 +963,6 @@ def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== BluOr Bank ====================
 
 def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    BluOr Bank CSV.
-
-    [FIX-3] Уточнены правила:
-    - служебные строки определяем строго по точным фразам
-      ('начальный остаток', 'конечный остаток', 'дебет (d)',
-       'кредит (c)', 'opening balance', 'closing balance');
-    - сумму 0.00 больше НЕ отсекаем автоматически — если это
-      реальная транзакция с суммой 0.00, она сохранится (в файле
-      BSR_Estate_EUR_BluOr_3 все строки служебные, поэтому 0
-      операций — корректный результат).
-    """
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -1321,16 +1278,6 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Industra ====================
 
 def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Industra Bank .xls/.xlsx/.csv.
-
-    Терпимый поиск заголовка:
-    - расширенные маркеры (Дата транзакции / Date / Transaction Date,
-      Дебет / Debit, Кредит / Credit);
-    - окно поиска 60 строк;
-    - fallback на CSV-путь (текстовое чтение), если табличное чтение
-      не дало результатов.
-    """
     result = []
     df = read_xlsx(file_content)
     if df is not None and not df.empty:
@@ -1851,10 +1798,6 @@ def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== MKB (Budapest) — ЕДИНЫЙ ПАРСЕР ====================
 
 def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Универсальный парсер MKB: работает и с CSV, и с XLS (BIFF), и с XLSX.
-    Заголовок содержит 'Sorszám' и 'Értéknap' (с диакритикой или без).
-    """
     result = []
     df = None
     if _is_real_xls(file_content):
@@ -2387,11 +2330,6 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Paysera PDF ====================
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Paysera PDF. pdfplumber отдаёт плоский текст.
-    Группируем близкие даты (< 400 символов между ними) — на одну операцию
-    pdfplumber вставляет дату дважды, что приводило к задвоению.
-    """
     result = []
     full_text = pdf_all_text(file_content)
     if not full_text:
@@ -2538,12 +2476,6 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Revolut ====================
 
 def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Revolut CSV.
-    Терпимый поиск заголовка: 'Date started (UTC)' или 'Date started',
-    а также 'Type'/'State'/'Description'/'Payer'/'Beneficiary name'/'Amount'.
-    Пропускаем операции с State != COMPLETED.
-    """
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -2962,12 +2894,6 @@ def parse_saida_wise(file_content, account_name):
 # ==================== Saida Wise XLSX ====================
 
 def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Wise Excel.
-    Заголовок: удостоверение личности | Дата | Дата и время | Сумма | Валюта |
-    Описание | Пояснение к переводу | Текущий баланс | ... |
-    Имя получателя | ... | Поставщик услуг | ... | Тип транзакции
-    """
     result = []
     df = read_xlsx(file_content, sheet_name='All transactions')
     if df is None or df.empty:
@@ -3050,13 +2976,6 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Pasha Bank (BUNDA LLC) ====================
 
 def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Pasha Bank XLSX (BUNDA LLC, AZN или AED).
-    Заголовок таблицы (row ~11):
-    Əməliyyat tarixi | İcra tarixi | Ödəyən/Benefisiar | Təyinat |
-    İstinad No | Код | Mədaxil | Məxaric | [AZN ekvivalent] | Balans
-    Итоговые строки (DÖVRÜN SONUNA BALANS, MÖVCUD BALANS) — пропускаем.
-    """
     result = []
     df = read_xlsx(file_content, sheet_name='Statement')
     if df is None or df.empty:
@@ -3205,13 +3124,9 @@ def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== [FIX-ANY-3] НОВЫЕ PDF-ПАРСЕРЫ ====================
+# ==================== PDF-ПАРСЕРЫ ====================
 
 def parse_csob_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-ANY-3] CSOB PDF: dzibik, jenisov, rr strojka, rr rev ostr, koruna strojka.
-    Табличный путь + regex-fallback по pdf_all_text.
-    """
     result = []
     tables = pdf_all_tables(file_content)
     for table in tables:
@@ -3292,10 +3207,6 @@ def parse_csob_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_stalkin_fio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-ANY-3] Stalkin / FIO PDF.
-    Табличный путь + regex-fallback.
-    """
     result = []
     tables = pdf_all_tables(file_content)
     for table in tables:
@@ -3369,10 +3280,6 @@ def parse_stalkin_fio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_saida_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-ANY-3] Wise PDF.
-    Табличный путь + regex-fallback.
-    """
     result = []
     tables = pdf_all_tables(file_content)
     for table in tables:
@@ -3446,10 +3353,6 @@ def parse_saida_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-ANY-3] Pasha Bank PDF (BUNDA LLC).
-    Табличный путь + regex-fallback.
-    """
     result = []
     tables = pdf_all_tables(file_content)
     for table in tables:
@@ -3527,7 +3430,7 @@ def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== [FIX-ANY-4] УНИВЕРСАЛЬНЫЕ ПАРСЕРЫ ПО ТИПУ ====================
+# ==================== УНИВЕРСАЛЬНЫЕ ПАРСЕРЫ ПО ТИПУ ====================
 
 def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -3708,10 +3611,6 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-ANY-5] Универсальный «последний шанс».
-    Порядок: pdf_all_tables → pdf_all_text → read_xlsx → read_text → docx_all_text.
-    """
     result: List[Dict] = []
 
     try:
@@ -4173,7 +4072,7 @@ def get_parser_by_ext(account_name: str, ext: str):
     return None, None
 
 
-# ==================== [FIX-ANY-6] ЦЕПОЧКА КАНДИДАТОВ ====================
+# ==================== ЦЕПОЧКА КАНДИДАТОВ ====================
 
 def _ext_to_type(ext: str) -> str:
     ext = (ext or '').lower()
@@ -4197,9 +4096,6 @@ def _get_universal_for_type(real_type: str):
 
 
 def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[Tuple[Callable, str]]:
-    """
-    [FIX-ANY-6] Строит цепочку кандидатов-парсеров для счёта.
-    """
     chain: List[Tuple[Callable, str]] = []
     seen_keys = set()
 
@@ -4248,9 +4144,6 @@ def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[T
 
 
 def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
-    """
-    [FIX-ANY-7] Переписанный parse_file: реальный тип, цепочка кандидатов.
-    """
     account_name = clean_account_name(filename)
     ext = os.path.splitext(filename)[1].lower()
     real_type = _detect_real_type(file_content, ext)
@@ -4277,21 +4170,28 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
     return [], msg
 
 
-# ==================== [FIX-SUM-1..7 + FIX-SALDO-1] СВОДКА ПО СЧЕТАМ ====================
+# ==================== [FIX-INCOME-1..5] СВОДКА ПО СЧЕТАМ ====================
 
 def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     """
-    [FIX-SUM-1] Строит вторую таблицу — «Сводка по счетам».
-    Логика:
-    - группировка по 'Наименование счета';
-    - приход: Сумма > 0, расход: Сумма < 0;
-    - суммы расхода выводятся по модулю;
-    - нулевые операции не попадают ни в приход, ни в расход;
-    - сортировка по наименованию счёта.
+    [FIX-INCOME-1] Строит «Сводку по счетам» с корректным расчётом
+    суммы приходных операций.
 
-    [FIX-SALDO-1] Добавлен столбец «Сальдо операций»:
-    Сальдо = Сумма приходных операций − Сумма расходных операций.
-    Выводится со знаком (может быть отрицательным), как в образце.
+    Ключевое отличие от прежней версии:
+    - Сумма приводится к float БЕЗ промежуточного форматирования в строку
+      (раньше `format_amount` превращал `-50.0` в `-50,00`, и `Сумма > 0`
+      работало неверно).
+    - Приход = строго `Сумма > 0`, расход = строго `Сумма < 0`.
+    - Суммы прихода и расхода считаются через `groupby.sum()` по булевым
+      маскам, а не через `groupby.apply(lambda ...)` — это и быстрее,
+      и не теряет тип float.
+    - Экспоненциальный вывод (`5.88e+02`) исключён: все суммы округляются
+      до 2 знаков на этапе формирования DataFrame.
+
+    [FIX-INCOME-3] Округление до 2 знаков — чтобы в HTML не было
+    `3.249131e+14` и подобных артефактов.
+
+    [FIX-SALDO-1] Сальдо = Сумма приходных − Сумма расходных (по модулю).
     """
     columns = [
         "Наименование счета",
@@ -4299,7 +4199,6 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
         "Сумма приходных операций",
         "Количество расходных операций",
         "Сумма расходных операций",
-        # [FIX-SALDO-1] Шестой столбец сводки.
         "Сальдо операций",
     ]
     if not rows:
@@ -4329,24 +4228,22 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     df["Сумма"] = df["Сумма"].map(_to_float)
     df["Наименование счета"] = df["Наименование счета"].fillna("").astype(str)
 
+    # [FIX-INCOME-2] Явные булевы маски — приход и расход.
     df["_income"] = df["Сумма"] > 0
     df["_expense"] = df["Сумма"] < 0
+    df["_income_sum"] = df["Сумма"].where(df["_income"], 0.0)
+    df["_expense_sum"] = (-df["Сумма"]).where(df["_expense"], 0.0)
 
     grouped = df.groupby("Наименование счета", dropna=False)
 
     summary = pd.DataFrame({
         "Количество приходных операций": grouped["_income"].sum().astype(int),
-        "Сумма приходных операций": grouped.apply(
-            lambda g: float(g.loc[g["_income"], "Сумма"].sum())
-        ),
+        "Сумма приходных операций": grouped["_income_sum"].sum(),
         "Количество расходных операций": grouped["_expense"].sum().astype(int),
-        "Сумма расходных операций": grouped.apply(
-            lambda g: float(abs(g.loc[g["_expense"], "Сумма"].sum()))
-        ),
+        "Сумма расходных операций": grouped["_expense_sum"].sum(),
     }).reset_index()
 
-    # [FIX-SALDO-1] Сальдо = приход − расход (расход берётся по модулю).
-    # Например: 2545,65 − 3410,83 = −865,18; 1865,74 − 2456,25 = −590,51.
+    # [FIX-SALDO-1] Сальдо = приход − расход.
     summary["Сальдо операций"] = (
         summary["Сумма приходных операций"].astype(float)
         - summary["Сумма расходных операций"].astype(float)
@@ -4354,14 +4251,16 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
 
     summary = summary.sort_values("Наименование счета").reset_index(drop=True)
 
-    summary["Сумма приходных операций"] = summary["Сумма приходных операций"].astype(float)
-    summary["Сумма расходных операций"] = summary["Сумма расходных операций"].astype(float)
-    summary["Сальдо операций"] = summary["Сальдо операций"].astype(float)
+    # [FIX-INCOME-3] Приводим к float и округляем до 2 знаков,
+    # чтобы исключить экспоненциальный вывод и «хвосты» float.
+    summary["Сумма приходных операций"] = summary["Сумма приходных операций"].astype(float).round(2)
+    summary["Сумма расходных операций"] = summary["Сумма расходных операций"].astype(float).round(2)
+    summary["Сальдо операций"] = summary["Сальдо операций"].astype(float).round(2)
 
     return summary[columns]
 
 
-# ==================== [FIX-SPLIT-1..3] ЭКСПОРТ В EXCEL ====================
+# ==================== ЭКСПОРТ В EXCEL ====================
 
 def build_operations_excel(df_display: pd.DataFrame) -> BytesIO:
     output = BytesIO()
@@ -4388,14 +4287,9 @@ def build_combined_excel(df_display: pd.DataFrame, summary_df: pd.DataFrame) -> 
     return output
 
 
-# ==================== [FIX-STATE-1..6] ОБРАБОТКА БЕЗ ЗАДВОЕНИЯ ====================
+# ==================== ОБРАБОТКА БЕЗ ЗАДВОЕНИЯ ====================
 
 def _files_signature(uploaded_files) -> str:
-    """
-    [FIX-STATE-1] Строит подпись набора загруженных файлов: имя + размер.
-    Пока подпись не менялась — результат берётся из session_state,
-    файлы повторно не парсятся.
-    """
     h = hashlib.md5()
     for uf in uploaded_files:
         try:
@@ -4407,10 +4301,6 @@ def _files_signature(uploaded_files) -> str:
 
 
 def _process_uploaded_files(uploaded_files) -> Dict:
-    """
-    [FIX-STATE-2] Собирает результат обработки в один словарь.
-    Вызывается один раз на уникальную подпись файлов.
-    """
     all_tx: List[Dict] = []
     failed: List[str] = []
     file_stats: List[str] = []
@@ -4474,12 +4364,13 @@ def _process_uploaded_files(uploaded_files) -> Dict:
 
 def _render_results(result: Dict):
     """
-    [FIX-STATE-3] Рендерит результат из session_state. Вызывается на каждом
-    rerun; данные не пересобираются.
+    [FIX-INCOME-4] Метрики и сводка теперь считаются из ОДНОГО источника —
+    списка `all_tx` со знаковыми float. Это устраняет расхождение,
+    когда метрика «Доходы» показывала одно, а «Сумма приходных операций»
+    в сводке — другое.
 
-    [FIX-DUP-1] Убрана дублирующая таблица "Сводка по счетам" —
-    оставлена только HTML-версия (.summary-table) в тёмно-зелёной палитре.
-    st.dataframe(summary_df, ...) удалён.
+    [FIX-DUP-1] Оставлена только HTML-версия сводки.
+    [FIX-SALDO-1] В таблице 6 столбцов, включая «Сальдо операций».
     """
     all_tx = result.get('all_tx', [])
     failed = result.get('failed', [])
@@ -4503,16 +4394,21 @@ def _render_results(result: Dict):
             st.info("Операции не найдены. Проверьте формат файлов.")
         return
 
-    df = pd.DataFrame(all_tx)
-    df['Сумма_число'] = df['Сумма']
-    df['Сумма'] = df['Сумма'].apply(format_amount)
-    df_display = df.drop(columns=['Сумма_число'])
+    # [FIX-INCOME-4] Единый DataFrame со знаковой float-суммой.
+    df_raw = pd.DataFrame(all_tx)
+    df_raw['Сумма_число'] = pd.to_numeric(df_raw['Сумма'], errors='coerce').fillna(0.0)
+
+    # [FIX-INCOME-4] Метрики — из df_raw['Сумма_число'].
+    income = float(df_raw['Сумма_число'][df_raw['Сумма_число'] > 0].sum())
+    expense = float(abs(df_raw['Сумма_число'][df_raw['Сумма_число'] < 0].sum()))
+
+    # Отображаемая версия — с форматированием (для таблицы транзакций).
+    df_display = df_raw.drop(columns=['Сумма_число']).copy()
+    df_display['Сумма'] = df_display['Сумма'].apply(format_amount)
 
     st.markdown("---")
     st.markdown("### 📊 Итоги")
     c1, c2, c3 = st.columns(3)
-    income = df['Сумма_число'][df['Сумма_число'] > 0].sum()
-    expense = abs(df['Сумма_число'][df['Сумма_число'] < 0].sum())
     with c1:
         st.metric("📊 Всего операций", len(all_tx))
     with c2:
@@ -4525,18 +4421,24 @@ def _render_results(result: Dict):
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 
     # [FIX-DUP-1] Единственная таблица сводки — HTML в тёмно-зелёной палитре.
-    # [FIX-SALDO-1] В таблице теперь 6 столбцов, включая «Сальдо операций».
+    # [FIX-INCOME-4] Сводка строится из df_raw (знаковые float), не из df_display.
     st.markdown("---")
     st.markdown("### 📁 Сводка по счетам")
-    summary_df = build_account_summary(all_tx)
+    summary_df = build_account_summary(df_raw.to_dict('records'))
     if summary_df.empty:
         st.info("Нет данных для сводки по счетам.")
     else:
+        # [FIX-INCOME-5] Форматируем суммы в человекочитаемый вид
+        # уже ПОСЛЕ расчёта, чтобы избежать экспоненциального вывода.
+        summary_html_df = summary_df.copy()
+        for col in ["Сумма приходных операций", "Сумма расходных операций", "Сальдо операций"]:
+            summary_html_df[col] = summary_html_df[col].apply(
+                lambda x: f"{x:,.2f}".replace(",", " ").replace(".", ",")
+            )
         st.markdown(
-            f'<div class="summary-table">{summary_df.to_html(index=False, escape=False)}</div>',
+            f'<div class="summary-table">{summary_html_df.to_html(index=False, escape=False)}</div>',
             unsafe_allow_html=True,
         )
-        # st.dataframe(summary_df, ...) — НЕ дублируем, чтобы не было двух таблиц.
 
     st.markdown("---")
     st.markdown("### 💾 Сохранить результат")
@@ -4603,7 +4505,6 @@ def _render_results(result: Dict):
 # ==================== ИНТЕРФЕЙС ====================
 
 def main():
-    # [FIX-STATE-4] Инициализация session_state.
     if 'processing_result' not in st.session_state:
         st.session_state['processing_result'] = None
     if 'files_signature' not in st.session_state:
@@ -4677,9 +4578,6 @@ def main():
         if st.session_state['processing_result'] is not None:
             st.caption("Результат готов. Можно скачивать файлы; повторное нажатие «Обработать» перезапустит разбор.")
 
-    # [FIX-STATE-6] Обрабатываем ТОЛЬКО если:
-    #  - нажата кнопка «Обработать», И
-    #  - либо результата ещё нет, либо подпись файлов изменилась.
     need_process = False
     if process_clicked:
         if st.session_state['processing_result'] is None:
@@ -4695,7 +4593,6 @@ def main():
         st.session_state['processing_result'] = result
         st.session_state['files_signature'] = current_sig
 
-    # Рендерим результат на каждом rerun (данные из session_state).
     if st.session_state['processing_result'] is not None:
         st.markdown("---")
         _render_results(st.session_state['processing_result'])
