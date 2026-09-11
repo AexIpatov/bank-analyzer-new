@@ -365,13 +365,11 @@ def docx_all_text(file_content: bytes) -> str:
     return full.replace('\ufeff', '').replace('\xa0', ' ')
 
 def docx_dump(file_content: bytes) -> str:
-    """Дамп содержимого DOCX для отладки."""
     try:
         doc = Document(BytesIO(file_content))
     except Exception as e:
         return f'[ошибка открытия DOCX: {e}]'
-    lines = []
-    lines.append("=== PARAGRAPHS ===")
+    lines = ["=== PARAGRAPHS ==="]
     for i, para in enumerate(doc.paragraphs):
         t = para.text.strip()
         if t:
@@ -867,16 +865,11 @@ def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict
     return result
 
 def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер Česká spořitelna DOCX.
-    Данные лежат в таблице. Ищем строки: <дата> <описание> ... <сумма>
-    """
     result = []
     try:
         doc = Document(BytesIO(file_content))
     except Exception:
         return []
-    # Собираем текст всех ячеек и параграфов в один поток
     all_parts = []
     for table in doc.tables:
         for row in table.rows:
@@ -889,8 +882,6 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
         if t:
             all_parts.append(t)
     full_text = '\n'.join(all_parts).replace('\ufeff', '').replace('\xa0', ' ')
-    
-    # Основной паттерн: "31.08.2026 ... -149.00"
     pattern = re.compile(
         r'(\d{2}\.\d{2}\.\d{4})\s+(.+?)\s+(-?\d[\d\s]*[,.]\d{2})(?!\d)',
         re.DOTALL
@@ -906,8 +897,7 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
             low = desc.lower()
             if any(w in low for w in ['počáteční zůstatek', 'konečný zůstatek',
                                        'celkem připsáno', 'celkem odepsáno',
-                                       'přehled pohyb', 'shrnuti pohyb',
-                                       'obraty za']):
+                                       'přehled pohyb', 'shrnuti pohyb', 'obraty za']):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -917,24 +907,19 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
             })
         except Exception:
             continue
-    
-    # Fallback: ищем строки в таблице, где есть и дата, и сумма
     if not result:
         for table in doc.tables:
             for row in table.rows:
                 cells = [c.text.strip() for c in row.cells]
                 if not cells:
                     continue
-                joined = ' '.join(cells)
-                # Ищем дату в одной из ячеек
                 date_found = None
+                amount_found = None
                 for c in cells:
                     d = parse_date(c)
                     if d and re.match(r'^\d{2}\.\d{2}\.\d{4}$', c):
                         date_found = d
                         break
-                # Ищем сумму в одной из ячеек
-                amount_found = None
                 for c in cells:
                     if re.match(r'^-?\d[\d\s]*[,.]\d{2}$', c.strip()):
                         amount_found = parse_amount(c)
@@ -1195,17 +1180,11 @@ def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[
     return result
 
 def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Kapital Bank DOCX. Извлекаем все параграфы и ячейки таблиц.
-    Ищем строки вида: 2026-08-20 | 3.00 | 0 | 6489.14 | SMS SERVICE FEE
-    """
     result = []
     try:
         doc = Document(BytesIO(file_content))
     except Exception:
         return []
-    
-    # Собираем ВСЕ строки (параграфы + ячейки таблиц в порядке обхода)
     lines = []
     for para in doc.paragraphs:
         t = para.text.strip()
@@ -1217,15 +1196,11 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
                 t = cell.text.strip()
                 if t:
                     lines.append(t)
-    
-    # Отдельно — построчный дамп таблиц (для поиска горизонтальных записей)
     table_rows_text = []
     for table in doc.tables:
         for row in table.rows:
             cells = [c.text.strip() for c in row.cells]
             table_rows_text.append(cells)
-    
-    # Подход 1: ищем полную строку в одной ячейке
     pattern = re.compile(
         r'(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})\s+'
         r'([\d\s]+[.,]\d{1,2})\s+'
@@ -1254,12 +1229,9 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
                 })
             except Exception:
                 continue
-    
-    # Подход 2: ищем по ячейкам таблиц (если данные разложены по колонкам)
     if not result:
         for cells in table_rows_text:
             try:
-                # Ищем в строке ячейку-дату и ячейку-описание и ячейку-сумму
                 date_cell = None
                 desc_cell = None
                 amount_cell = None
@@ -1286,7 +1258,6 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
                     })
             except Exception:
                 continue
-    
     return result
 
 def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict]:
@@ -1758,18 +1729,11 @@ def parse_paysera_property(file_content, account_name): return parse_paysera_gen
 def parse_paysera_rerum(file_content, account_name): return parse_paysera_generic(file_content, account_name)
 
 def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Paysera DOCX. Данные лежат в ячейке таблицы, где всё склеено:
-    "Commission fee 2026-08-03 03:11:35 +02001761392696Paysera LT (300060819)-5.00 EUR 7478.19 EUR"
-    Парсим регуляркой прямо по тексту ячеек.
-    """
     result = []
     try:
         doc = Document(BytesIO(file_content))
     except Exception:
         return []
-    
-    # Собираем весь текст: ячейки таблиц + параграфы
     all_parts = []
     for table in doc.tables:
         for row in table.rows:
@@ -1782,24 +1746,21 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
         if t:
             all_parts.append(t)
     full_text = '\n'.join(all_parts).replace('\ufeff', '').replace('\xa0', ' ')
-    
-    # Основной паттерн:
-    # <Тип операции> <ISO-дата> <время> <+NNNN> <номер> <Получатель (Код)> <сумма> <валюта>
     pattern = re.compile(
-        r'([A-Za-zА-Яа-я][A-Za-zА-Яа-я\s]{2,40}?)'         # тип: Commission fee / Перевод / и т.п.
+        r'([A-Za-zА-Яа-я][A-Za-zА-Яа-я\s]{2,40}?)'
         r'\s+'
-        r'(\d{4}-\d{2}-\d{2})'                              # дата
+        r'(\d{4}-\d{2}-\d{2})'
         r'\s+'
-        r'(\d{2}:\d{2}:\d{2})'                              # время
-        r'(?:\s+[+\-]\d{4})?'                               # часовой пояс
-        r'\s*'                                              # пробелы или ничего
-        r'(\d{6,})'                                         # номер транзакции (6+ цифр)
-        r'\s*'                                              # возможно склеено
-        r'([A-Za-zА-Яа-я][^\d\-+]{2,80}?)'                  # получатель
+        r'(\d{2}:\d{2}:\d{2})'
+        r'(?:\s+[+\-]\d{4})?'
         r'\s*'
-        r'\((\d{6,})\)'                                     # (код)
+        r'(\d{6,})'
         r'\s*'
-        r'(-?\d[\d\s]*[.,]\d{2})\s*([A-Z]{3})',             # сумма и валюта
+        r'([A-Za-zА-Яа-я][^\d\-+]{2,80}?)'
+        r'\s*'
+        r'\((\d{6,})\)'
+        r'\s*'
+        r'(-?\d[\d\s]*[.,]\d{2})\s*([A-Z]{3})',
         re.MULTILINE
     )
     for m in pattern.finditer(full_text):
@@ -1818,8 +1779,6 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    
-    # Fallback 1: без кода в скобках
     if not result:
         pattern2 = re.compile(
             r'([A-Za-zА-Яа-я][A-Za-zА-Яа-я\s]{2,40}?)'
@@ -1852,17 +1811,68 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
                 })
             except Exception:
                 continue
+    return result
+
+def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Paysera PDF.
+    В PDF от Paysera весь блок данных — это ОДИН блок текста:
+        Commission fee
+        2026-08-03 19:11:13
+        +02001761716409Paysera LT (300060819)-5.00 EUR 1130.63 EUR
+        Purpose of payment: Плата за обслуживание счета.
+    Или слитно: "Commission fee 2026-08-03 03:11:35 +02001761392696Paysera LT (300060819)-5.00 EUR 7478.19 EUR"
+    Парсим по трём ключевым частям независимо:
+      1) тип операции (Commission fee и т.п.)
+      2) ISO-дата YYYY-MM-DD + время
+      3) сумма (-5.00 EUR)
+    """
+    result = []
+    full_text = pdf_all_text(file_content)
+    if not full_text:
+        return []
     
-    # Fallback 2: ищем по дате и сумме без привязки к типу
+    # Стратегия 1. Основной многострочный паттерн
+    pattern = re.compile(
+        r'([A-Za-zА-Яа-я][A-Za-zА-Яа-я\s]{2,40}?)\s*\n?\s*'          # тип
+        r'(\d{4}-\d{2}-\d{2})\s*\n?\s*'                                # дата
+        r'(\d{2}:\d{2}:\d{2})\s*\n?\s*'                                # время
+        r'(?:\+?\d{4})?\s*'                                            # часовой пояс
+        r'(\d{6,})?\s*'                                                # номер (опционально)
+        r'([A-Za-zА-Яа-я][^\d\-+\n]{2,80}?)\s*'                        # получатель
+        r'(?:\((\d{6,})\))?\s*'                                        # (код)
+        r'(-?\d[\d\s]*[.,]\d{2})\s*([A-Z]{3})',                        # сумма и валюта
+        re.MULTILINE | re.DOTALL
+    )
+    for m in pattern.finditer(full_text):
+        try:
+            op_type = (m.group(1) or '').strip()
+            date = parse_date(m.group(2))
+            amount = parse_amount(m.group(8))
+            counterparty = re.sub(r'\s+', ' ', m.group(6) or '').strip()
+            if not date or amount == 0.0:
+                continue
+            if not counterparty:
+                counterparty = 'Paysera LT'
+            result.append({
+                'Дата': date, 'Сумма': amount,
+                'Контрагент': counterparty[:200],
+                'Наименование счета': account_name,
+                'Описание': f"{op_type}: {counterparty}"[:500]
+            })
+        except Exception:
+            continue
+    
+    # Стратегия 2. Упрощённая: дата + сумма + EUR на одной строке или рядом
     if not result:
-        pattern3 = re.compile(
+        pattern2 = re.compile(
             r'(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}'
-            r'(?:\s+[+\-]\d{4})?'
-            r'.*?'
+            r'(?:\s+[+\-]?\d{4})?'
+            r'[^\n]{0,200}?'
             r'(-?\d[\d\s]*[.,]\d{2})\s*EUR',
-            re.MULTILINE
+            re.MULTILINE | re.DOTALL
         )
-        for m in pattern3.finditer(full_text):
+        for m in pattern2.finditer(full_text):
             try:
                 date = parse_date(m.group(1))
                 amount = parse_amount(m.group(2))
@@ -1872,74 +1882,56 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': 'Paysera LT',
                     'Наименование счета': account_name,
-                    'Описание': 'Commission fee / Плата за обслуживание'
+                    'Описание': 'Commission fee / Плата за обслуживание счета'
                 })
             except Exception:
                 continue
     
-    return result
-
-def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Paysera PDF. Ищем либо в таблицах, либо по тексту.
-    """
-    result = []
-    # По таблицам
-    tables = pdf_all_tables(file_content)
-    for table in tables:
-        for row in table:
-            row_text = ' '.join(row)
-            m = re.search(r'(\d{4}-\d{2}-\d{2})', row_text)
-            if not m:
-                continue
+    # Стратегия 3. Ищем любой "Commission fee" и ближайшую сумму -5.00 EUR
+    if not result:
+        pattern3 = re.compile(
+            r'(Commission\s*fee|Плата|Перевод)[^\n]{0,200}?(\d{4}-\d{2}-\d{2})'
+            r'[^\n]{0,200}?(-?\d[\d\s]*[.,]\d{2})\s*EUR',
+            re.IGNORECASE | re.MULTILINE | re.DOTALL
+        )
+        for m in pattern3.finditer(full_text):
             try:
-                date = parse_date(m.group(1))
-                am = re.search(r'(-?\d[\d\s]*[.,]\d{2})\s*EUR', row_text)
-                if not am:
-                    continue
-                amount = parse_amount(am.group(1))
+                op_type = m.group(1).strip()
+                date = parse_date(m.group(2))
+                amount = parse_amount(m.group(3))
                 if not date or amount == 0.0:
                     continue
-                desc = re.sub(r'\s+', ' ', row_text)[:300]
                 result.append({
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': 'Paysera LT',
                     'Наименование счета': account_name,
-                    'Описание': desc
+                    'Описание': f"{op_type}: Плата за обслуживание счета"
                 })
             except Exception:
                 continue
-    if result:
-        return result
     
-    # Fallback по тексту
-    full_text = pdf_all_text(file_content)
-    pattern = re.compile(
-        r'(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}'
-        r'(?:\s+[+\-]\d{4})?'
-        r'[^\n]*?'
-        r'(-?\d[\d\s]*[.,]\d{2})\s*EUR',
-        re.MULTILINE
-    )
-    for m in pattern.finditer(full_text):
-        try:
-            date = parse_date(m.group(1))
-            amount = parse_amount(m.group(2))
-            if not date or amount == 0.0:
-                continue
-            line_start = full_text.rfind('\n', 0, m.start()) + 1
-            line_end = full_text.find('\n', m.end())
-            if line_end == -1: line_end = len(full_text)
-            line = full_text[line_start:line_end]
-            line = re.sub(r'\s+', ' ', line).strip()
-            result.append({
-                'Дата': date, 'Сумма': amount,
-                'Контрагент': 'Paysera LT',
-                'Наименование счета': account_name,
-                'Описание': line[:500]
-            })
-        except Exception:
-            continue
+    # Стратегия 4 (грубая). Если в тексте есть одна дата и одна сумма EUR — берём их.
+    if not result:
+        # Берём первую ISO-дату и первую сумму -X.XX EUR
+        m_date = re.search(r'(\d{4}-\d{2}-\d{2})', full_text)
+        m_amt = re.search(r'(-?\d[\d\s]*[.,]\d{2})\s*EUR', full_text)
+        if m_date and m_amt:
+            try:
+                date = parse_date(m_date.group(1))
+                amount = parse_amount(m_amt.group(1))
+                if date and amount != 0.0:
+                    # Ищем "Commission fee" или "Плата" как описание
+                    op_match = re.search(r'(Commission fee|Плата[^\n]{0,60})', full_text, re.IGNORECASE)
+                    op = op_match.group(1).strip() if op_match else 'Commission fee'
+                    result.append({
+                        'Дата': date, 'Сумма': amount,
+                        'Контрагент': 'Paysera LT',
+                        'Наименование счета': account_name,
+                        'Описание': op[:500]
+                    })
+            except Exception:
+                pass
+    
     return result
 
 # ==================== RAK BANK ====================
@@ -2575,13 +2567,18 @@ def main():
                         file_stats.append(f"✅ {uf.name}: {len(tx)} операций")
                     else:
                         file_stats.append(f"ℹ️ {uf.name}: транзакций не найдено")
-                        # Дамп DOCX для отладки
                         if uf.name.lower().endswith('.docx'):
                             try:
                                 dump = docx_dump(content)
                                 debug_info.append(f"📄 ДАМП `{uf.name}`:\n```\n{dump[:3000]}\n```")
                             except Exception as e:
                                 debug_info.append(f"📄 Ошибка дампа: {e}")
+                        elif uf.name.lower().endswith('.pdf'):
+                            try:
+                                txt = pdf_all_text(content)
+                                debug_info.append(f"📄 PDF-текст `{uf.name}` (первые 3000):\n```\n{txt[:3000]}\n```")
+                            except Exception as e:
+                                debug_info.append(f"📄 Ошибка дампа PDF: {e}")
                 except Exception as e:
                     failed.append(f"{uf.name} (ошибка: {e})")
                     debug_info.append(f"❌ `{uf.name}` → исключение: {e}")
