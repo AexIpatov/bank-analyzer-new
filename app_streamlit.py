@@ -37,7 +37,6 @@ st.markdown("""
 .main { background: transparent; }
 footer {visibility: hidden;}
 #MainMenu {visibility: hidden;}
-
 .hero {
     background: linear-gradient(135deg, #5D9968 0%, #7BAE7F 50%, #A8D5BA 100%);
     padding: 3rem 2.5rem;
@@ -71,7 +70,6 @@ footer {visibility: hidden;}
     backdrop-filter: blur(8px);
 }
 .hero-illustration { position: relative; z-index: 2; }
-
 .stButton > button {
     background: linear-gradient(135deg, #5D9968 0%, #7BAE7F 100%);
     color: #FFFFFF;
@@ -101,7 +99,6 @@ footer {visibility: hidden;}
     transform: translateY(-2px);
     color: #FFFFFF;
 }
-
 .stFileUploader {
     background: #FFFFFF;
     border-radius: 20px;
@@ -118,7 +115,6 @@ footer {visibility: hidden;}
     border-radius: 10px !important;
 }
 .stFileUploader button:hover { background: var(--mint-light) !important; color: #FFFFFF !important; }
-
 .stMetric {
     background: #FFFFFF;
     border-radius: 20px;
@@ -137,14 +133,12 @@ footer {visibility: hidden;}
 .stMetric:hover { transform: translateY(-4px); box-shadow: 0 14px 32px rgba(93, 153, 104, 0.18); }
 .stMetric label { color: var(--ink-soft) !important; font-size: 0.9rem !important; text-transform: uppercase; }
 .stMetric [data-testid="stMetricValue"] { color: var(--ink) !important; font-weight: 700 !important; font-size: 1.7rem !important; }
-
 .stDataFrame { border-radius: 20px; overflow: hidden; box-shadow: 0 8px 28px rgba(46, 59, 50, 0.08); background: #FFFFFF; }
 .stAlert { border-radius: 14px; border: none; }
 div[data-baseweb="notification"][kind="positive"] { background: #E8F5E9; color: var(--ink); }
 div[data-baseweb="notification"][kind="info"]     { background: #EEF4EA; color: var(--ink); }
 div[data-baseweb="notification"][kind="warning"]  { background: #FBF3E0; color: #7A5B10; }
 .stProgress > div > div > div { background: linear-gradient(90deg, #5D9968 0%, #A8D5BA 100%); border-radius: 8px; }
-
 h3 {
     color: var(--ink);
     font-weight: 700;
@@ -158,7 +152,6 @@ h3 {
 ::-webkit-scrollbar-track { background: #FAF8F3; }
 ::-webkit-scrollbar-thumb { background: #C8DECC; border-radius: 5px; }
 hr { border: none; border-top: 1px solid #E8F2E4; margin: 2rem 0; }
-
 .info-card {
     background: #FFFFFF;
     border-radius: 18px;
@@ -177,7 +170,6 @@ hr { border: none; border-top: 1px solid #E8F2E4; margin: 2rem 0; }
 }
 .info-card-text h4 { color: var(--ink); margin: 0 0 0.25rem 0; font-size: 1rem; font-weight: 600; }
 .info-card-text p { color: var(--ink-muted); margin: 0; font-size: 0.88rem; }
-
 .footer-note { text-align: center; color: var(--ink-muted); font-size: 0.85rem; padding: 1.5rem 0 0.5rem 0; }
 </style>
 """, unsafe_allow_html=True)
@@ -411,7 +403,7 @@ def pdf_all_tables(file_content: bytes) -> List[List[List[str]]]:
         return []
     return tables_out
 
-# ==================== CSOB (общий парсер) ====================
+# ==================== CSOB ====================
 
 def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
     transactions = []
@@ -1509,8 +1501,7 @@ def parse_budapest_huf_mkb(file_content: bytes, account_name: str) -> List[Dict]
     for idx in range(header_row + 1, len(df)):
         row = df.iloc[idx]
         rv = [x for x in row.values if pd.notna(x)]
-        if not rv: continue
-        try:
+        if not rv: continue        try:
             dstr = safe_str(row.iloc[ci['date']]) if ci['date'] < len(row) else ''
             if not dstr: continue
             date = parse_date(dstr)
@@ -1657,7 +1648,7 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
-# ==================== Paysera ====================
+# ==================== Paysera XLSX/DOCX (без PDF) ====================
 
 def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -1813,126 +1804,193 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
+# ==================== НОВЫЙ ПАРСЕР PAYSERA PDF (ИСПРАВЛЕННЫЙ) ====================
+
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    Paysera PDF.
-    В PDF от Paysera весь блок данных — это ОДИН блок текста:
-        Commission fee
-        2026-08-03 19:11:13
-        +02001761716409Paysera LT (300060819)-5.00 EUR 1130.63 EUR
-        Purpose of payment: Плата за обслуживание счета.
-    Или слитно: "Commission fee 2026-08-03 03:11:35 +02001761392696Paysera LT (300060819)-5.00 EUR 7478.19 EUR"
-    Парсим по трём ключевым частям независимо:
-      1) тип операции (Commission fee и т.п.)
-      2) ISO-дата YYYY-MM-DD + время
-      3) сумма (-5.00 EUR)
+    Paysera PDF. Извлекаем ВСЕ текстовые строки страницы, находим
+    операции по маркерам и корректно определяем сумму операции
+    (а НЕ баланс).
+    
+    Структура PDF Paysera:
+      ...
+      Type | Date and time | Statement No. | Recipient / Payer (Code) |
+      Start balance: <баланс> EUR
+      <Тип операции>
+      <ISO-дата> <время> <+NNNN>
+      <номер> <Получатель> (<код>) <СУММА> EUR <БАЛАНС> EUR
+      Purpose of payment: <назначение>
+      ...
+      Final balance: <баланс> EUR
+      Debit turnover: <сумма> EUR
+      Credit turnover: <сумма> EUR
     """
     result = []
     full_text = pdf_all_text(file_content)
     if not full_text:
         return []
     
-    # Стратегия 1. Основной многострочный паттерн
-    pattern = re.compile(
-        r'([A-Za-zА-Яа-я][A-Za-zА-Яа-я\s]{2,40}?)\s*\n?\s*'          # тип
-        r'(\d{4}-\d{2}-\d{2})\s*\n?\s*'                                # дата
-        r'(\d{2}:\d{2}:\d{2})\s*\n?\s*'                                # время
-        r'(?:\+?\d{4})?\s*'                                            # часовой пояс
-        r'(\d{6,})?\s*'                                                # номер (опционально)
-        r'([A-Za-zА-Яа-я][^\d\-+\n]{2,80}?)\s*'                        # получатель
-        r'(?:\((\d{6,})\))?\s*'                                        # (код)
-        r'(-?\d[\d\s]*[.,]\d{2})\s*([A-Z]{3})',                        # сумма и валюта
+    # Множество строк
+    lines = [l.strip() for l in full_text.split('\n') if l.strip()]
+    
+    # Собираем текст как единое пространство для гибкого поиска
+    single = re.sub(r'\s+', ' ', full_text)
+    
+    # Маркеры типов операций
+    op_markers = [
+        'Commission fee', 'Commission', 'Плата', 'Перевод', 'Payment',
+        'Transfer', 'Fee', 'Mokestis', 'Mokestis už'
+    ]
+    # Ключевые слова, означающие, что строка/блок — служебный
+    service_words = [
+        'start balance', 'final balance', 'debit turnover', 'credit turnover',
+        'purpose of payment', 'account statement', 'client', 'account ',
+        'currencies', 'statement no'
+    ]
+    
+    # Ищем паттерны: тип операции + ISO-дата + время + ... + СУММА EUR (со знаком -)
+    # Используем regex, где сумма берётся ПЕРЕД "EUR", а не баланс.
+    # Сумма операции в Paysera PDF всегда стоит ПЕРЕД словом "EUR" и часто со знаком "-".
+    # Баланс идёт ПОСЛЕ неё, тоже через "EUR".
+    #
+    # Пример (одна строка или через пробелы):
+    #   Commission fee 2026-08-03 19:11:13 +02001761716409Paysera LT (300060819)-5.00 EUR 1130.63 EUR
+    #
+    # Наша цель — вытащить -5.00 EUR, а не 1130.63 EUR (это баланс).
+    
+    # Стратегия 1. Ищем сумму СО ЗНАКОМ "-" рядом с датой и временем
+    # Проверяем не только знак, но и то, что рядом стоит "EUR".
+    pattern_dated = re.compile(
+        r'(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})'
+        r'[^\n]{0,200}?'
+        r'(-[\d\s]+[.,]\d{2})\s*EUR',
         re.MULTILINE | re.DOTALL
     )
-    for m in pattern.finditer(full_text):
+    # Если нашли дату и отрицательную сумму — это почти наверняка операция.
+    for m in pattern_dated.finditer(full_text):
         try:
-            op_type = (m.group(1) or '').strip()
-            date = parse_date(m.group(2))
-            amount = parse_amount(m.group(8))
-            counterparty = re.sub(r'\s+', ' ', m.group(6) or '').strip()
+            date = parse_date(m.group(1))
+            amount = parse_amount(m.group(3))
             if not date or amount == 0.0:
                 continue
-            if not counterparty:
-                counterparty = 'Paysera LT'
+            # Описание ищем рядом — берём ближайший "Purpose of payment" или "Commission fee"
+            desc = ''
+            start_pos = m.start()
+            # Ищем название операции в пределах 300 символов ДО даты
+            head = full_text[max(0, start_pos - 300):start_pos]
+            for marker in op_markers:
+                if marker in head:
+                    desc = marker
+                    break
+            if not desc:
+                # Ищем "Purpose of payment"
+                tail = full_text[m.end():m.end() + 500]
+                purpose_match = re.search(r'Purpose of payment:\s*([^\n]{1,200})', tail)
+                if purpose_match:
+                    desc = purpose_match.group(1).strip()
+            if not desc:
+                desc = 'Paysera operation'
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': counterparty[:200],
+                'Контрагент': 'Paysera LT',
                 'Наименование счета': account_name,
-                'Описание': f"{op_type}: {counterparty}"[:500]
+                'Описание': desc[:500]
             })
         except Exception:
             continue
     
-    # Стратегия 2. Упрощённая: дата + сумма + EUR на одной строке или рядом
+    # Стратегия 2. Если по знаку не нашли (например, в PDF минус съелся),
+    # ищем по контексту: сначала идёт "Commission fee" (или аналог),
+    # потом дата/время, потом сумма, потом EUR, потом баланс, потом EUR.
     if not result:
-        pattern2 = re.compile(
-            r'(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}'
-            r'(?:\s+[+\-]?\d{4})?'
-            r'[^\n]{0,200}?'
-            r'(-?\d[\d\s]*[.,]\d{2})\s*EUR',
-            re.MULTILINE | re.DOTALL
-        )
-        for m in pattern2.finditer(full_text):
-            try:
-                date = parse_date(m.group(1))
-                amount = parse_amount(m.group(2))
-                if not date or amount == 0.0:
-                    continue
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': 'Paysera LT',
-                    'Наименование счета': account_name,
-                    'Описание': 'Commission fee / Плата за обслуживание счета'
-                })
-            except Exception:
+        # Все EUR-суммы в порядке появления вместе с позицией в тексте
+        eur_matches = []
+        for m in re.finditer(r'(-?\d[\d\s]*[.,]\d{2})\s*EUR', full_text):
+            eur_matches.append((m.start(), parse_amount(m.group(1))))
+        # Для каждой даты+времени ищем первую EUR-сумму после неё
+        date_matches = list(re.finditer(r'(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}', full_text))
+        for dm in date_matches:
+            date = parse_date(dm.group(1))
+            if not date:
                 continue
-    
-    # Стратегия 3. Ищем любой "Commission fee" и ближайшую сумму -5.00 EUR
-    if not result:
-        pattern3 = re.compile(
-            r'(Commission\s*fee|Плата|Перевод)[^\n]{0,200}?(\d{4}-\d{2}-\d{2})'
-            r'[^\n]{0,200}?(-?\d[\d\s]*[.,]\d{2})\s*EUR',
-            re.IGNORECASE | re.MULTILINE | re.DOTALL
-        )
-        for m in pattern3.finditer(full_text):
-            try:
-                op_type = m.group(1).strip()
-                date = parse_date(m.group(2))
-                amount = parse_amount(m.group(3))
-                if not date or amount == 0.0:
-                    continue
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': 'Paysera LT',
-                    'Наименование счета': account_name,
-                    'Описание': f"{op_type}: Плата за обслуживание счета"
-                })
-            except Exception:
+            pos_date = dm.end()
+            # Первая сумма EUR после даты — это сумма операции
+            amount_found = None
+            for pos, amount in eur_matches:
+                if pos >= pos_date:
+                    amount_found = amount
+                    break
+            if amount_found is None or amount_found == 0.0:
                 continue
+            # Проверяем, не является ли эта сумма служебной
+            # (взглянем на 60 символов перед суммой)
+            pre_text = full_text[max(0, pos - 60):pos].lower()
+            if any(w in pre_text for w in ['start balance', 'final balance',
+                                            'debit turnover', 'credit turnover',
+                                            'balance']):
+                continue
+            # Ищем описание рядом
+            desc = ''
+            head = full_text[max(0, pos_date - 300):pos_date]
+            for marker in op_markers:
+                if marker in head:
+                    desc = marker
+                    break
+            if not desc:
+                tail = full_text[dm.end():dm.end() + 500]
+                purpose_match = re.search(r'Purpose of payment:\s*([^\n]{1,200})', tail)
+                if purpose_match:
+                    desc = purpose_match.group(1).strip()
+            if not desc:
+                desc = 'Paysera operation'
+            result.append({
+                'Дата': date, 'Сумма': amount_found,
+                'Контрагент': 'Paysera LT',
+                'Наименование счета': account_name,
+                'Описание': desc[:500]
+            })
     
-    # Стратегия 4 (грубая). Если в тексте есть одна дата и одна сумма EUR — берём их.
+    # Стратегия 3. Fallback: ищем конкретную строку с "Commission fee"
+    # и извлекаем из неё сумму "X.XX EUR", отбрасывая второй EUR (баланс)
     if not result:
-        # Берём первую ISO-дату и первую сумму -X.XX EUR
-        m_date = re.search(r'(\d{4}-\d{2}-\d{2})', full_text)
-        m_amt = re.search(r'(-?\d[\d\s]*[.,]\d{2})\s*EUR', full_text)
-        if m_date and m_amt:
-            try:
-                date = parse_date(m_date.group(1))
-                amount = parse_amount(m_amt.group(1))
-                if date and amount != 0.0:
-                    # Ищем "Commission fee" или "Плата" как описание
-                    op_match = re.search(r'(Commission fee|Плата[^\n]{0,60})', full_text, re.IGNORECASE)
-                    op = op_match.group(1).strip() if op_match else 'Commission fee'
-                    result.append({
-                        'Дата': date, 'Сумма': amount,
-                        'Контрагент': 'Paysera LT',
-                        'Наименование счета': account_name,
-                        'Описание': op[:500]
-                    })
-            except Exception:
-                pass
+        # Разбиваем весь текст на блоки вокруг "Commission fee" или "Плата"
+        for marker in op_markers:
+            idx = 0
+            while True:
+                idx = full_text.find(marker, idx)
+                if idx == -1:
+                    break
+                block = full_text[idx:idx + 500]
+                # Ищем дату
+                dm = re.search(r'(\d{4}-\d{2}-\d{2})', block)
+                if not dm:
+                    idx += len(marker)
+                    continue
+                date = parse_date(dm.group(1))
+                # Ищем первую сумму EUR после даты
+                am = re.search(r'(-?\d[\d\s]*[.,]\d{2})\s*EUR', block[dm.end():])
+                if am and date:
+                    amount = parse_amount(am.group(1))
+                    if amount != 0.0:
+                        result.append({
+                            'Дата': date, 'Сумма': amount,
+                            'Контрагент': 'Paysera LT',
+                            'Наименование счета': account_name,
+                            'Описание': marker
+                        })
+                idx += len(marker)
+                break  # нашли один раз — достаточно
     
-    return result
+    # Дедупликация по (дата, сумма)
+    seen = set()
+    deduped = []
+    for r in result:
+        key = (r['Дата'], r['Сумма'])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(r)
+    return deduped
 
 # ==================== RAK BANK ====================
 
