@@ -1934,37 +1934,44 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
-# ==================== Paysera PDF (НОВЫЙ АЛГОРИТМ) ====================
+# ==================== Paysera PDF (ФИНАЛЬНАЯ ВЕРСИЯ) ====================
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    Paysera PDF.
+    Paysera PDF. pdfplumber отдаёт плоский текст.
 
-    pdfplumber отдаёт весь текст одной строкой (таблица склеена), поэтому
-    стратегии с '\\n' и MULTILINE не работают. Используем поиск по «окнам»
-    между датами.
+    Особенность формата:
+      Date and time <date> <time> ... <amount> EUR ... Purpose of payment: ...
 
-    Алгоритм:
-    1. Находим все даты вида YYYY-MM-DD HH:MM:SS.
-    2. Для каждой даты смотрим окно до следующей даты (или +2000 символов).
-    3. Внутри окна ищем РОВНО одну отрицательную сумму EUR (-5.00 EUR) —
-       это сумма операции (комиссия / платёж).
-    4. Исключаем положительные суммы, если рядом (в пределах 60 символов)
-       есть слова balance/turnover/final/start/debit/credit.
-    5. Описание: 'Purpose of payment:' или ключевые слова.
+    pdfplumber может вставить одну и ту же дату дважды (в шапке таблицы и в
+    самой строке транзакции). Из-за этого «окно между датами» оказывается
+    слишком узким, и в каждой группе находится одна и та же сумма — задвоение.
+
+    Решение: склеиваем соседние даты, расстояние между которыми < 400 символов,
+    в одну группу. Для группы берём дату самого первого вхождения, а сумму и
+    описание ищем во всём расширенном окне до следующей реальной даты.
     """
     result = []
     full_text = pdf_all_text(file_content)
     if not full_text:
         return []
 
-    # Находим все даты с временем
     date_pattern = re.compile(r'(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})')
-    date_matches = list(date_pattern.finditer(full_text))
-    if not date_matches:
+    raw_dates = list(date_pattern.finditer(full_text))
+    if not raw_dates:
         return []
 
-    # Находим все суммы EUR (и положительные, и отрицательные)
+    # Группируем близкие даты
+    groups = []  # каждый: {'date': str, 'start': int, 'end': int}
+    cur = {'date': raw_dates[0].group(1), 'start': raw_dates[0].start(), 'end': raw_dates[0].end()}
+    for dm in raw_dates[1:]:
+        if dm.start() - cur['end'] < 400:
+            cur['end'] = dm.end()
+        else:
+            groups.append(cur)
+            cur = {'date': dm.group(1), 'start': dm.start(), 'end': dm.end()}
+    groups.append(cur)
+
     eur_pattern = re.compile(r'([+\-]?\d[\d\s]*[.,]\d{2})\s*EUR')
     eur_matches = []
     for m in eur_pattern.finditer(full_text):
@@ -1972,32 +1979,21 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             'start': m.start(),
             'end': m.end(),
             'amount': parse_amount(m.group(1)),
-            'raw': m.group(1),
         })
 
-    STOP_WORDS = ['balance', 'turnover', 'final', 'start', 'debit', 'credit',
-                  'start balance', 'final balance']
+    STOP_WORDS = ['balance', 'turnover', 'final', 'start', 'debit', 'credit']
 
-    for i, dm in enumerate(date_matches):
-        date_str = dm.group(1)
-        date = parse_date(date_str)
+    for gi, g in enumerate(groups):
+        date = parse_date(g['date'])
         if not date:
             continue
-        # Окно до следующей даты или +2000 символов
-        window_start = dm.end()
-        if i + 1 < len(date_matches):
-            window_end = date_matches[i + 1].start()
-        else:
-            window_end = window_start + 2000
+        window_start = g['end']
+        window_end = groups[gi + 1]['start'] if gi + 1 < len(groups) else window_start + 2000
         if window_end <= window_start:
             continue
 
-        # Все EUR-суммы в окне
         window_eur = [e for e in eur_matches if window_start <= e['start'] < window_end]
-
-        # Приоритет 1: отрицательная сумма EUR в окне
         negative = [e for e in window_eur if e['amount'] < 0]
-        # Приоритет 2: положительная сумма EUR, но не «balance»
         positive = [e for e in window_eur if e['amount'] > 0]
 
         chosen_amount = None
@@ -2017,17 +2013,19 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if chosen_amount is None or chosen_amount == 0.0:
             continue
 
-        # Описание: сначала Purpose of payment:
         desc = ''
         window_text = full_text[window_start:window_end]
-        purpose_match = re.search(r'Purpose of payment\s*:\s*([^\.]{1,200}?)(?:\.|$)', window_text, re.IGNORECASE)
+        purpose_match = re.search(
+            r'Purpose of payment\s*:\s*([^\.]{1,200}?)(?:\.|$)',
+            window_text, re.IGNORECASE
+        )
         if purpose_match:
             desc = purpose_match.group(1).strip()
         if not desc:
-            # Ключевые слова в окне
             head = full_text[max(0, chosen_pos - 120):chosen_pos]
             for marker in ['Commission fee', 'Commission', 'Плата за', 'Плата',
-                           'Payment', 'Transfer', 'Fee', 'Sąskaitos palaikymo mokestis']:
+                           'Payment', 'Transfer', 'Fee',
+                           'Sąskaitos palaikymo mokestis']:
                 if marker.lower() in head.lower() or marker.lower() in window_text.lower():
                     desc = marker
                     break
@@ -2041,7 +2039,7 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             'Описание': desc[:500]
         })
 
-    # Дедупликация по (дата, сумма)
+    # Финальная дедупликация по (дата, сумма)
     seen = set()
     deduped = []
     for r in result:
