@@ -10,6 +10,7 @@ from docx import Document
 import pdfplumber
 
 # ==================== НАСТРОЙКА СТРАНИЦЫ ====================
+
 st.set_page_config(
     page_title="Аналитик банковских выписок",
     page_icon="💼",
@@ -19,9 +20,11 @@ st.set_page_config(
 
 # ==================== CSS СТИЛИ ====================
 # Палитра: тёмно-зелёный (цвет травы).
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
 :root {
     --grass-dark: #1B5E20;
     --grass: #2E7D32;
@@ -34,14 +37,18 @@ st.markdown("""
     --ink-muted: #6E8072;
     --border: #C8E6C9;
 }
+
 .stApp {
     background: linear-gradient(180deg, #F7FAF5 0%, #EEF6EA 50%, #E1EEDD 100%);
     font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
     color: var(--ink);
 }
+
 .main { background: transparent; }
+
 footer {visibility: hidden;}
 #MainMenu {visibility: hidden;}
+
 .hero {
     background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 50%, #4CAF50 100%);
     padding: 3rem 2.5rem;
@@ -52,6 +59,7 @@ footer {visibility: hidden;}
     position: relative;
     overflow: hidden;
 }
+
 .hero::before {
     content: '';
     position: absolute;
@@ -60,11 +68,13 @@ footer {visibility: hidden;}
     background: radial-gradient(circle, rgba(255,255,255,0.18) 0%, transparent 70%);
     border-radius: 50%;
 }
+
 .hero-content { position: relative; z-index: 2; display: flex; align-items: center; gap: 2rem; flex-wrap: wrap; }
 .hero-text { flex: 1; min-width: 280px; }
 .hero-text h1 { font-size: 2.5rem; font-weight: 800; margin: 0 0 0.6rem 0; letter-spacing: -1px; }
 .hero-text p { font-size: 1.1rem; margin: 0; opacity: 0.95; }
 .hero-chips { display: flex; gap: 0.5rem; margin-top: 1.2rem; flex-wrap: wrap; }
+
 .chip {
     background: rgba(255,255,255,0.2);
     border: 1px solid rgba(255,255,255,0.3);
@@ -74,7 +84,9 @@ footer {visibility: hidden;}
     font-weight: 500;
     backdrop-filter: blur(8px);
 }
+
 .hero-illustration { position: relative; z-index: 2; }
+
 .stButton > button {
     background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 100%);
     color: #FFFFFF;
@@ -86,11 +98,13 @@ footer {visibility: hidden;}
     transition: all 0.25s;
     box-shadow: 0 6px 16px rgba(27, 94, 32, 0.32);
 }
+
 .stButton > button:hover {
     background: linear-gradient(135deg, #124A17 0%, #1B5E20 100%);
     transform: translateY(-2px);
     color: #FFFFFF;
 }
+
 .stDownloadButton > button {
     background: linear-gradient(135deg, #2E7D32 0%, #4CAF50 100%);
     color: #FFFFFF;
@@ -99,11 +113,13 @@ footer {visibility: hidden;}
     padding: 0.8rem 1.8rem;
     font-weight: 600;
 }
+
 .stDownloadButton > button:hover {
     background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 100%);
     transform: translateY(-2px);
     color: #FFFFFF;
 }
+
 .stFileUploader {
     background: #FFFFFF;
     border-radius: 20px;
@@ -111,6 +127,7 @@ footer {visibility: hidden;}
     border: 2px dashed var(--border);
     box-shadow: 0 4px 20px rgba(27, 94, 32, 0.05);
 }
+
 .stFileUploader:hover { border-color: var(--grass-light); }
 .stFileUploader section { border: none !important; background: transparent !important; }
 .stFileUploader button {
@@ -120,6 +137,7 @@ footer {visibility: hidden;}
     border-radius: 10px !important;
 }
 .stFileUploader button:hover { background: var(--grass-light) !important; color: #FFFFFF !important; }
+
 .stMetric {
     background: #FFFFFF;
     border-radius: 20px;
@@ -129,21 +147,27 @@ footer {visibility: hidden;}
     position: relative;
     overflow: hidden;
 }
+
 .stMetric::before {
     content: '';
     position: absolute;
     top: 0; left: 0; height: 100%; width: 6px;
     background: linear-gradient(180deg, #1B5E20 0%, #4CAF50 100%);
 }
+
 .stMetric:hover { transform: translateY(-4px); box-shadow: 0 14px 32px rgba(27, 94, 32, 0.20); }
 .stMetric label { color: var(--ink-soft) !important; font-size: 0.9rem !important; text-transform: uppercase; }
 .stMetric [data-testid="stMetricValue"] { color: var(--ink) !important; font-weight: 700 !important; font-size: 1.7rem !important; }
+
 .stDataFrame { border-radius: 20px; overflow: hidden; box-shadow: 0 8px 28px rgba(27, 94, 32, 0.10); background: #FFFFFF; }
+
 .stAlert { border-radius: 14px; border: none; }
 div[data-baseweb="notification"][kind="positive"] { background: #E8F5E9; color: var(--ink); }
-div[data-baseweb="notification"][kind="info"]     { background: #EEF6EA; color: var(--ink); }
-div[data-baseweb="notification"][kind="warning"]  { background: #FBF3E0; color: #7A5B10; }
+div[data-baseweb="notification"][kind="info"] { background: #EEF6EA; color: var(--ink); }
+div[data-baseweb="notification"][kind="warning"] { background: #FBF3E0; color: #7A5B10; }
+
 .stProgress > div > div > div { background: linear-gradient(90deg, #1B5E20 0%, #4CAF50 100%); border-radius: 8px; }
+
 h3 {
     color: var(--ink);
     font-weight: 700;
@@ -153,11 +177,14 @@ h3 {
     margin-bottom: 1.2rem;
     font-size: 1.25rem;
 }
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: #F7FAF5; }
 ::-webkit-scrollbar-thumb { background: #A5D6A7; border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: #4CAF50; }
+
 hr { border: none; border-top: 1px solid #E1EEDD; margin: 2rem 0; }
+
 .info-card {
     background: #FFFFFF;
     border-radius: 18px;
@@ -168,52 +195,95 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 2rem 0; }
     gap: 1.2rem;
     box-shadow: 0 4px 16px rgba(27, 94, 32, 0.06);
 }
+
 .info-card-icon {
     flex-shrink: 0; width: 56px; height: 56px;
     display: flex; align-items: center; justify-content: center;
     border-radius: 14px;
     background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%);
 }
+
 .info-card-text h4 { color: var(--ink); margin: 0 0 0.25rem 0; font-size: 1rem; font-weight: 600; }
 .info-card-text p { color: var(--ink-muted); margin: 0; font-size: 0.88rem; }
+
 .footer-note { text-align: center; color: var(--ink-muted); font-size: 0.85rem; padding: 1.5rem 0 0.5rem 0; }
+
+/* [FIX-SUM-8] Стилизация второй таблицы — «Сводка по счетам» в тёмно-зелёной палитре. */
+.summary-table {
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 8px 28px rgba(27, 94, 32, 0.10);
+    background: #FFFFFF;
+    margin-bottom: 1rem;
+}
+.summary-table table {
+    border-collapse: collapse;
+    width: 100%;
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    font-size: 0.92rem;
+}
+.summary-table thead th {
+    background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 100%);
+    color: #FFFFFF;
+    padding: 12px 14px;
+    text-align: left;
+    font-weight: 600;
+    border: none;
+    white-space: nowrap;
+}
+.summary-table tbody td {
+    padding: 10px 14px;
+    border-bottom: 1px solid #E1EEDD;
+    color: var(--ink);
+    background: #FFFFFF;
+}
+.summary-table tbody tr:nth-child(even) td {
+    background: #F7FAF5;
+}
+.summary-table tbody tr:hover td {
+    background: #E8F5E9;
+}
+.summary-table tbody tr:last-child td {
+    border-bottom: none;
+}
 </style>
 """, unsafe_allow_html=True)
 
 # ==================== ШАПКА ====================
+
 st.markdown("""
 <div class="hero">
-  <div class="hero-content">
-    <div class="hero-text">
-      <h1>💼 Аналитик банковских выписок</h1>
-      <p>Загружайте выписки — получайте единый отчёт по доходам и расходам</p>
-      <div class="hero-chips">
-        <span class="chip">📄 CSV</span>
-        <span class="chip">📊 XLSX</span>
-        <span class="chip">📑 XLS</span>
-        <span class="chip">📝 DOCX</span>
-        <span class="chip">📕 PDF</span>
-      </div>
-    </div>
-    <div class="hero-illustration">
-      <svg width="180" height="180" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="100" cy="100" r="90" fill="rgba(255,255,255,0.15)"/>
-        <rect x="50" y="110" width="14" height="50" rx="4" fill="rgba(255,255,255,0.85)"/>
-        <rect x="72" y="90" width="14" height="70" rx="4" fill="rgba(255,255,255,0.95)"/>
-        <rect x="94" y="70" width="14" height="90" rx="4" fill="rgba(255,255,255,1)"/>
-        <rect x="116" y="95" width="14" height="65" rx="4" fill="rgba(255,255,255,0.95)"/>
-        <rect x="138" y="60" width="14" height="100" rx="4" fill="rgba(255,255,255,1)"/>
-        <path d="M57 100 L79 80 L101 60 L123 85 L145 50" stroke="#FFFFFF" stroke-width="3" fill="none" stroke-linecap="round"/>
-        <circle cx="57" cy="100" r="5" fill="#FFFFFF"/>
-        <circle cx="79" cy="80" r="5" fill="#FFFFFF"/>
-        <circle cx="101" cy="60" r="5" fill="#FFFFFF"/>
-        <circle cx="123" cy="85" r="5" fill="#FFFFFF"/>
-        <circle cx="145" cy="50" r="5" fill="#FFFFFF"/>
-        <circle cx="160" cy="40" r="16" fill="#FFD86B" stroke="#FFFFFF" stroke-width="2"/>
-        <text x="160" y="46" text-anchor="middle" font-size="16" font-weight="700" fill="#1B5E20">₽</text>
-      </svg>
-    </div>
-  </div>
+<div class="hero-content">
+<div class="hero-text">
+<h1>💼 Аналитик банковских выписок</h1>
+<p>Загружайте выписки — получайте единый отчёт по доходам и расходам</p>
+<div class="hero-chips">
+<span class="chip">📄 CSV</span>
+<span class="chip">📊 XLSX</span>
+<span class="chip">📑 XLS</span>
+<span class="chip">📝 DOCX</span>
+<span class="chip">📕 PDF</span>
+</div>
+</div>
+<div class="hero-illustration">
+<svg width="180" height="180" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle cx="100" cy="100" r="90" fill="rgba(255,255,255,0.15)"/>
+<rect x="50" y="110" width="14" height="50" rx="4" fill="rgba(255,255,255,0.85)"/>
+<rect x="72" y="90" width="14" height="70" rx="4" fill="rgba(255,255,255,0.95)"/>
+<rect x="94" y="70" width="14" height="90" rx="4" fill="rgba(255,255,255,1)"/>
+<rect x="116" y="95" width="14" height="65" rx="4" fill="rgba(255,255,255,0.95)"/>
+<rect x="138" y="60" width="14" height="100" rx="4" fill="rgba(255,255,255,1)"/>
+<path d="M57 100 L79 80 L101 60 L123 85 L145 50" stroke="#FFFFFF" stroke-width="3" fill="none" stroke-linecap="round"/>
+<circle cx="57" cy="100" r="5" fill="#FFFFFF"/>
+<circle cx="79" cy="80" r="5" fill="#FFFFFF"/>
+<circle cx="101" cy="60" r="5" fill="#FFFFFF"/>
+<circle cx="123" cy="85" r="5" fill="#FFFFFF"/>
+<circle cx="145" cy="50" r="5" fill="#FFFFFF"/>
+<circle cx="160" cy="40" r="16" fill="#FFD86B" stroke="#FFFFFF" stroke-width="2"/>
+<text x="160" y="46" text-anchor="middle" font-size="16" font-weight="700" fill="#1B5E20">₽</text>
+</svg>
+</div>
+</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -230,6 +300,7 @@ def clean_account_name(filename: str) -> str:
     name = re.sub(r'\s+', ' ', name)
     name = re.sub(r' \(2\)$', '', name)
     return name.strip() if name else 'Неизвестный счет'
+
 
 def parse_date(date_str: str) -> str:
     if date_str is None or pd.isna(date_str):
@@ -273,6 +344,7 @@ def parse_date(date_str: str) -> str:
             continue
     return s
 
+
 def parse_amount(amount_str) -> float:
     if amount_str is None or pd.isna(amount_str):
         return 0.0
@@ -311,6 +383,7 @@ def parse_amount(amount_str) -> float:
     except Exception:
         return 0.0
 
+
 def format_amount(amount: float) -> str:
     if amount is None or pd.isna(amount):
         return "0,00"
@@ -322,10 +395,12 @@ def format_amount(amount: float) -> str:
         return f"{sign}{ip},{dp}"
     return f"{sign}{formatted}"
 
+
 def safe_str(v) -> str:
     if v is None or pd.isna(v):
         return ''
     return str(v).strip()
+
 
 def read_xlsx(file_content: bytes, sheet_name=None, header=None):
     for engine in ['openpyxl', 'xlrd', None]:
@@ -341,6 +416,7 @@ def read_xlsx(file_content: bytes, sheet_name=None, header=None):
         except Exception:
             continue
     return None
+
 
 def docx_all_text(file_content: bytes) -> str:
     try:
@@ -364,6 +440,7 @@ def docx_all_text(file_content: bytes) -> str:
     full = '\n'.join(parts)
     return full.replace('\ufeff', '').replace('\xa0', ' ')
 
+
 def docx_dump(file_content: bytes) -> str:
     try:
         doc = Document(BytesIO(file_content))
@@ -383,6 +460,7 @@ def docx_dump(file_content: bytes) -> str:
             lines.append(f"R{ri}: {cells}")
     return '\n'.join(lines)
 
+
 def pdf_all_text(file_content: bytes) -> str:
     parts = []
     try:
@@ -395,6 +473,7 @@ def pdf_all_text(file_content: bytes) -> str:
         return ''
     full = '\n'.join(parts)
     return full.replace('\ufeff', '').replace('\xa0', ' ')
+
 
 def pdf_all_tables(file_content: bytes) -> List[List[List[str]]]:
     tables_out = []
@@ -410,6 +489,7 @@ def pdf_all_tables(file_content: bytes) -> List[List[List[str]]]:
     except Exception:
         return []
     return tables_out
+
 
 def read_text_with_encoding(file_content: bytes) -> str:
     """
@@ -437,16 +517,19 @@ def read_text_with_encoding(file_content: bytes) -> str:
     except Exception:
         return ''
 
+
 def _is_real_xls(file_content: bytes) -> bool:
     """Магические байты старого XLS (BIFF) — D0 CF 11 E0."""
     return file_content[:4] == b'\xd0\xcf\x11\xe0'
+
 
 def _is_real_xlsx(file_content: bytes) -> bool:
     """Магические байты XLSX (ZIP) — PK."""
     return file_content[:2] == b'PK'
 
+
 def _split_line(line: str, sep: str) -> List[str]:
-    """Разбивает строку CSV с учётом кавычек."""
+    """Разбивает строку CSV с учётом кавычек. [FIX-7] Поддерживает "" внутри поля."""
     parts = []
     cur = ''
     inq = False
@@ -468,6 +551,7 @@ def _split_line(line: str, sep: str) -> List[str]:
         i += 1
     parts.append(cur.strip())
     return [p.strip('"') for p in parts]
+
 
 # ==================== CSOB ====================
 
@@ -538,29 +622,38 @@ def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return transactions
 
+
 def parse_dzibik_main_csob(file_content, account_name):
     return parse_csob_generic(file_content, account_name)
+
 
 def parse_jenisov_csob_czk(file_content, account_name):
     return parse_csob_generic(file_content, account_name)
 
+
 def parse_jenisov_csob_eur(file_content, account_name):
     return parse_csob_generic(file_content, account_name)
+
 
 def parse_rr_strojka_czk_csob(file_content, account_name):
     return parse_csob_generic(file_content, account_name)
 
+
 def parse_rr_strojka_eur_csob(file_content, account_name):
     return parse_csob_generic(file_content, account_name)
+
 
 def parse_rr_rev_ostr_csob(file_content, account_name):
     return parse_csob_generic(file_content, account_name)
 
+
 def parse_koruna_strojka_czk_csob(file_content, account_name):
     return parse_csob_generic(file_content, account_name)
 
+
 def parse_koruna_strojka_eur_csob(file_content, account_name):
     return parse_csob_generic(file_content, account_name)
+
 
 # ==================== Regina Alfa ====================
 
@@ -634,8 +727,8 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
                         dp.append(str(val).strip())
                 if dp:
                     current_desc = (current_desc or '') + ' ' + ' '.join(dp)
-            if amount_val is not None and current_amount is None:
-                current_amount = amount_val
+                if amount_val is not None and current_amount is None:
+                    current_amount = amount_val
     if current_date and current_amount is not None:
         transactions.append({
             'Дата': parse_date(str(current_date)),
@@ -646,12 +739,13 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
         })
     return transactions
 
+
 def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]:
     full_text = docx_all_text(file_content)
     if not full_text:
         return []
     pattern = re.compile(
-        r'(\d{2}\.\d{2}\.\d{4})\s*([A-Z0-9_]+)\s*(.+?)(-?[\d\s]+,\d{2})\s*RUR',
+        r'(\d{2}\.\d{2}\.\d{4})\s*([A-Z0-9\_]+)\s*(.+?)(-?[\d\s]+,\d{2})\s*RUR',
         re.DOTALL
     )
     result = []
@@ -672,12 +766,13 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
             continue
     return result
 
+
 def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     full_text = pdf_all_text(file_content)
     if not full_text:
         return []
     pattern = re.compile(
-        r'(\d{2}\.\d{2}\.\d{4})\s*([A-Z0-9_]+)\s*(.+?)(-?[\d\s]+,\d{2})\s*RUR',
+        r'(\d{2}\.\d{2}\.\d{4})\s*([A-Z0-9\_]+)\s*(.+?)(-?[\d\s]+,\d{2})\s*RUR',
         re.DOTALL
     )
     result = []
@@ -697,6 +792,7 @@ def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         except Exception:
             continue
     return result
+
 
 # ==================== Tinkoff ====================
 
@@ -765,6 +861,7 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
 def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     full_text = pdf_all_text(file_content)
     if not full_text:
@@ -775,7 +872,7 @@ def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         r'(\d{2}\.\d{2}\.\d{4})\s+\d{2}:\d{2}\s+'
         r'([+\-]?[\d\s]+[.,]\d{2})\s*[₽PР]\s*'
         r'([+\-]?[\d\s]+[.,]\d{2})\s*[₽PР]\s*'
-        r'([^\n]{2,300}?)(?:\s+7596|\s+—|\n|$)',
+        r'([^\n]{2,300}?)(?:\s+7596|\s+---|\n|$)',
         re.MULTILINE
     )
     for m in pattern.finditer(full_text):
@@ -806,6 +903,7 @@ def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
 # ==================== BluOr Bank ====================
 
 def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
@@ -813,13 +911,13 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
     BluOr Bank CSV.
 
     [FIX-3] Уточнены правила:
-      - служебные строки определяем строго по точным фразам
-        ('начальный остаток', 'конечный остаток', 'дебет (d)',
-        'кредит (c)', 'opening balance', 'closing balance');
-      - сумму 0.00 больше НЕ отсекаем автоматически — если это
-        реальная транзакция с суммой 0.00, она сохранится (в файле
-        BSR_Estate_EUR_BluOr_3 все строки служебные, поэтому 0
-        операций — корректный результат).
+    - служебные строки определяем строго по точным фразам
+      ('начальный остаток', 'конечный остаток', 'дебет (d)',
+       'кредит (c)', 'opening balance', 'closing balance');
+    - сумму 0.00 больше НЕ отсекаем автоматически — если это
+      реальная транзакция с суммой 0.00, она сохранится (в файле
+      BSR_Estate_EUR_BluOr_3 все строки служебные, поэтому 0
+      операций — корректный результат).
     """
     result = []
     content = read_text_with_encoding(file_content)
@@ -871,6 +969,7 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
                         amount = a
                         amount_idx = i
                         break
+
             # [FIX-3] Если сумма 0.00 — считаем это допустимым только если
             # в строке есть тип D/C (то есть это реальная транзакция)
             ttype = ''
@@ -880,7 +979,6 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
                     if v in ('D', 'C'):
                         ttype = v
                         break
-
             if amount == 0.0 and not ttype:
                 continue
 
@@ -892,13 +990,13 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
                         desc = v
                         break
             low = desc.lower()
-
             if ttype == 'D':
                 amount = -abs(amount)
             elif ttype == 'C':
                 amount = abs(amount)
 
             cp = 'BluOr Bank' if 'bluor' in low or 'bank' in low else ''
+
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp[:200], 'Наименование счета': account_name,
@@ -908,14 +1006,18 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
 def parse_bsr_bluor_2(file_content, account_name):
     return _parse_bluor_csv(file_content, account_name)
+
 
 def parse_bsr_bluor_3(file_content, account_name):
     return _parse_bluor_csv(file_content, account_name)
 
+
 def parse_kl59_bluor(file_content, account_name):
     return _parse_bluor_csv(file_content, account_name)
+
 
 def parse_bluor_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     full_text = pdf_all_text(file_content)
@@ -954,6 +1056,7 @@ def parse_bluor_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
 # ==================== JenHor Unelma ====================
 
 def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict]:
@@ -990,6 +1093,7 @@ def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict
             continue
     return result
 
+
 def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
     try:
@@ -1022,8 +1126,8 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                 continue
             low = desc.lower()
             if any(w in low for w in ['počáteční zůstatek', 'konečný zůstatek',
-                                       'celkem připsáno', 'celkem odepsáno',
-                                       'přehled pohyb', 'shrnuti pohyb', 'obraty za']):
+                                      'celkem připsáno', 'celkem odepsáno',
+                                      'přehled pohyb', 'shrnuti pohyb', 'obraty za']):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -1060,6 +1164,7 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                     })
     return result
 
+
 def parse_jenhor_unelma_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     full_text = pdf_all_text(file_content)
     if not full_text:
@@ -1078,8 +1183,8 @@ def parse_jenhor_unelma_pdf(file_content: bytes, account_name: str) -> List[Dict
                 continue
             low = desc.lower()
             if any(w in low for w in ['počáteční zůstatek', 'konečný zůstatek',
-                                       'celkem připsáno', 'celkem odepsáno',
-                                       'přehled pohyb']):
+                                      'celkem připsáno', 'celkem odepsáno',
+                                      'přehled pohyb']):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -1090,6 +1195,7 @@ def parse_jenhor_unelma_pdf(file_content: bytes, account_name: str) -> List[Dict
         except Exception:
             continue
     return result
+
 
 # ==================== Stalkin FIO ====================
 
@@ -1129,6 +1235,7 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
 # ==================== Industra ====================
 
 def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict]:
@@ -1136,11 +1243,11 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
     Industra Bank .xls/.xlsx/.csv.
 
     Терпимый поиск заголовка:
-      - расширенные маркеры (Дата транзакции / Date / Transaction Date,
-        Дебет / Debit, Кредит / Credit);
-      - окно поиска 60 строк;
-      - fallback на CSV-путь (текстовое чтение), если табличное чтение
-        не дало результатов.
+    - расширенные маркеры (Дата транзакции / Date / Transaction Date,
+      Дебет / Debit, Кредит / Credit);
+    - окно поиска 60 строк;
+    - fallback на CSV-путь (текстовое чтение), если табличное чтение
+      не дало результатов.
     """
     result = []
     df = read_xlsx(file_content)
@@ -1227,8 +1334,7 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
                 continue
         if result:
             return result
-
-    # CSV-fallback
+        # CSV-fallback
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     if not lines:
@@ -1300,14 +1406,18 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
             continue
     return result
 
+
 def parse_industra_an14(file_content, account_name):
     return _parse_industra_generic(file_content, account_name)
+
 
 def parse_industra_plavas1(file_content, account_name):
     return _parse_industra_generic(file_content, account_name)
 
+
 def parse_industra_kl59(file_content, account_name):
     return _parse_industra_generic(file_content, account_name)
+
 
 def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -1365,6 +1475,7 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
+
 # ==================== Kapital bank Saida AZN ====================
 
 def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[Dict]:
@@ -1390,6 +1501,7 @@ def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[
         except Exception:
             continue
     return result
+
 
 def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -1431,7 +1543,7 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
                     continue
                 low = desc.lower()
                 if any(w in low for w in ['balance', 'saldo', 'start', 'end', 'period',
-                                           'лимит', 'баланс', 'период', 'available', 'кредитн']):
+                                          'лимит', 'баланс', 'период', 'available', 'кредитн']):
                     continue
                 result.append({
                     'Дата': date, 'Сумма': -abs(amount),
@@ -1471,6 +1583,7 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
             except Exception:
                 continue
     return result
+
 
 def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -1524,6 +1637,7 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
             except Exception:
                 continue
     return result
+
 
 # ==================== MASHREQ ====================
 
@@ -1614,6 +1728,7 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
 def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
     tables = pdf_all_tables(file_content)
@@ -1651,6 +1766,7 @@ def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
+
 # ==================== MKB (Budapest) — ЕДИНЫЙ ПАРСЕР ====================
 
 def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
@@ -1660,7 +1776,6 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
     """
     result = []
     df = None
-
     # 1) Пробуем как XLS/XLSX по магическим байтам
     if _is_real_xls(file_content):
         try:
@@ -1747,7 +1862,6 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                 ci['counterparty'] = 4
             if 'type' not in ci:
                 ci['type'] = 2
-
             for idx in range(header_row + 1, len(df)):
                 row = df.iloc[idx]
                 rv = [x for x in row.values if pd.notna(x)]
@@ -1827,7 +1941,6 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
         return result
     if amount_idx == -1 and (debit_idx == -1 and credit_idx == -1):
         return result
-
     for line in lines[header_line_idx + 1:]:
         parts = _split_line(line, sep)
         if date_idx >= len(parts):
@@ -1860,11 +1973,14 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
 def parse_budapest_eur_mkb(file_content: bytes, account_name: str) -> List[Dict]:
     return _parse_mkb_any(file_content, account_name)
 
+
 def parse_budapest_huf_mkb(file_content: bytes, account_name: str) -> List[Dict]:
     return _parse_mkb_any(file_content, account_name)
+
 
 def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -1909,6 +2025,7 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
+
 # ==================== N26 ====================
 
 def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
@@ -1945,6 +2062,7 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
 def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     full_text = pdf_all_text(file_content)
     if not full_text:
@@ -1969,7 +2087,7 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
             low = desc.lower()
             if any(w in low for w in ['saldo previo', 'nuevo saldo', 'transacciones',
-                                       'extracto', 'espacio', 'deseño']):
+                                      'extracto', 'espacio', 'deseño']):
                 continue
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -1997,6 +2115,7 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
     return result
+
 
 # ==================== Paysera (XLSX/DOCX) ====================
 
@@ -2084,17 +2203,22 @@ def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
 def parse_paysera_baltic_xlsx(file_content, account_name):
     return parse_paysera_generic(file_content, account_name)
+
 
 def parse_paysera_sveciy_xlsx(file_content, account_name):
     return parse_paysera_generic(file_content, account_name)
 
+
 def parse_paysera_property(file_content, account_name):
     return parse_paysera_generic(file_content, account_name)
 
+
 def parse_paysera_rerum(file_content, account_name):
     return parse_paysera_generic(file_content, account_name)
+
 
 def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -2181,6 +2305,7 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
+
 # ==================== Paysera PDF ====================
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
@@ -2193,12 +2318,10 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     full_text = pdf_all_text(file_content)
     if not full_text:
         return []
-
     date_pattern = re.compile(r'(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})')
     raw_dates = list(date_pattern.finditer(full_text))
     if not raw_dates:
         return []
-
     groups = []
     cur = {'date': raw_dates[0].group(1), 'start': raw_dates[0].start(), 'end': raw_dates[0].end()}
     for dm in raw_dates[1:]:
@@ -2228,11 +2351,9 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         window_end = groups[gi + 1]['start'] if gi + 1 < len(groups) else window_start + 2000
         if window_end <= window_start:
             continue
-
         window_eur = [e for e in eur_matches if window_start <= e['start'] < window_end]
         negative = [e for e in window_eur if e['amount'] < 0]
         positive = [e for e in window_eur if e['amount'] > 0]
-
         chosen_amount = None
         chosen_pos = None
         if negative:
@@ -2249,7 +2370,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 break
         if chosen_amount is None or chosen_amount == 0.0:
             continue
-
         desc = ''
         window_text = full_text[window_start:window_end]
         purpose_match = re.search(
@@ -2268,7 +2388,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     break
         if not desc:
             desc = 'Paysera operation'
-
         result.append({
             'Дата': date, 'Сумма': chosen_amount,
             'Контрагент': 'Paysera LT',
@@ -2285,6 +2404,7 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         seen.add(key)
         deduped.append(r)
     return deduped
+
 
 # ==================== RAK BANK ====================
 
@@ -2312,6 +2432,7 @@ def parse_rak_bank(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
 def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
     tables = pdf_all_tables(file_content)
@@ -2334,6 +2455,7 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
     return result
+
 
 # ==================== Revolut ====================
 
@@ -2360,7 +2482,6 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
     header_line = lines[header]
     sep = ',' if header_line.count(',') >= header_line.count(';') else ';'
     hdr_parts = _split_line(header_line, sep)
-
     ci = {}
     for i, h in enumerate(hdr_parts):
         hl = h.lower().strip()
@@ -2390,7 +2511,6 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
         ci['type'] = 3
     if 'state' not in ci:
         ci['state'] = 4
-
     for line in lines[header + 1:]:
         parts = _split_line(line, sep)
         if len(parts) < 6:
@@ -2429,14 +2549,18 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
 def parse_revolut_an14(file_content, account_name):
     return parse_revolut_generic(file_content, account_name)
+
 
 def parse_revolut_nb(file_content, account_name):
     return parse_revolut_generic(file_content, account_name)
 
+
 def parse_revolut_plavas(file_content, account_name):
     return parse_revolut_generic(file_content, account_name)
+
 
 def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -2474,6 +2598,7 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
     return result
+
 
 # ==================== UniCredit ====================
 
@@ -2542,20 +2667,26 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
             continue
     return result
 
+
 def parse_unicredit_b1(file_content, account_name):
     return parse_unicredit_generic(file_content, account_name)
+
 
 def parse_garpiz_unicredit(file_content, account_name):
     return parse_unicredit_generic(file_content, account_name)
 
+
 def parse_garpiz_pernink(file_content, account_name):
     return parse_unicredit_generic(file_content, account_name)
+
 
 def parse_koruna_unicredit(file_content, account_name):
     return parse_unicredit_generic(file_content, account_name)
 
+
 def parse_twohills_unicredit(file_content, account_name):
     return parse_unicredit_generic(file_content, account_name)
+
 
 def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -2620,6 +2751,7 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
+
 # ==================== WIO ====================
 
 def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict]:
@@ -2683,6 +2815,7 @@ def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
 def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
     tables = pdf_all_tables(file_content)
@@ -2706,6 +2839,7 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
     return result
+
 
 # ==================== Saida N26 (CSV) ====================
 
@@ -2742,8 +2876,10 @@ def parse_saida_n26_csv(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
 def parse_saida_wise(file_content, account_name):
     return parse_saida_n26_csv(file_content, account_name)
+
 
 # ==================== Saida Wise XLSX ====================
 
@@ -2751,8 +2887,8 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Wise Excel.
     Заголовок: удостоверение личности | Дата | Дата и время | Сумма | Валюта |
-               Описание | Пояснение к переводу | Текущий баланс | ... |
-               Имя получателя | ... | Поставщик услуг | ... | Тип транзакции
+    Описание | Пояснение к переводу | Текущий баланс | ... |
+    Имя получателя | ... | Поставщик услуг | ... | Тип транзакции
     """
     result = []
     df = read_xlsx(file_content, sheet_name='All transactions')
@@ -2800,7 +2936,6 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
         ci['description'] = 5
     if 'type' not in ci:
         ci['type'] = 21
-
     for idx in range(1, len(df)):
         row = df.iloc[idx]
         try:
@@ -2833,14 +2968,15 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     return result
 
+
 # ==================== Pasha Bank (BUNDA LLC) ====================
 
 def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Pasha Bank XLSX (BUNDA LLC, AZN или AED).
     Заголовок таблицы (row ~11):
-        Əməliyyat tarixi | İcra tarixi | Ödəyən/Benefisiar | Təyinat |
-        İstinad No | Код | Mədaxil | Məxaric | [AZN ekvivalent] | Balans
+    Əməliyyat tarixi | İcra tarixi | Ödəyən/Benefisiar | Təyinat |
+    İstinad No | Код | Mədaxil | Məxaric | [AZN ekvivalent] | Balans
     Итоговые строки (DÖVRÜN SONUNA BALANS, MÖVCUD BALANS) — пропускаем.
     """
     result = []
@@ -2849,7 +2985,6 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
         df = read_xlsx(file_content)
     if df is None or df.empty:
         return []
-
     header_row = -1
     for idx, row in df.iterrows():
         if idx < 40:
@@ -2859,7 +2994,6 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
                 break
     if header_row == -1:
         return []
-
     hdr = df.iloc[header_row]
     ci = {}
     for i, v in enumerate(hdr.values):
@@ -2892,7 +3026,6 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
         ci['credit'] = 6
     if 'debit' not in ci:
         ci['debit'] = 7
-
     for idx in range(header_row + 1, len(df)):
         row = df.iloc[idx]
         rv = [x for x in row.values if pd.notna(x)]
@@ -2938,6 +3071,7 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
         except Exception:
             continue
     return result
+
 
 # ==================== Универсальный PDF fallback ====================
 
@@ -2991,6 +3125,7 @@ def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
     return result
+
 
 # ==================== МАРШРУТИЗАЦИЯ ====================
 
@@ -3241,6 +3376,7 @@ def get_parser_by_ext(account_name: str, ext: str):
 
     return None, None
 
+
 def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
     account_name = clean_account_name(filename)
     ext = os.path.splitext(filename)[1].lower()
@@ -3251,6 +3387,87 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
         return parser(file_content, account_name), f'{key} ({account_name})'
     except Exception as e:
         return [], f'{key} упал: {e}'
+
+
+# ==================== [FIX-SUM-1..7] СВОДКА ПО СЧЕТАМ ====================
+
+def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
+    """
+    [FIX-SUM-1] Строит вторую таблицу — «Сводка по счетам» в формате:
+        Наименование счета | Количество приходных операций | Сумма приходных операций |
+        Количество расходных операций | Сумма расходных операций
+
+    Логика:
+    - группировка по 'Наименование счета';
+    - приход: Сумма > 0, расход: Сумма < 0;
+    - суммы расхода выводятся по модулю (как в образце);
+    - нулевые операции не попадают ни в приход, ни в расход
+      (кейс BSR_Estate_EUR_BluOr_3 — только служебные строки);
+    - сортировка по наименованию счёта.
+    """
+    columns = [
+        "Наименование счета",
+        "Количество приходных операций",
+        "Сумма приходных операций",
+        "Количество расходных операций",
+        "Сумма расходных операций",
+    ]
+    # [FIX-SUM-2] Пустой вход — возвращаем пустую таблицу с нужными колонками.
+    if not rows:
+        return pd.DataFrame(columns=columns)
+
+    df = pd.DataFrame(rows)
+    if "Наименование счета" not in df.columns or "Сумма" not in df.columns:
+        return pd.DataFrame(columns=columns)
+
+    # [FIX-SUM-3] Безопасное приведение Суммы к float.
+    def _to_float(v):
+        if v is None:
+            return 0.0
+        if isinstance(v, (int, float)):
+            try:
+                if pd.isna(v):
+                    return 0.0
+            except Exception:
+                pass
+            return float(v)
+        s = str(v).strip().replace(" ", "").replace(",", ".")
+        try:
+            return float(s)
+        except ValueError:
+            return 0.0
+
+    df = df.copy()
+    df["Сумма"] = df["Сумма"].map(_to_float)
+    df["Наименование счета"] = df["Наименование счета"].fillna("").astype(str)
+
+    # [FIX-SUM-4] Приход строго > 0, расход строго < 0.
+    df["_income"] = df["Сумма"] > 0
+    df["_expense"] = df["Сумма"] < 0
+
+    grouped = df.groupby("Наименование счета", dropna=False)
+
+    summary = pd.DataFrame({
+        "Количество приходных операций": grouped["_income"].sum().astype(int),
+        "Сумма приходных операций": grouped.apply(
+            lambda g: float(g.loc[g["_income"], "Сумма"].sum())
+        ),
+        "Количество расходных операций": grouped["_expense"].sum().astype(int),
+        # [FIX-SUM-5] Расход по модулю — как в образце (3410, 2456).
+        "Сумма расходных операций": grouped.apply(
+            lambda g: float(abs(g.loc[g["_expense"], "Сумма"].sum()))
+        ),
+    }).reset_index()
+
+    # [FIX-SUM-6] Сортировка по наименованию счёта.
+    summary = summary.sort_values("Наименование счета").reset_index(drop=True)
+
+    # [FIX-SUM-7] Суммы — float, чтобы Excel мог считать.
+    summary["Сумма приходных операций"] = summary["Сумма приходных операций"].astype(float)
+    summary["Сумма расходных операций"] = summary["Сумма расходных операций"].astype(float)
+
+    return summary[columns]
+
 
 # ==================== ИНТЕРФЕЙС ====================
 
@@ -3271,34 +3488,34 @@ def main():
         with c1:
             st.markdown("""
             <div class="info-card">
-              <div class="info-card-icon">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </div>
-              <div class="info-card-text"><h4>Поддержка форматов</h4><p>CSV, XLSX, XLS, DOCX, PDF</p></div>
+            <div class="info-card-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            </div>
+            <div class="info-card-text"><h4>Поддержка форматов</h4><p>CSV, XLSX, XLS, DOCX, PDF</p></div>
             </div>
             """, unsafe_allow_html=True)
         with c2:
             st.markdown("""
             <div class="info-card">
-              <div class="info-card-icon">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </div>
-              <div class="info-card-text"><h4>Автоопределение</h4><p>Программа сама подберёт парсер по имени файла</p></div>
+            <div class="info-card-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            </div>
+            <div class="info-card-text"><h4>Автоопределение</h4><p>Программа сама подберёт парсер по имени файла</p></div>
             </div>
             """, unsafe_allow_html=True)
         with c3:
             st.markdown("""
             <div class="info-card">
-              <div class="info-card-icon">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M3 3v18h18M18 17V9M13 17V5M8 17v-3" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </div>
-              <div class="info-card-text"><h4>Экспорт в Excel</h4><p>Скачайте итог в один клик</p></div>
+            <div class="info-card-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M3 3v18h18M18 17V9M13 17V5M8 17v-3" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            </div>
+            <div class="info-card-text"><h4>Экспорт в Excel</h4><p>Скачайте итог в один клик</p></div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -3321,33 +3538,41 @@ def main():
                     content = uf.read()
                     tx, parser_name = parse_file(content, uf.name)
                     account_name = clean_account_name(uf.name)
-                    debug_info.append(f"🔍 `{uf.name}` → счёт: `{account_name}` → парсер: `{parser_name}` → **{len(tx)}** операций")
+
+                    debug_info.append(
+                        f"🔍 `{uf.name}` → счёт: `{account_name}` → "
+                        f"парсер: `{parser_name}` → **{len(tx)}** операций"
+                    )
+
                     if tx:
                         all_tx.extend(tx)
                         file_stats.append(f"✅ {uf.name}: {len(tx)} операций")
                     else:
                         file_stats.append(f"ℹ️ {uf.name}: транзакций не найдено")
-                        if uf.name.lower().endswith('.docx'):
-                            try:
-                                dump = docx_dump(content)
-                                debug_info.append(f"📄 ДАМП `{uf.name}`:\n```\n{dump[:3000]}\n```")
-                            except Exception as e:
-                                debug_info.append(f"📄 Ошибка дампа: {e}")
-                        elif uf.name.lower().endswith('.pdf'):
-                            try:
-                                txt = pdf_all_text(content)
-                                debug_info.append(f"📄 PDF-текст `{uf.name}` (первые 3000):\n```\n{txt[:3000]}\n```")
-                            except Exception as e:
-                                debug_info.append(f"📄 Ошибка дампа PDF: {e}")
-                        else:
-                            try:
-                                txt = read_text_with_encoding(content)
-                                debug_info.append(f"📄 Текст `{uf.name}` (первые 2000):\n```\n{txt[:2000]}\n```")
-                            except Exception as e:
-                                debug_info.append(f"📄 Ошибка чтения: {e}")
+
+                    if uf.name.lower().endswith('.docx'):
+                        try:
+                            dump = docx_dump(content)
+                            debug_info.append(f"📄 ДАМП `{uf.name}`:\n```\n{dump[:3000]}\n```")
+                        except Exception as e:
+                            debug_info.append(f"📄 Ошибка дампа: {e}")
+                    elif uf.name.lower().endswith('.pdf'):
+                        try:
+                            txt = pdf_all_text(content)
+                            debug_info.append(f"📄 PDF-текст `{uf.name}` (первые 3000):\n```\n{txt[:3000]}\n```")
+                        except Exception as e:
+                            debug_info.append(f"📄 Ошибка дампа PDF: {e}")
+                    else:
+                        try:
+                            txt = read_text_with_encoding(content)
+                            debug_info.append(f"📄 Текст `{uf.name}` (первые 2000):\n```\n{txt[:2000]}\n```")
+                        except Exception as e:
+                            debug_info.append(f"📄 Ошибка чтения: {e}")
+
                 except Exception as e:
                     failed.append(f"{uf.name} (ошибка: {e})")
                     debug_info.append(f"❌ `{uf.name}` → исключение: {e}")
+
                 progress.progress((i + 1) / len(uploaded_files))
 
             status.text("✅ Обработка завершена!")
@@ -3381,13 +3606,29 @@ def main():
                 st.markdown("### 🧾 Детализация транзакций")
                 st.dataframe(df.drop(columns=['Сумма_число']), use_container_width=True, hide_index=True)
 
+                # [FIX-SUM-8] Вторая таблица — «Сводка по счетам» в UI.
+                st.markdown("---")
+                st.markdown("### 📁 Сводка по счетам")
+                summary_df = build_account_summary(all_tx)
+                if summary_df.empty:
+                    st.info("Нет данных для сводки по счетам.")
+                else:
+                    # Красивый HTML-вид в тёмно-зелёной палитре.
+                    st.markdown(
+                        f'<div class="summary-table">{summary_df.to_html(index=False, escape=False)}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    # Дублируем как st.dataframe — для сортировки/скачивания.
+                    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+                # ===== Экспорт в Excel =====
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df.drop(columns=['Сумма_число']).to_excel(writer, sheet_name='Транзакции', index=False)
-                    bs = df.groupby('Наименование счета').agg({'Сумма_число': ['count', 'sum']}).round(2)
-                    bs.columns = ['Количество операций', 'Сумма']
-                    bs['Сумма'] = bs['Сумма'].apply(lambda x: f"{x:,.2f}".replace('.', ','))
-                    bs.to_excel(writer, sheet_name='Сводка по счетам')
+
+                    # [FIX-SUM-9] Заменяем старую группировку на корректную сводку
+                    # в требуемом формате (приход/расход: количество + сумма).
+                    summary_df.to_excel(writer, sheet_name='Сводка по счетам', index=False)
                 output.seek(0)
 
                 st.markdown("### 💾 Сохранить результат")
@@ -3405,9 +3646,10 @@ def main():
 
     st.markdown("""
     <div class="footer-note">
-      Работает локально. Данные никуда не отправляются.
+    Работает локально. Данные никуда не отправляются.
     </div>
     """, unsafe_allow_html=True)
+
 
 if __name__ == "__main__":
     main()
