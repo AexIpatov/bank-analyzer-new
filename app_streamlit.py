@@ -1,5 +1,5 @@
-# [FIX-ANY-0] Полный app.py с универсальной обработкой выписок по любому счёту
-# в любом формате (PDF, CSV, XLSX, XLS, DOCX). Все существующие парсеры,
+# [FIX-STATE-0] Полный app.py с универсальной обработкой выписок и защитой
+# от задвоения сводки через st.session_state. Все существующие парсеры,
 # CSS, UI, дампы, экспорт, метрики, build_account_summary и билдеры Excel
 # сохранены без изменений.
 
@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 import os
 import re
+import hashlib
 import chardet
 from datetime import datetime
 from io import BytesIO
@@ -542,8 +543,7 @@ def _is_real_pdf(file_content: bytes) -> bool:
 def _is_real_docx(file_content: bytes) -> bool:
     """
     DOCX — это ZIP (PK), но внутри обязательно есть 'word/' или
-    'wordprocessingml'. Проверяем первые 4 КБ — там обычно лежит
-    central directory или имена файлов.
+    'wordprocessingml'. Проверяем первые 4 КБ.
     """
     if file_content[:2] != b'PK':
         return False
@@ -552,7 +552,6 @@ def _is_real_docx(file_content: bytes) -> bool:
         return True
     if b'wordprocessingml' in head:
         return True
-    # Дополнительная проверка: ищем '[Content_Types].xml' + 'word'
     if b'[Content_Types].xml' in head and b'word' in head:
         return True
     return False
@@ -594,14 +593,12 @@ def _detect_real_type(file_content: bytes, fallback_ext: str = '') -> str:
         return 'pdf'
     if _is_real_xls(file_content):
         return 'xls'
-    # PK — это либо XLSX, либо DOCX
     if _is_real_xlsx(file_content):
         if _is_real_docx(file_content):
             return 'docx'
         return 'xlsx'
     if _looks_like_csv(file_content):
         return 'csv'
-    # Fallback по расширению
     ext = (fallback_ext or '').lower()
     if ext.startswith('.'):
         ext = ext[1:]
@@ -3201,7 +3198,6 @@ def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 # ==================== [FIX-ANY-3] НОВЫЕ PDF-ПАРСЕРЫ ====================
-# Их раньше не было в .pdf-ветке.
 
 def parse_csob_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
@@ -3209,7 +3205,6 @@ def parse_csob_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     Табличный путь + regex-fallback по pdf_all_text.
     """
     result = []
-    # --- Табличный путь ---
     tables = pdf_all_tables(file_content)
     for table in tables:
         if not table or len(table) < 2:
@@ -3257,7 +3252,6 @@ def parse_csob_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
         if result:
             return result
-    # --- Regex-fallback ---
     full_text = pdf_all_text(file_content)
     if not full_text:
         return result
@@ -3528,10 +3522,6 @@ def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== [FIX-ANY-4] УНИВЕРСАЛЬНЫЕ ПАРСЕРЫ ПО ТИПУ ====================
 
 def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-ANY-4] Универсальный CSV-парсер: ищет заголовок с 'date'/'дата'
-    и 'amount'/'сумма', читает строки, применяет parse_date/parse_amount.
-    """
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -3585,10 +3575,6 @@ def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_xlsx_universal(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-ANY-4] Универсальный XLSX/XLS-парсер: ищет заголовок с 'date'/'дата'
-    и 'amount'/'сумма', читает строки.
-    """
     result = []
     df = read_xlsx(file_content)
     if df is None or df.empty:
@@ -3646,15 +3632,11 @@ def parse_xlsx_universal(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-ANY-4] Универсальный DOCX-парсер: таблицы + regex по тексту.
-    """
     result = []
     try:
         doc = Document(BytesIO(file_content))
     except Exception:
         return []
-    # 1) Табличный путь
     for table in doc.tables:
         if not table.rows:
             continue
@@ -3691,7 +3673,6 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     if result:
         return result
-    # 2) Regex-путь
     full_text = docx_all_text(file_content)
     if not full_text:
         return result
@@ -3720,13 +3701,11 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    [FIX-ANY-5] Универсальный «последний шанс»: пробует все известные
-    способы извлечь операции, независимо от формата.
+    [FIX-ANY-5] Универсальный «последний шанс».
     Порядок: pdf_all_tables → pdf_all_text → read_xlsx → read_text → docx_all_text.
     """
     result: List[Dict] = []
 
-    # 1) PDF-таблицы
     try:
         tables = pdf_all_tables(file_content)
     except Exception:
@@ -3737,7 +3716,6 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
         for row in table:
             if not row or len(row) < 2:
                 continue
-            # Ищем дату в первых 3 ячейках и сумму — в оставшихся
             date = None
             date_i = -1
             for i in range(min(3, len(row))):
@@ -3776,7 +3754,6 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
     if result:
         return result
 
-    # 2) PDF-текст
     try:
         full_text = pdf_all_text(file_content)
     except Exception:
@@ -3805,7 +3782,6 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
         if result:
             return result
 
-    # 3) XLSX/XLS
     try:
         df = read_xlsx(file_content)
     except Exception:
@@ -3853,7 +3829,6 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
         if result:
             return result
 
-    # 4) Текст (CSV/TSV)
     try:
         content = read_text_with_encoding(file_content)
     except Exception:
@@ -3905,7 +3880,6 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
         if result:
             return result
 
-    # 5) DOCX-текст
     try:
         docx_text = docx_all_text(file_content)
     except Exception:
@@ -3970,7 +3944,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_unicredit_pdf, 'unicredit_pdf'
         if 'wio' in low:
             return parse_wio_pdf, 'wio_pdf'
-        # [FIX-ANY-3] Новые PDF-ветки для счетов, у которых раньше не было PDF.
         if 'csob' in low:
             return parse_csob_pdf, 'csob_pdf'
         if 'stalkin' in low or 'fio' in low:
@@ -4192,10 +4165,9 @@ def get_parser_by_ext(account_name: str, ext: str):
     return None, None
 
 
-# ==================== [FIX-ANY-6] ЦЕПОЧКА КАНДИДАТОВ И НОВЫЙ parse_file ====================
+# ==================== [FIX-ANY-6] ЦЕПОЧКА КАНДИДАТОВ ====================
 
 def _ext_to_type(ext: str) -> str:
-    """Приводит расширение к внутреннему типу: 'pdf', 'xls', 'xlsx', 'docx', 'csv'."""
     ext = (ext or '').lower()
     if ext.startswith('.'):
         ext = ext[1:]
@@ -4205,7 +4177,6 @@ def _ext_to_type(ext: str) -> str:
 
 
 def _get_universal_for_type(real_type: str):
-    """[FIX-ANY-6] Возвращает универсальный парсер для данного реального типа."""
     if real_type == 'pdf':
         return parse_pdf_universal, 'pdf_universal'
     if real_type == 'csv':
@@ -4219,18 +4190,7 @@ def _get_universal_for_type(real_type: str):
 
 def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[Tuple[Callable, str]]:
     """
-    [FIX-ANY-6] Строит цепочку кандидатов-парсеров для счёта, от
-    специализированного к общему:
-
-    1. Специализированный парсер для этого счёта и ЭТОГО типа
-       (через get_parser_by_ext по реальному типу).
-    2. Специализированные парсеры для этого счёта в ДРУГИХ типах
-       (через get_parser_by_ext по остальным типам).
-    3. Универсальный парсер по типу (parse_pdf_universal и т.п.).
-    4. parse_any_format — «последний шанс».
-
-    Возвращает список (parser_fn, key), где key — человекочитаемое имя
-    кандидата для debug.
+    [FIX-ANY-6] Строит цепочку кандидатов-парсеров для счёта.
     """
     chain: List[Tuple[Callable, str]] = []
     seen_keys = set()
@@ -4243,12 +4203,9 @@ def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[T
         seen_keys.add(key)
         chain.append((parser, key))
 
-    # 1) Спец-парсер для этого счёта + этого типа
     primary_ext = '.' + real_type if real_type and real_type != 'xls' else '.xls'
     if real_type == 'xlsx':
         primary_ext = '.xlsx'
-    # Для реального типа 'xls' пробуем и .xls, и .xlsx — get_parser_by_ext
-    # трактует их одинаково.
     if real_type == 'xls':
         primary_ext = '.xls'
     if real_type == 'csv':
@@ -4261,7 +4218,6 @@ def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[T
     p, k = get_parser_by_ext(account_name, primary_ext)
     _add(p, k or f'{primary_ext[1:]}_primary')
 
-    # 2) Спец-парсеры для этого счёта в других типах
     other_exts = []
     if real_type != 'pdf':
         other_exts.append('.pdf')
@@ -4275,11 +4231,9 @@ def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[T
         op, ok = get_parser_by_ext(account_name, oe)
         _add(op, ok or f'{oe[1:]}_other')
 
-    # 3) Универсальный парсер по реальному типу
     up, uk = _get_universal_for_type(real_type)
     _add(up, uk or f'{real_type}_universal')
 
-    # 4) parse_any_format — последний шанс
     _add(parse_any_format, 'parse_any_format')
 
     return chain
@@ -4287,12 +4241,7 @@ def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[T
 
 def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
     """
-    [FIX-ANY-7] Переписанный parse_file:
-    - определяет реальный тип через _detect_real_type (магические байты);
-    - получает список кандидатов через get_parser_chain;
-    - прогоняет кандидатов по очереди, берёт первого, кто вернул ≥1 операцию;
-    - если все вернули 0 (но не упали) — возвращает пустой список и
-      debug-строку 'all_failed: <список пробованных>'.
+    [FIX-ANY-7] Переписанный parse_file: реальный тип, цепочка кандидатов.
     """
     account_name = clean_account_name(filename)
     ext = os.path.splitext(filename)[1].lower()
@@ -4313,9 +4262,7 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
             continue
         if tx:
             return tx, f'{key} ({account_name}, real={real_type}, {len(tx)} операций)'
-        # если 0 — идём к следующему кандидату
 
-    # Никто не вернул операций
     msg = f'all_failed: {tried}'
     if errors:
         msg += f' | errors: {errors}'
@@ -4326,16 +4273,12 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
 
 def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     """
-    [FIX-SUM-1] Строит вторую таблицу — «Сводка по счетам» в формате:
-        Наименование счета | Количество приходных операций | Сумма приходных операций |
-        Количество расходных операций | Сумма расходных операций
-
+    [FIX-SUM-1] Строит вторую таблицу — «Сводка по счетам».
     Логика:
     - группировка по 'Наименование счета';
     - приход: Сумма > 0, расход: Сумма < 0;
-    - суммы расхода выводятся по модулю (как в образце);
-    - нулевые операции не попадают ни в приход, ни в расход
-      (кейс BSR_Estate_EUR_BluOr_3 — только служебные строки);
+    - суммы расхода выводятся по модулю;
+    - нулевые операции не попадают ни в приход, ни в расход;
     - сортировка по наименованию счёта.
     """
     columns = [
@@ -4423,9 +4366,222 @@ def build_combined_excel(df_display: pd.DataFrame, summary_df: pd.DataFrame) -> 
     return output
 
 
+# ==================== [FIX-STATE-1..6] ОБРАБОТКА БЕЗ ЗАДВОЕНИЯ ====================
+
+def _files_signature(uploaded_files) -> str:
+    """
+    [FIX-STATE-1] Строит подпись набора загруженных файлов: имя + размер.
+    Пока подпись не менялась — результат берётся из session_state,
+    файлы повторно не парсятся (лечит задвоение сводки).
+    """
+    h = hashlib.md5()
+    for uf in uploaded_files:
+        try:
+            h.update(uf.name.encode('utf-8', errors='ignore'))
+            h.update(str(getattr(uf, 'size', 0)).encode('utf-8', errors='ignore'))
+        except Exception:
+            pass
+    return h.hexdigest()
+
+
+def _process_uploaded_files(uploaded_files) -> Dict:
+    """
+    [FIX-STATE-2] Собирает результат обработки в один словарь:
+    all_tx, failed, file_stats, debug_info.
+    Вызывается один раз на уникальную подпись файлов.
+    """
+    all_tx: List[Dict] = []
+    failed: List[str] = []
+    file_stats: List[str] = []
+    debug_info: List[str] = []
+
+    progress = st.progress(0)
+    status = st.empty()
+
+    for i, uf in enumerate(uploaded_files):
+        status.text(f"Обработка: {uf.name}")
+        try:
+            content = uf.read()
+            tx, parser_name = parse_file(content, uf.name)
+            account_name = clean_account_name(uf.name)
+
+            debug_info.append(
+                f"🔍 `{uf.name}` → счёт: `{account_name}` → "
+                f"парсер: `{parser_name}` → **{len(tx)}** операций"
+            )
+
+            if tx:
+                all_tx.extend(tx)
+                file_stats.append(f"✅ {uf.name}: {len(tx)} операций")
+            else:
+                file_stats.append(f"ℹ️ {uf.name}: транзакций не найдено")
+
+            if uf.name.lower().endswith('.docx'):
+                try:
+                    dump = docx_dump(content)
+                    debug_info.append(f"📄 ДАМП `{uf.name}`:\n```\n{dump[:3000]}\n```")
+                except Exception as e:
+                    debug_info.append(f"📄 Ошибка дампа: {e}")
+            elif uf.name.lower().endswith('.pdf'):
+                try:
+                    txt = pdf_all_text(content)
+                    debug_info.append(f"📄 PDF-текст `{uf.name}` (первые 3000):\n```\n{txt[:3000]}\n```")
+                except Exception as e:
+                    debug_info.append(f"📄 Ошибка дампа PDF: {e}")
+            else:
+                try:
+                    txt = read_text_with_encoding(content)
+                    debug_info.append(f"📄 Текст `{uf.name}` (первые 2000):\n```\n{txt[:2000]}\n```")
+                except Exception as e:
+                    debug_info.append(f"📄 Ошибка чтения: {e}")
+
+        except Exception as e:
+            failed.append(f"{uf.name} (ошибка: {e})")
+            debug_info.append(f"❌ `{uf.name}` → исключение: {e}")
+
+        progress.progress((i + 1) / max(1, len(uploaded_files)))
+
+    status.text("✅ Обработка завершена!")
+
+    return {
+        'all_tx': all_tx,
+        'failed': failed,
+        'file_stats': file_stats,
+        'debug_info': debug_info,
+    }
+
+
+def _render_results(result: Dict):
+    """
+    [FIX-STATE-3] Рендерит результат из session_state. Вызывается на каждом
+    rerun; данные не пересобираются.
+    """
+    all_tx = result.get('all_tx', [])
+    failed = result.get('failed', [])
+    file_stats = result.get('file_stats', [])
+    debug_info = result.get('debug_info', [])
+
+    st.markdown("### 📋 Результат обработки")
+    for s in file_stats:
+        st.info(s)
+
+    with st.expander("🔧 Техническая информация"):
+        for line in debug_info:
+            st.markdown(line)
+
+    if not all_tx:
+        if failed:
+            st.warning(f"⚠️ Не удалось обработать: {len(failed)} файлов")
+            for f in failed:
+                st.write(f"- {f}")
+        else:
+            st.info("Операции не найдены. Проверьте формат файлов.")
+        return
+
+    df = pd.DataFrame(all_tx)
+    df['Сумма_число'] = df['Сумма']
+    df['Сумма'] = df['Сумма'].apply(format_amount)
+    df_display = df.drop(columns=['Сумма_число'])
+
+    st.markdown("---")
+    st.markdown("### 📊 Итоги")
+    c1, c2, c3 = st.columns(3)
+    income = df['Сумма_число'][df['Сумма_число'] > 0].sum()
+    expense = abs(df['Сумма_число'][df['Сумма_число'] < 0].sum())
+    with c1:
+        st.metric("📊 Всего операций", len(all_tx))
+    with c2:
+        st.metric("📈 Доходы", f"{income:,.2f}".replace('.', ','))
+    with c3:
+        st.metric("📉 Расходы", f"{expense:,.2f}".replace('.', ','))
+
+    st.markdown("---")
+    st.markdown("### 🧾 Детализация транзакций")
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.markdown("### 📁 Сводка по счетам")
+    summary_df = build_account_summary(all_tx)
+    if summary_df.empty:
+        st.info("Нет данных для сводки по счетам.")
+    else:
+        st.markdown(
+            f'<div class="summary-table">{summary_df.to_html(index=False, escape=False)}</div>',
+            unsafe_allow_html=True,
+        )
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.markdown("### 💾 Сохранить результат")
+    st.markdown(
+        "Скачайте **отдельно операции по выпискам** и **отдельно сводную таблицу**, "
+        "или всё вместе одним файлом."
+    )
+
+    ops_excel = build_operations_excel(df_display)
+    summary_excel = build_summary_excel(summary_df) if not summary_df.empty else None
+    combined_excel = build_combined_excel(df_display, summary_df) if not summary_df.empty else None
+
+    dl1, dl2, dl3 = st.columns(3)
+
+    with dl1:
+        st.download_button(
+            label="📥 Скачать операции по выпискам",
+            data=ops_excel,
+            file_name="операции_по_выпискам.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_operations_only",
+        )
+
+    with dl2:
+        if summary_excel is not None:
+            st.download_button(
+                label="📊 Скачать сводную таблицу",
+                data=summary_excel,
+                file_name="сводка_по_счетам.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_summary_only",
+            )
+        else:
+            st.button(
+                "📊 Сводная таблица пуста",
+                disabled=True,
+                key="summary_empty_btn",
+            )
+
+    with dl3:
+        if combined_excel is not None:
+            st.download_button(
+                label="📦 Скачать всё одним файлом",
+                data=combined_excel,
+                file_name="анализ_банковских_выписок.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_combined",
+            )
+        else:
+            st.download_button(
+                label="📦 Скачать всё одним файлом",
+                data=ops_excel,
+                file_name="анализ_банковских_выписок.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_combined_ops_only",
+            )
+
+    if failed:
+        st.warning(f"⚠️ Не удалось обработать: {len(failed)} файлов")
+        for f in failed:
+            st.write(f"- {f}")
+
+
 # ==================== ИНТЕРФЕЙС ====================
 
 def main():
+    # [FIX-STATE-4] Инициализация session_state.
+    if 'processing_result' not in st.session_state:
+        st.session_state['processing_result'] = None
+    if 'files_signature' not in st.session_state:
+        st.session_state['files_signature'] = None
+
     st.markdown("### 📥 Загрузка файлов")
     st.markdown("Перетащите выписки в окно ниже или нажмите **Browse files**.")
 
@@ -4437,6 +4593,10 @@ def main():
     )
 
     if not uploaded_files:
+        # [FIX-STATE-5] Если файлы убрали — сбрасываем результат.
+        st.session_state['processing_result'] = None
+        st.session_state['files_signature'] = None
+
         st.markdown("---")
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -4472,167 +4632,49 @@ def main():
             <div class="info-card-text"><h4>Экспорт в Excel</h4><p>Скачайте итог в один клик</p></div>
             </div>
             """, unsafe_allow_html=True)
+        st.markdown("""
+        <div class="footer-note">
+        Работает локально. Данные никуда не отправляются.
+        </div>
+        """, unsafe_allow_html=True)
+        return
 
-    if uploaded_files:
+    st.markdown("---")
+    st.markdown(f"**Загружено файлов:** {len(uploaded_files)}")
+
+    current_sig = _files_signature(uploaded_files)
+
+    col_btn, col_hint = st.columns([1, 3])
+    with col_btn:
+        process_clicked = st.button("🚀 Обработать файлы", key="process_btn")
+    with col_hint:
+        if st.session_state['processing_result'] is not None:
+            st.caption("Результат готов. Можно скачивать файлы; повторное нажатие «Обработать» перезапустит разбор.")
+
+    # [FIX-STATE-6] Обрабатываем ТОЛЬКО если:
+    #  - нажата кнопка «Обработать», И
+    #  - либо результата ещё нет, либо подпись файлов изменилась.
+    need_process = False
+    if process_clicked:
+        if st.session_state['processing_result'] is None:
+            need_process = True
+        elif st.session_state['files_signature'] != current_sig:
+            need_process = True
+        else:
+            # Кнопка нажата, но файлы те же и результат уже есть —
+            # повторно не парсим, чтобы не задваивать сводку.
+            need_process = False
+            st.info("Файлы не изменились — использую уже готовый результат.")
+
+    if need_process:
+        result = _process_uploaded_files(uploaded_files)
+        st.session_state['processing_result'] = result
+        st.session_state['files_signature'] = current_sig
+
+    # Рендерим результат на каждом rerun (данные из session_state).
+    if st.session_state['processing_result'] is not None:
         st.markdown("---")
-        st.markdown(f"**Загружено файлов:** {len(uploaded_files)}")
-
-        if st.button("🚀 Обработать файлы"):
-            all_tx = []
-            failed = []
-            file_stats = []
-            debug_info = []
-
-            progress = st.progress(0)
-            status = st.empty()
-
-            for i, uf in enumerate(uploaded_files):
-                status.text(f"Обработка: {uf.name}")
-                try:
-                    content = uf.read()
-                    tx, parser_name = parse_file(content, uf.name)
-                    account_name = clean_account_name(uf.name)
-
-                    debug_info.append(
-                        f"🔍 `{uf.name}` → счёт: `{account_name}` → "
-                        f"парсер: `{parser_name}` → **{len(tx)}** операций"
-                    )
-
-                    if tx:
-                        all_tx.extend(tx)
-                        file_stats.append(f"✅ {uf.name}: {len(tx)} операций")
-                    else:
-                        file_stats.append(f"ℹ️ {uf.name}: транзакций не найдено")
-
-                    if uf.name.lower().endswith('.docx'):
-                        try:
-                            dump = docx_dump(content)
-                            debug_info.append(f"📄 ДАМП `{uf.name}`:\n```\n{dump[:3000]}\n```")
-                        except Exception as e:
-                            debug_info.append(f"📄 Ошибка дампа: {e}")
-                    elif uf.name.lower().endswith('.pdf'):
-                        try:
-                            txt = pdf_all_text(content)
-                            debug_info.append(f"📄 PDF-текст `{uf.name}` (первые 3000):\n```\n{txt[:3000]}\n```")
-                        except Exception as e:
-                            debug_info.append(f"📄 Ошибка дампа PDF: {e}")
-                    else:
-                        try:
-                            txt = read_text_with_encoding(content)
-                            debug_info.append(f"📄 Текст `{uf.name}` (первые 2000):\n```\n{txt[:2000]}\n```")
-                        except Exception as e:
-                            debug_info.append(f"📄 Ошибка чтения: {e}")
-
-                except Exception as e:
-                    failed.append(f"{uf.name} (ошибка: {e})")
-                    debug_info.append(f"❌ `{uf.name}` → исключение: {e}")
-
-                progress.progress((i + 1) / len(uploaded_files))
-
-            status.text("✅ Обработка завершена!")
-
-            st.markdown("### 📋 Результат обработки")
-            for s in file_stats:
-                st.info(s)
-
-            with st.expander("🔧 Техническая информация"):
-                for line in debug_info:
-                    st.markdown(line)
-
-            if all_tx:
-                df = pd.DataFrame(all_tx)
-                df['Сумма_число'] = df['Сумма']
-                df['Сумма'] = df['Сумма'].apply(format_amount)
-                df_display = df.drop(columns=['Сумма_число'])
-
-                st.markdown("---")
-                st.markdown("### 📊 Итоги")
-                c1, c2, c3 = st.columns(3)
-                income = df['Сумма_число'][df['Сумма_число'] > 0].sum()
-                expense = abs(df['Сумма_число'][df['Сумма_число'] < 0].sum())
-                with c1:
-                    st.metric("📊 Всего операций", len(all_tx))
-                with c2:
-                    st.metric("📈 Доходы", f"{income:,.2f}".replace('.', ','))
-                with c3:
-                    st.metric("📉 Расходы", f"{expense:,.2f}".replace('.', ','))
-
-                st.markdown("---")
-                st.markdown("### 🧾 Детализация транзакций")
-                st.dataframe(df_display, use_container_width=True, hide_index=True)
-
-                st.markdown("---")
-                st.markdown("### 📁 Сводка по счетам")
-                summary_df = build_account_summary(all_tx)
-                if summary_df.empty:
-                    st.info("Нет данных для сводки по счетам.")
-                else:
-                    st.markdown(
-                        f'<div class="summary-table">{summary_df.to_html(index=False, escape=False)}</div>',
-                        unsafe_allow_html=True,
-                    )
-                    st.dataframe(summary_df, use_container_width=True, hide_index=True)
-
-                st.markdown("---")
-                st.markdown("### 💾 Сохранить результат")
-                st.markdown(
-                    "Скачайте **отдельно операции по выпискам** и **отдельно сводную таблицу**, "
-                    "или всё вместе одним файлом."
-                )
-
-                ops_excel = build_operations_excel(df_display)
-                summary_excel = build_summary_excel(summary_df) if not summary_df.empty else None
-                combined_excel = build_combined_excel(df_display, summary_df) if not summary_df.empty else None
-
-                dl1, dl2, dl3 = st.columns(3)
-
-                with dl1:
-                    st.download_button(
-                        label="📥 Скачать операции по выпискам",
-                        data=ops_excel,
-                        file_name="операции_по_выпискам.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key="download_operations_only",
-                    )
-
-                with dl2:
-                    if summary_excel is not None:
-                        st.download_button(
-                            label="📊 Скачать сводную таблицу",
-                            data=summary_excel,
-                            file_name="сводка_по_счетам.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key="download_summary_only",
-                        )
-                    else:
-                        st.button(
-                            "📊 Сводная таблица пуста",
-                            disabled=True,
-                            key="summary_empty_btn",
-                        )
-
-                with dl3:
-                    if combined_excel is not None:
-                        st.download_button(
-                            label="📦 Скачать всё одним файлом",
-                            data=combined_excel,
-                            file_name="анализ_банковских_выписок.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key="download_combined",
-                        )
-                    else:
-                        st.download_button(
-                            label="📦 Скачать всё одним файлом",
-                            data=ops_excel,
-                            file_name="анализ_банковских_выписок.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key="download_combined_ops_only",
-                        )
-
-            if failed:
-                st.warning(f"⚠️ Не удалось обработать: {len(failed)} файлов")
-                for f in failed:
-                    st.write(f"- {f}")
+        _render_results(st.session_state['processing_result'])
 
     st.markdown("""
     <div class="footer-note">
