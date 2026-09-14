@@ -21,6 +21,7 @@ FIX-пакет:
   [FIX-2026-JEN-DOCX]    — JenHor Unelma DOCX: ужесточён фильтр служебных строк.
   [FIX-2026-PASHA]       — Pasha Bank XLSX: усилен фильтр итоговых строк.
   [FIX-2026-BLUOR-EMPTY] — BluOr CSV: информативное сообщение для файлов без операций.
+  [FIX-2026-XLS-NUMBER]  — Экспорт в Excel: суммы пишутся числами с числовым форматом '# ##0,00'.
 """
 
 import streamlit as st
@@ -435,6 +436,7 @@ def parse_amount(amount_str) -> float:
 
 
 def format_amount(amount: float) -> str:
+    """Строковое представление суммы для отображения (10 000,05)."""
     if amount is None or pd.isna(amount):
         return "0,00"
     sign = "-" if amount < 0 else ""
@@ -1601,8 +1603,7 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
 def _read_xls_with_xlrd(file_content: bytes):
     """[FIX-2026-XLS-FALLBACK] Чтение старого .xls через xlrd с ignore_workbook_corruption."""
     try:
-        import xlrd
-    except ImportError:
+        import xlrd    except ImportError:
         return None
     try:
         wb = xlrd.open_workbook(file_contents=file_content, ignore_workbook_corruption=True)
@@ -4720,27 +4721,176 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
 
 # ==================== ЭКСПОРТ ====================
 
-def build_operations_excel(df_display: pd.DataFrame) -> BytesIO:
+# [FIX-2026-XLS-NUMBER] Числовой формат Excel:
+#   '# ##0,00' — разряды разделяются пробелом, десятичный разделитель — запятая.
+#   Excel хранит само число (10000,05), а формат влияет только на отображение.
+#   Это позволяет суммировать/сортировать ячейки как числа, но визуально
+#   видеть «10 000,05» и «-985,57».
+EXCEL_NUM_FMT = '# ##0,00'
+EXCEL_NUM_FMT_INT = '# ##0'
+
+
+def _write_df_to_excel_with_number_format(
+    writer: pd.ExcelWriter,
+    df: pd.DataFrame,
+    sheet_name: str,
+    numeric_columns: Optional[List[str]] = None,
+    integer_columns: Optional[List[str]] = None,
+):
+    """
+    Записывает DataFrame в Excel, применяя числовой формат к указанным колонкам.
+    Колонки должны содержать настоящие числа (float/int), а не строки.
+    """
+    df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+    worksheet = writer.sheets[sheet_name]
+
+    # Применяем формат к перечисленным колонкам
+    num_cols = numeric_columns or []
+    int_cols = integer_columns or []
+
+    # Определяем индексы колонок (openpyxl использует 1-based индексы)
+    col_positions_num = []
+    col_positions_int = []
+    for col_name in num_cols:
+        if col_name in df.columns:
+            idx = list(df.columns).index(col_name) + 1
+            col_positions_num.append(idx)
+    for col_name in int_cols:
+        if col_name in df.columns:
+            idx = list(df.columns).index(col_name) + 1
+            col_positions_int.append(idx)
+
+    # Строка 1 — заголовок; данные начинаются со строки 2
+    max_row = len(df) + 1
+
+    for col_idx in col_positions_num:
+        for row_idx in range(2, max_row + 1):
+            cell = worksheet.cell(row=row_idx, column=col_idx)
+            cell.number_format = EXCEL_NUM_FMT
+            # На всякий случай, если значение пришло строкой — пробуем преобразовать
+            v = cell.value
+            if isinstance(v, str):
+                s = v.strip().replace(' ', '').replace('\xa0', '').replace(',', '.')
+                try:
+                    cell.value = float(s)
+                except Exception:
+                    pass
+
+    for col_idx in col_positions_int:
+        for row_idx in range(2, max_row + 1):
+            cell = worksheet.cell(row=row_idx, column=col_idx)
+            cell.number_format = EXCEL_NUM_FMT_INT
+            v = cell.value
+            if isinstance(v, str):
+                s = v.strip().replace(' ', '').replace('\xa0', '').replace(',', '.')
+                try:
+                    cell.value = int(round(float(s)))
+                except Exception:
+                    pass
+
+    # Автоширина по заголовкам (простая)
+    for column_cells in worksheet.columns:
+        try:
+            length = max(len(str(c.value)) if c.value is not None else 0 for c in column_cells)
+            worksheet.column_dimensions[column_cells[0].column_letter].width = min(max(length + 2, 12), 60)
+        except Exception:
+            pass
+
+
+def _prepare_operations_export(df_raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    Готовит DataFrame для экспорта в Excel: суммы — числа, а не строки.
+    """
+    df_export = df_raw.copy()
+    if 'Сумма' in df_export.columns:
+        # Гарантируем числовой тип
+        df_export['Сумма'] = pd.to_numeric(df_export['Сумма'], errors='coerce').fillna(0.0).astype(float)
+    return df_export
+
+
+def build_operations_excel(df_raw: pd.DataFrame) -> BytesIO:
+    """Экспорт операций: суммы пишутся как числа с форматом '# ##0,00'."""
+    df_export = _prepare_operations_export(df_raw)
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_display.to_excel(writer, sheet_name='Транзакции', index=False)
+        _write_df_to_excel_with_number_format(
+            writer,
+            df_export,
+            sheet_name='Транзакции',
+            numeric_columns=['Сумма'],
+        )
     output.seek(0)
     return output
 
 
 def build_summary_excel(summary_df: pd.DataFrame) -> BytesIO:
+    """Экспорт сводки: суммы и сальдо — числа с форматом '# ##0,00', счётчики — целые."""
+    df_export = summary_df.copy()
+    numeric_cols = [
+        "Сумма приходных операций",
+        "Сумма расходных операций",
+        "Сальдо операций",
+    ]
+    int_cols = [
+        "Количество приходных операций",
+        "Количество расходных операций",
+    ]
+    for c in numeric_cols:
+        if c in df_export.columns:
+            df_export[c] = pd.to_numeric(df_export[c], errors='coerce').fillna(0.0).astype(float)
+    for c in int_cols:
+        if c in df_export.columns:
+            df_export[c] = pd.to_numeric(df_export[c], errors='coerce').fillna(0).astype(int)
+
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        summary_df.to_excel(writer, sheet_name='Сводка по счетам', index=False)
+        _write_df_to_excel_with_number_format(
+            writer,
+            df_export,
+            sheet_name='Сводка по счетам',
+            numeric_columns=numeric_cols,
+            integer_columns=int_cols,
+        )
     output.seek(0)
     return output
 
 
-def build_combined_excel(df_display: pd.DataFrame, summary_df: pd.DataFrame) -> BytesIO:
+def build_combined_excel(df_raw: pd.DataFrame, summary_df: pd.DataFrame) -> BytesIO:
+    """Два листа: операции и сводка, суммы — числа с числовым форматом."""
+    df_ops = _prepare_operations_export(df_raw)
+    df_sum = summary_df.copy()
+    num_sum = [
+        "Сумма приходных операций",
+        "Сумма расходных операций",
+        "Сальдо операций",
+    ]
+    int_sum = [
+        "Количество приходных операций",
+        "Количество расходных операций",
+    ]
+    for c in num_sum:
+        if c in df_sum.columns:
+            df_sum[c] = pd.to_numeric(df_sum[c], errors='coerce').fillna(0.0).astype(float)
+    for c in int_sum:
+        if c in df_sum.columns:
+            df_sum[c] = pd.to_numeric(df_sum[c], errors='coerce').fillna(0).astype(int)
+
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_display.to_excel(writer, sheet_name='Транзакции', index=False)
-        summary_df.to_excel(writer, sheet_name='Сводка по счетам', index=False)
+        _write_df_to_excel_with_number_format(
+            writer,
+            df_ops,
+            sheet_name='Транзакции',
+            numeric_columns=['Сумма'],
+        )
+        _write_df_to_excel_with_number_format(
+            writer,
+            df_sum,
+            sheet_name='Сводка по счетам',
+            numeric_columns=num_sum,
+            integer_columns=int_sum,
+        )
     output.seek(0)
     return output
 
@@ -4896,6 +5046,7 @@ def _render_results(result: Dict):
     income = float(df_raw['Сумма_число'][df_raw['Сумма_число'] > 0].sum())
     expense = float(abs(df_raw['Сумма_число'][df_raw['Сумма_число'] < 0].sum()))
 
+    # Для отображения в Streamlit — форматированная копия (строки)
     df_display = df_raw.drop(columns=['Сумма_число']).copy()
     df_display['Сумма'] = df_display['Сумма'].apply(format_amount)
 
@@ -4933,12 +5084,14 @@ def _render_results(result: Dict):
     st.markdown("### 💾 Сохранить результат")
     st.markdown(
         "Скачайте **отдельно операции по выпискам** и **отдельно сводную таблицу**, "
-        "или всё вместе одним файлом."
+        "или всё вместе одним файлом. Суммы в Excel — настоящие числа с числовым форматом."
     )
 
-    ops_excel = build_operations_excel(df_display)
+    # [FIX-2026-XLS-NUMBER] Для экспорта используем исходный df_raw (с числовой Суммой),
+    # а не df_display (где Сумма отформатирована как строка).
+    ops_excel = build_operations_excel(df_raw)
     summary_excel = build_summary_excel(summary_df) if not summary_df.empty else None
-    combined_excel = build_combined_excel(df_display, summary_df) if not summary_df.empty else None
+    combined_excel = build_combined_excel(df_raw, summary_df) if not summary_df.empty else None
 
     dl1, dl2, dl3 = st.columns(3)
 
@@ -5060,7 +5213,7 @@ def main():
             <path d="M3 3v18h18M18 17V9M13 17V5M8 17v-3" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             </div>
-            <div class="info-card-text"><h4>Экспорт в Excel</h4><p>Скачайте итог в один клик</p></div>
+            <div class="info-card-text"><h4>Экспорт в Excel</h4><p>Суммы — числа с форматом, готовые к расчётам</p></div>
             </div>
             """, unsafe_allow_html=True)
         st.markdown("""
