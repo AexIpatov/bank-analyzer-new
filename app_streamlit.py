@@ -4,25 +4,25 @@ app.py — Аналитик банковских выписок.
 Полная версия.
 
 FIX-пакет:
-  [FIX-INCOME-6] _parse_bluor_csv: жёсткая отбраковка служебных строк
-                 по parts[3] (Начальный остаток / Дебет (D) / Кредит (C) /
-                 Конечный остаток).
-  [FIX-INCOME-7] parse_any_format: убрана эвристика «первое ненулевое число»
-                 для строк без явной даты+суммы; защита от абсурдных сумм > 1e12.
-  [FIX-INCOME-8] parse_xlsx_universal: сумма берётся только если ячейка —
-                 чистое число (regex ^-?\d[\d\s]*([.,]\d+)?$).
-  [FIX-INCOME-9] build_account_summary: отбрасывает строки с |Сумма| > 1e12.
-
-Дополнительно учтены:
-  [1] Česká spořitelna DOCX: игнор блока SHRNUTÍ POHYBŮ NA ÚČTU,
-      сохранение знака -149.00, защита от «дат-как-чисел».
-  [2] Pasha Bank XLSX: отбрасывание DÖVRÜN SONUNA BALANS AZN и
-      MÖVCUD BALANS AED/AZN.
-  [3] BluOr CSV: убран порог abs >= 1e12 — счета с реальными операциями
-      больше не исчезают.
-  [4] _render_results: df_raw и df_display строятся из одного источника.
-  [5] _process_uploaded_files: дедупликация по md5(content).
-  [6] clean_account_name: удаление дат в скобках.
+  [FIX-CPTY-1]  Добавлена функция extract_counterparty_from_description() —
+                извлекает имя контрагента из описания по маркерам
+                'To ...', 'from ...', 'Payment to ...', 'Перевод ...',
+                'Плата за ...' и т.п. Возвращает (counterparty, clean_description).
+  [FIX-CPTY-2]  parse_revolut_generic: Описание = ПОЛНЫЙ Description,
+                Контрагент = имя из Description (после 'To') / Payer / Beneficiary.
+  [FIX-CPTY-3]  parse_paysera_generic / parse_paysera_docx / parse_paysera_pdf:
+                Описание = полный Purpose of payment / Назначение платежа,
+                Контрагент = получатель (из описания или из колонок).
+  [FIX-CPTY-4]  parse_pasha_bank_xlsx / parse_pasha_bank_pdf: Контрагент =
+                Ödəyən/Benefisiar (полностью), Описание = Təyinat (полностью).
+  [FIX-CPTY-5]  parse_budapest_*_mkb: Контрагент = Kedvezményezett neve,
+                Описание = Tranzakció típusa | Közlemény (полностью).
+  [FIX-CPTY-6]  parse_unicredit_generic / parse_unicredit_pdf: Контрагент = Name,
+                Описание = Transaction Details (все колонки склеены).
+  [FIX-CPTY-7]  parse_saida_wise_xlsx: Контрагент = Имя получателя/плательщика,
+                Описание = Описание | Пояснение к переводу (полностью).
+  [FIX-CPTY-8]  parse_bluor_csv / parse_csob / parse_stalkin_fio: описание
+                сохраняется полностью, без обрезки до первого слова.
 
 Зависимости:
     pip install streamlit pandas openpyxl xlrd python-docx pdfplumber
@@ -33,9 +33,10 @@ import pandas as pd
 import os
 import re
 import hashlib
+import csv
 from datetime import datetime
-from io import BytesIO
-from typing import Dict, List, Tuple, Callable
+from io import BytesIO, StringIO
+from typing import Dict, List, Tuple, Callable, Optional
 from docx import Document
 import pdfplumber
 
@@ -322,12 +323,7 @@ st.markdown("""
 # ==================== ОБЩИЕ УТИЛИТЫ ====================
 
 def clean_account_name(filename: str) -> str:
-    """
-    [FIX 6] Убираем из имени файла даты и служебные токены,
-    получая «человеческое» имя счёта.
-    """
     name = os.path.splitext(filename)[0]
-    # Удаляем даты в скобках (Aug 17, 2026 - Aug 31, 2026) и подобные
     name = re.sub(
         r'\(\s*(?:'
         r'[A-Za-z]{3,9}\.?\s+\d{1,2},?\s*\d{4}'
@@ -453,6 +449,118 @@ def safe_str(v) -> str:
         return ''
     return str(v).strip()
 
+
+# ==================== [FIX-CPTY-1] ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
+
+# Маркеры, после которых идёт имя контрагента в описании
+_COUNTERPARTY_MARKERS = [
+    'payment to', 'transfer to', 'paid to', 'sent to',
+    'to ', 'from ', 'перевод ', 'плата за ', 'оплата ',
+    'получатель:', 'payer:', 'recipient:',
+]
+
+
+def _clean_counterparty_name(name: str) -> str:
+    """Очищает имя контрагента от лишних хвостов."""
+    if not name:
+        return ''
+    s = name.strip()
+    # Убираем типичные хвосты: •, |, ;, и всё, что после них
+    for sep in ['•', '|', ';', ' - ', ' — ', ' – ']:
+        if sep in s:
+            s = s.split(sep)[0].strip()
+    # Убираем хвосты вида "Apmaksa par rek. Nr." / "Реквизиты" / "Details"
+    s = re.sub(r'\s+(Apmaksa|Rēķins|Rek\.|Inv\.|Invoice|Details|Реквизиты)\b.*$', '', s, flags=re.IGNORECASE)
+    # Убираем хвосты в скобках
+    s = re.sub(r'\s*\([^)]*\)\s*$', '', s)
+    # Убираем завершающие знаки
+    s = s.strip(' .,;:-')
+    return s
+
+
+def extract_counterparty_from_description(description: str,
+                                          payer: str = '',
+                                          beneficiary: str = '') -> Tuple[str, str]:
+    """
+    [FIX-CPTY-1] Извлекает имя контрагента из описания.
+
+    Возвращает (counterparty, clean_description).
+    clean_description — описание без ведущего 'To XXX ' (если удалось
+    выделить контрагента), иначе = description.
+
+    Приоритет:
+      1) beneficiary (если не пусто)
+      2) payer (если не пусто и не похоже на название банка)
+      3) имя после маркеров 'To ...', 'from ...', 'Payment to ...' и т.п.
+    """
+    desc = (description or '').strip()
+    if not desc:
+        return ('', '')
+
+    # 1) beneficiary
+    if beneficiary:
+        b = beneficiary.strip()
+        if b and b.lower() not in ('nan', 'none', 'n/a'):
+            return (_clean_counterparty_name(b), desc)
+
+    # 2) payer — только если он не похож на название банка
+    if payer:
+        p = payer.strip()
+        if p and p.lower() not in ('nan', 'none', 'n/a'):
+            pl = p.lower()
+            bank_like = any(w in pl for w in [
+                'bank', 'payments', 'finance', 'revolut', 'paysera',
+                'wise', 'sepa', 'transfer'
+            ])
+            if not bank_like:
+                return (_clean_counterparty_name(p), desc)
+
+    # 3) По маркерам в описании
+    low = desc.lower()
+
+    # 'To XXX' / 'From XXX' / 'Payment to XXX'
+    m = re.search(
+        r'\b(?:payment\s+to|transfer\s+to|paid\s+to|sent\s+to|to|from)\s+'
+        r'([A-Z0-9][^\n\r•|;]{1,120})',
+        desc, re.IGNORECASE
+    )
+    if m:
+        name_raw = m.group(1).strip()
+        # Отрезаем по ' •', ' |', ';', ' - '
+        name = _clean_counterparty_name(name_raw)
+        # Иногда 'To' ловит предлог 'to' в английском тексте — отбрасываем служебные
+        if name and len(name) >= 2 and not re.match(r'^\d+$', name):
+            # clean_description = описание без ведущего 'To NAME'
+            head = desc[:m.start()].strip()
+            tail = desc[m.end():].strip()
+            clean_desc = (head + ' ' + tail).strip() if head else tail
+            clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
+            if not clean_desc:
+                clean_desc = desc
+            return (name, clean_desc)
+
+    # 'Плата за XXX' / 'Оплата XXX'
+    m = re.search(
+        r'\b(?:плата\s+за|оплата|перевод)\s+([A-ZА-Я0-9][^\n\r•|;]{1,120})',
+        desc, re.IGNORECASE
+    )
+    if m:
+        name_raw = m.group(1).strip()
+        name = _clean_counterparty_name(name_raw)
+        if name and len(name) >= 2:
+            head = desc[:m.start()].strip()
+            tail = desc[m.end():].strip()
+            clean_desc = (head + ' ' + tail).strip() if head else tail
+            clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
+            if not clean_desc:
+                clean_desc = desc
+            return (name, clean_desc)
+
+    # 4) Fallback — вернуть описание как контрагента
+    return (desc[:200], desc)
+
+
+# ==================== ФАЙЛОВЫЕ УТИЛИТЫ ====================
 
 def read_xlsx(file_content: bytes, sheet_name=None, header=None):
     for engine in ['openpyxl', 'xlrd', None]:
@@ -656,7 +764,6 @@ def _split_line(line: str, sep: str) -> List[str]:
     return [p.strip('"') for p in parts]
 
 
-# [FIX-INCOME-7] Защита от абсурдных сумм: реальные суммы < 1e12.
 MAX_REASONABLE_AMOUNT = 1e12
 
 
@@ -665,6 +772,17 @@ def _is_reasonable_amount(v: float) -> bool:
         return abs(float(v)) < MAX_REASONABLE_AMOUNT
     except Exception:
         return False
+
+
+def _cell_is_numeric(v) -> bool:
+    if v is None or pd.isna(v):
+        return False
+    if isinstance(v, (int, float)):
+        return True
+    s = str(v).strip()
+    if not s:
+        return False
+    return bool(re.fullmatch(r'^-?[\d\s\u00a0]*[.,]?\d*$', s))
 
 
 # ==================== CSOB ====================
@@ -958,6 +1076,7 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = re.sub(r'\s+', ' ', cells[desc_idx] if desc_idx < len(cells) else '').strip()
+            cp = ''
             if 'Внутренний перевод' in desc:
                 cp = 'Внутренний перевод'
             elif 'Внешний перевод' in desc:
@@ -969,10 +1088,11 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
             elif 'Перевод' in desc:
                 cp = 'Перевод'
             else:
-                cp = desc[:60]
+                cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp, 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -1011,10 +1131,11 @@ def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             elif 'Перевод' in desc:
                 cp = 'Перевод'
             else:
-                cp = desc[:60]
+                cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp, 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -1024,7 +1145,6 @@ def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 # ==================== BluOr Bank ====================
 
-# [FIX-INCOME-6] Жёсткие маркеры служебных строк BluOr.
 _BLUOR_SERVICE_MARKERS = [
     'начальный остаток', 'конечный остаток',
     'входящий остаток', 'исходящий остаток',
@@ -1039,7 +1159,6 @@ _BLUOR_SERVICE_MARKERS = [
 
 
 def _is_bluor_service_row(parts: List[str]) -> bool:
-    """[FIX-INCOME-6] Служебная строка BluOr (остатки/итоги)."""
     for idx in (2, 3, 4):
         if idx < len(parts):
             v = parts[idx].strip().lower()
@@ -1065,7 +1184,6 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
         if len(parts) < 4:
             continue
         try:
-            # [FIX-INCOME-6] Жёсткая отбраковка служебных строк.
             if _is_bluor_service_row(parts):
                 continue
 
@@ -1116,10 +1234,13 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = abs(amount)
 
             cp = 'BluOr Bank' if 'bluor' in low or 'bank' in low else ''
+            if not cp:
+                cp, _ = extract_counterparty_from_description(desc)
 
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp[:200], 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -1167,9 +1288,12 @@ def parse_bluor_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             elif ttype == 'C':
                 amount = abs(amount)
             cp = 'BluOr Bank' if 'bluor' in low or 'bank' in low else ''
+            if not cp:
+                cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp[:200], 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -1203,11 +1327,15 @@ def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict
             amount = parse_amount(parts[1])
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
+            cp = parts[2][:200] if len(parts) > 2 else ''
+            desc = ' '.join(parts[3:])[:500] if len(parts) > 3 else ''
+            if not cp:
+                cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': parts[2][:200] if len(parts) > 2 else '',
+                'Контрагент': cp,
                 'Наименование счета': account_name,
-                'Описание': ' '.join(parts[3:])[:500] if len(parts) > 3 else ''
+                'Описание': desc
             })
         except Exception:
             continue
@@ -1215,21 +1343,12 @@ def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict
 
 
 def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX 1] Česká spořitelna DOCX.
-    Игнорируем таблицу SHRNUTÍ POHYBŮ NA ÚČTU целиком.
-    Сохраняем знак суммы; не превращаем дату "31.08.2026" в число "+31,08".
-    """
     result = []
     try:
         doc = Document(BytesIO(file_content))
     except Exception:
         return []
-
-    # 1) Определяем, какие таблицы — сводка SHRNUTÍ POHYBŮ NA ÚČTU,
-    #    а какие — операции PŘEHLED POHYBŮ NA ÚČTU.
     for table in doc.tables:
-        # Плоский текст таблицы
         flat_parts = []
         for row in table.rows:
             for cell in row.cells:
@@ -1237,8 +1356,6 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                 if t:
                     flat_parts.append(t)
         flat_low = ' '.join(flat_parts).lower()
-
-        # Пропускаем таблицу-сводку
         if any(w in flat_low for w in [
             'shrnuti pohybu', 'shrnutí pohybů',
             'obraty za obdobi', 'obraty za období',
@@ -1247,20 +1364,14 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
             'pocet cekajicich', 'počet čekajících',
         ]):
             continue
-
-        # 2) Парсим строки таблицы операций.
         for row in table.rows:
             cells = [c.text.strip() for c in row.cells]
             joined = ' | '.join([c for c in cells if c])
             if not joined:
                 continue
             joined_low = joined.lower()
-
-            # Пропускаем заголовок таблицы операций
             if 'prehled pohybu' in joined_low or 'přehled pohybů' in joined_low:
                 continue
-
-            # Пропускаем служебные строки
             if any(w in joined_low for w in [
                 'pocatecni zustatek', 'počáteční zůstatek',
                 'konecny zustatek', 'konečný zůstatek',
@@ -1268,8 +1379,6 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                 'celkem odepsano', 'celkem odepsáno',
             ]):
                 continue
-
-            # Дата: ищем первую дату в ячейках, вырезаем её из текста
             date_found = None
             cleaned_cells = []
             for c in cells:
@@ -1279,13 +1388,10 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                     date_found = mdate.group(1)
                     c_s = c_s.replace(mdate.group(0), ' ')
                 cleaned_cells.append(c_s)
-
-            # Собираем числа, не считая даты и не считая токены типа "31.08.2026"
             amounts = []
             for c in cleaned_cells:
                 if not c:
                     continue
-                # Пропускаем ячейки целиком-даты
                 if re.fullmatch(r'\d{1,2}\.\d{1,2}\.\d{2,4}', c.strip()):
                     continue
                 for mnum in re.finditer(
@@ -1295,7 +1401,6 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                     if re.fullmatch(r'\d{1,2}\.\d{1,2}\.\d{2,4}', tok):
                         continue
                     try:
-                        # Чистое число вида "-149.00"
                         v = float(tok.replace(' ', '').replace('\u00a0', ''))
                         amounts.append(v)
                     except Exception:
@@ -1304,11 +1409,8 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                             amounts.append(v)
                         except Exception:
                             continue
-
             if not amounts:
                 continue
-
-            # Знак: если в ячейках есть отдельная "D" — минус, "C" — плюс.
             sign = None
             for c in cells:
                 cn = c.strip().upper()
@@ -1318,7 +1420,6 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                 if cn in ('C', 'CREDIT', 'KREDIT', 'КРЕДИТ'):
                     sign = 1
                     break
-
             amount = amounts[0]
             if sign == -1:
                 amount = -abs(amount)
@@ -1326,7 +1427,6 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                 amount = abs(amount)
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
-
             desc = ' '.join([c for c in cleaned_cells if c.strip()])[:500]
             result.append({
                 'Дата': parse_date(date_found) if date_found else '',
@@ -1335,8 +1435,6 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                 'Наименование счета': account_name,
                 'Описание': desc
             })
-
-    # 3) Резервный путь — по параграфам (если таблицы не дали результата)
     if not result:
         for para in doc.paragraphs:
             t = para.text.strip()
@@ -1361,7 +1459,6 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                 'Наименование счета': account_name,
                 'Описание': m.group(2).strip()[:500]
             })
-
     return result
 
 
@@ -1426,9 +1523,12 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
             desc = parts[5] if len(parts) > 5 and parts[5] else (parts[6] if len(parts) > 6 else '')
             cp = parts[3] if len(parts) > 3 else ''
+            if not cp:
+                cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp[:200], 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -1446,84 +1546,84 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
         for idx, row in df.iterrows():
             if idx < 60:
                 rs = ' '.join([str(x) for x in row.values if pd.notna(x)]).lower()
-                has_date = ('дата транзакции' in rs) or ('transaction date' in rs) \
-                    or ('date' in rs and 'transaction' in rs)
+                has_date = ('дата транзакции' in rs) or ('transaction date' in rs)
                 has_debit = ('дебет' in rs) or ('debit' in rs)
                 has_credit = ('кредит' in rs) or ('credit' in rs)
                 if has_date and has_debit and has_credit:
                     header_row = idx
                     break
-        if header_row == -1:
-            return []
-        hdr = df.iloc[header_row]
-        ci = {}
-        for i, v in enumerate(hdr.values):
-            if pd.isna(v):
-                continue
-            s = str(v).strip()
-            sl = s.lower()
-            if ('дата транзакции' in sl) or ('transaction date' in sl) or (sl == 'date'):
-                if 'date' not in ci:
-                    ci['date'] = i
-            elif ('получатель' in sl) or ('плательщик' in sl) or ('counterparty' in sl) or ('payee' in sl):
-                if 'counterparty' not in ci:
-                    ci['counterparty'] = i
-            elif ('информация о транзакции' in sl) or ('описание' in sl) or ('description' in sl) or ('details' in sl):
-                if 'description' not in ci:
-                    ci['description'] = i
-            elif (('дебет' in sl) or ('debit' in sl)) and ('кредит' not in sl) and ('credit' not in sl):
-                if 'debit' not in ci:
-                    ci['debit'] = i
-            elif (('кредит' in sl) or ('credit' in sl)) and ('дебет' not in sl) and ('debit' not in sl):
-                if 'credit' not in ci:
-                    ci['credit'] = i
-        if 'date' not in ci:
-            ci['date'] = 0
-        if 'debit' not in ci:
-            ci['debit'] = 11
-        if 'credit' not in ci:
-            ci['credit'] = 12
-        for idx in range(header_row + 1, len(df)):
-            row = df.iloc[idx]
-            rv = [x for x in row.values if pd.notna(x)]
-            if not rv:
-                continue
-            try:
-                dstr = safe_str(row.iloc[ci['date']]) if ci['date'] < len(row) else ''
-                if not dstr:
+        if header_row != -1:
+            hdr = df.iloc[header_row]
+            ci = {}
+            for i, v in enumerate(hdr.values):
+                if pd.isna(v):
                     continue
-                date = parse_date(dstr)
-                if not date:
+                sl = str(v).strip().lower()
+                if ('дата транзакции' in sl) or ('transaction date' in sl):
+                    if 'date' not in ci:
+                        ci['date'] = i
+                elif ('получатель' in sl) or ('плательщик' in sl) or ('counterparty' in sl):
+                    if 'counterparty' not in ci:
+                        ci['counterparty'] = i
+                elif ('информация о транзакции' in sl) or ('описание' in sl) or ('description' in sl):
+                    if 'description' not in ci:
+                        ci['description'] = i
+                elif (('дебет' in sl) or ('debit' in sl)) and ('кредит' not in sl) and ('credit' not in sl):
+                    if 'debit' not in ci:
+                        ci['debit'] = i
+                elif (('кредит' in sl) or ('credit' in sl)) and ('дебет' not in sl) and ('debit' not in sl):
+                    if 'credit' not in ci:
+                        ci['credit'] = i
+            if 'date' not in ci:
+                ci['date'] = 0
+            if 'debit' not in ci:
+                ci['debit'] = 11
+            if 'credit' not in ci:
+                ci['credit'] = 12
+            for idx in range(header_row + 1, len(df)):
+                row = df.iloc[idx]
+                rv = [x for x in row.values if pd.notna(x)]
+                if not rv:
                     continue
-                amount = 0.0
-                found = False
-                if 'debit' in ci and ci['debit'] < len(row):
-                    dv = row.iloc[ci['debit']]
-                    if pd.notna(dv) and str(dv).strip() not in ['', 'nan', '-']:
-                        p = parse_amount(str(dv).strip().replace(',', '.').replace(' ', ''))
-                        if p != 0.0:
-                            amount = -abs(p)
-                            found = True
-                if not found and 'credit' in ci and ci['credit'] < len(row):
-                    cv = row.iloc[ci['credit']]
-                    if pd.notna(cv) and str(cv).strip() not in ['', 'nan', '-']:
-                        p = parse_amount(str(cv).strip().replace(',', '.').replace(' ', ''))
-                        if p != 0.0:
-                            amount = p
-                            found = True
-                if not found or not _is_reasonable_amount(amount):
+                try:
+                    dstr = safe_str(row.iloc[ci['date']]) if ci['date'] < len(row) else ''
+                    if not dstr:
+                        continue
+                    date = parse_date(dstr)
+                    if not date:
+                        continue
+                    amount = 0.0
+                    found = False
+                    if 'debit' in ci and ci['debit'] < len(row):
+                        dv = row.iloc[ci['debit']]
+                        if pd.notna(dv) and str(dv).strip() not in ['', 'nan', '-']:
+                            p = parse_amount(str(dv).strip().replace(',', '.').replace(' ', ''))
+                            if p != 0.0:
+                                amount = -abs(p)
+                                found = True
+                    if not found and 'credit' in ci and ci['credit'] < len(row):
+                        cv = row.iloc[ci['credit']]
+                        if pd.notna(cv) and str(cv).strip() not in ['', 'nan', '-']:
+                            p = parse_amount(str(cv).strip().replace(',', '.').replace(' ', ''))
+                            if p != 0.0:
+                                amount = p
+                                found = True
+                    if not found or not _is_reasonable_amount(amount):
+                        continue
+                    cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
+                    desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
+                    if not cp:
+                        cp, _ = extract_counterparty_from_description(desc)
+                    result.append({
+                        'Дата': date, 'Сумма': amount,
+                        'Контрагент': cp[:200] if cp else '',
+                        'Наименование счета': account_name,
+                        'Описание': desc[:500]
+                    })
+                except Exception:
                     continue
-                cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-                desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp[:200], 'Наименование счета': account_name,
-                    'Описание': desc[:500]
-                })
-            except Exception:
-                continue
-        if result:
-            return result
+            if result:
+                return result
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     if not lines:
@@ -1586,9 +1686,12 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
                 continue
             cp = parts[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(parts) else ''
             desc = parts[ci['description']] if 'description' in ci and ci['description'] < len(parts) else ''
+            if not cp:
+                cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp[:200], 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -1655,9 +1758,12 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 cp = row[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
                 desc = row[ci['description']] if 'description' in ci and ci['description'] < len(row) else ''
+                if not cp:
+                    cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp[:200], 'Наименование счета': account_name,
+                    'Контрагент': cp[:200] if cp else '',
+                    'Наименование счета': account_name,
                     'Описание': desc[:500]
                 })
             except Exception:
@@ -1682,10 +1788,13 @@ def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[
             amount = parse_amount(parts[2].replace(',', '.'))
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
+            desc = parts[1][:500] if len(parts) > 1 else ''
+            cp, clean_desc = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': '', 'Наименование счета': account_name,
-                'Описание': parts[1][:500] if len(parts) > 1 else ''
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
+                'Описание': desc
             })
         except Exception:
             continue
@@ -1734,11 +1843,12 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
                 if any(w in low for w in ['balance', 'saldo', 'start', 'end', 'period',
                                           'лимит', 'баланс', 'период', 'available', 'кредитн']):
                     continue
+                cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': -abs(amount),
-                    'Контрагент': 'Kapital Bank',
+                    'Контрагент': cp[:200] if cp else 'Kapital Bank',
                     'Наименование счета': account_name,
-                    'Описание': desc[:500]
+                    'Описание': desc
                 })
             except Exception:
                 continue
@@ -1763,11 +1873,12 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
                     low = (desc_cell or '').lower()
                     if any(w in low for w in ['balance', 'saldo', 'start', 'end', 'period']):
                         continue
+                    cp, _ = extract_counterparty_from_description(desc_cell or '')
                     result.append({
                         'Дата': date_cell, 'Сумма': -abs(amount_cell),
-                        'Контрагент': 'Kapital Bank',
+                        'Контрагент': cp[:200] if cp else 'Kapital Bank',
                         'Наименование счета': account_name,
-                        'Описание': (desc_cell or '')[:500]
+                        'Описание': (desc_cell or '')
                     })
             except Exception:
                 continue
@@ -1792,11 +1903,12 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
                 low = (desc or '').lower()
                 if any(w in low for w in ['balance', 'saldo', 'start', 'end', 'period']):
                     continue
+                cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': -abs(amount),
-                    'Контрагент': 'Kapital Bank',
+                    'Контрагент': cp[:200] if cp else 'Kapital Bank',
                     'Наименование счета': account_name,
-                    'Описание': desc[:500]
+                    'Описание': desc
                 })
             except Exception:
                 continue
@@ -1817,11 +1929,12 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
                 desc = m.group(5).strip()
                 if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
+                cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': -abs(amount),
-                    'Контрагент': 'Kapital Bank',
+                    'Контрагент': cp[:200] if cp else 'Kapital Bank',
                     'Наименование счета': account_name,
-                    'Описание': desc[:500]
+                    'Описание': desc
                 })
             except Exception:
                 continue
@@ -1908,9 +2021,12 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
                     if not re.match(r'^[A-Z0-9]{10,}$', p_clean):
                         cp = p_clean[:200]
                         break
+            if not cp:
+                cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp, 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -1948,9 +2064,12 @@ def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                         if not re.match(r'^[A-Z0-9]{10,}$', p_clean):
                             cp = p_clean[:200]
                             break
+                if not cp:
+                    cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp, 'Наименование счета': account_name,
+                    'Контрагент': cp[:200] if cp else '',
+                    'Наименование счета': account_name,
                     'Описание': desc[:500]
                 })
             except Exception:
@@ -2074,9 +2193,12 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                     ttype = safe_str(row.iloc[ci['type']]) if 'type' in ci and ci['type'] < len(row) else ''
                     if cp in ['N/A', 'n/a']:
                         cp = ''
+                    if not cp:
+                        cp, _ = extract_counterparty_from_description(desc)
                     result.append({
                         'Дата': date, 'Сумма': amount,
-                        'Контрагент': cp[:200], 'Наименование счета': account_name,
+                        'Контрагент': cp[:200] if cp else '',
+                        'Наименование счета': account_name,
                         'Описание': (f"{ttype} | {desc}" if ttype else desc)[:500]
                     })
                 except Exception:
@@ -2148,9 +2270,12 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
             ttype = parts[type_idx] if 0 <= type_idx < len(parts) else ''
             if cp in ['N/A', 'n/a']:
                 cp = ''
+            if not cp:
+                cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp[:200], 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': (f"{ttype} | {desc}" if ttype else desc)[:500]
             })
         except Exception:
@@ -2200,9 +2325,12 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 desc = row[ci.get('description', 11)] if ci.get('description', 11) < len(row) else ''
                 cp = row[ci.get('counterparty', 0)] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
+                if not cp:
+                    cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp[:200], 'Наименование счета': account_name,
+                    'Контрагент': cp[:200] if cp else '',
+                    'Наименование счета': account_name,
                     'Описание': desc[:500]
                 })
             except Exception:
@@ -2237,9 +2365,11 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
             low = desc.lower()
             if any(w in low for w in ['saldo previo', 'nuevo saldo', 'transacciones']):
                 continue
+            cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': 'N26', 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else 'N26',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -2273,9 +2403,11 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if any(w in low for w in ['saldo previo', 'nuevo saldo', 'transacciones',
                                       'extracto', 'espacio', 'deseño']):
                 continue
+            cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': 'N26', 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else 'N26',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -2293,7 +2425,8 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': 'N26', 'Наименование счета': account_name,
+                    'Контрагент': 'N26',
+                    'Наименование счета': account_name,
                     'Описание': ''
                 })
             except Exception:
@@ -2378,9 +2511,12 @@ def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = abs(amount)
             cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
             desc = safe_str(row.iloc[ci['purpose']]) if 'purpose' in ci and ci['purpose'] < len(row) else ''
+            if not cp:
+                cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp[:200], 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -2549,14 +2685,20 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 break
         if chosen_amount is None or chosen_amount == 0.0 or not _is_reasonable_amount(chosen_amount):
             continue
-        desc = ''
+
+        # Полное описание — берём из Purpose of payment
         window_text = full_text[window_start:window_end]
+        full_purpose = ''
         purpose_match = re.search(
-            r'Purpose of payment\s*:\s*([^\.]{1,200}?)(?:\.|$)',
+            r'Purpose of payment\s*:\s*([^\n]{1,500})',
             window_text, re.IGNORECASE
         )
         if purpose_match:
-            desc = purpose_match.group(1).strip()
+            full_purpose = purpose_match.group(1).strip()
+            # Обрезаем хвост после завершающей точки, если он явно служебный
+            full_purpose = re.sub(r'\s+', ' ', full_purpose)
+
+        desc = full_purpose
         if not desc:
             head = full_text[max(0, chosen_pos - 120):chosen_pos]
             for marker in ['Commission fee', 'Commission', 'Плата за', 'Плата',
@@ -2567,9 +2709,15 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     break
         if not desc:
             desc = 'Paysera operation'
+
+        # Контрагент из описания
+        cp, _ = extract_counterparty_from_description(desc)
+        if not cp:
+            cp = 'Paysera LT'
+
         result.append({
             'Дата': date, 'Сумма': chosen_amount,
-            'Контрагент': 'Paysera LT',
+            'Контрагент': cp[:200],
             'Наименование счета': account_name,
             'Описание': desc[:500]
         })
@@ -2602,10 +2750,13 @@ def parse_rak_bank(file_content: bytes, account_name: str) -> List[Dict]:
             amount = parse_amount(parts[2].replace(',', '.'))
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
+            desc = parts[1][:500] if len(parts) > 1 else ''
+            cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': '', 'Наименование счета': account_name,
-                'Описание': parts[1][:500] if len(parts) > 1 else ''
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
+                'Описание': desc
             })
         except Exception:
             continue
@@ -2626,19 +2777,29 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = parse_amount(row[2])
                 if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
+                desc = row[1][:500]
+                cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': '', 'Наименование счета': account_name,
-                    'Описание': row[1][:500]
+                    'Контрагент': cp[:200] if cp else '',
+                    'Наименование счета': account_name,
+                    'Описание': desc
                 })
             except Exception:
                 continue
     return result
 
 
-# ==================== Revolut ====================
+# ==================== [FIX-CPTY-2] Revolut ====================
 
 def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    [FIX-CPTY-2] Универсальный парсер Revolut CSV.
+
+    Ключевое отличие от предыдущей версии:
+      - Описание = ПОЛНЫЙ текст Description.
+      - Контрагент = Beneficiary name / Payer / имя после 'To' в Description.
+    """
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -2684,6 +2845,7 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
         ci['type'] = 3
     if 'state' not in ci:
         ci['state'] = 4
+
     for line in lines[header + 1:]:
         parts = _split_line(line, sep)
         if len(parts) < 6:
@@ -2704,18 +2866,27 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = abs(amount)
             elif ttype == 'FEE':
                 amount = -abs(amount)
-            cp = ''
-            if 'counterparty' in ci and ci['counterparty'] < len(parts):
-                cp = parts[ci['counterparty']].strip()
-            if (not cp or cp == 'nan') and 'beneficiary' in ci and ci['beneficiary'] < len(parts):
-                cp = parts[ci['beneficiary']].strip()
+            payer = parts[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(parts) else ''
+            beneficiary = parts[ci['beneficiary']] if 'beneficiary' in ci and ci['beneficiary'] < len(parts) else ''
             desc = parts[ci['description']] if ci['description'] < len(parts) else ''
+
+            # [FIX-CPTY-2] Приоритет: beneficiary -> payer (если не банк) -> из описания
+            cp = ''
+            if beneficiary and beneficiary.lower() not in ('nan', 'none', 'n/a'):
+                cp = _clean_counterparty_name(beneficiary)
+            if not cp and payer and payer.lower() not in ('nan', 'none', 'n/a'):
+                pl = payer.lower()
+                bank_like = any(w in pl for w in ['bank', 'payments', 'finance', 'revolut',
+                                                  'paysera', 'wise', 'sepa', 'transfer'])
+                if not bank_like:
+                    cp = _clean_counterparty_name(payer)
             if not cp:
-                m = re.search(r'(?:To|from)\s+([^,]+)', desc)
-                cp = m.group(1).strip() if m else desc[:200]
+                cp, _ = extract_counterparty_from_description(desc)
+
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp[:200], 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -2759,13 +2930,11 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 desc = row[5] if len(row) > 5 else ''
-                cp = ''
-                m2 = re.search(r'(?:To|from)\s+([^,]+)', desc)
-                if m2:
-                    cp = m2.group(1).strip()
+                cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp[:200], 'Наименование счета': account_name,
+                    'Контрагент': cp[:200] if cp else '',
+                    'Наименование счета': account_name,
                     'Описание': desc[:500]
                 })
             except Exception:
@@ -2773,7 +2942,7 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== UniCredit ====================
+# ==================== [FIX-CPTY-6] UniCredit ====================
 
 def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -2790,22 +2959,21 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
         return []
     hdr_parts = [p.strip() for p in lines[header].split(';')]
     ci = {}
+    desc_indices = []
     for i, h in enumerate(hdr_parts):
         hc = h.strip()
         if hc == 'Amount' and 'amount' not in ci:
             ci['amount'] = i
         elif hc == 'Booking Date' and 'date' not in ci:
             ci['date'] = i
-        elif hc == 'Transaction Details' and 'description' not in ci:
-            ci['description'] = i
+        elif hc == 'Transaction Details':
+            desc_indices.append(i)
         elif hc == 'Name' and 'counterparty' not in ci:
             ci['counterparty'] = i
     if 'amount' not in ci:
         ci['amount'] = 1
     if 'date' not in ci:
         ci['date'] = 3
-    if 'description' not in ci:
-        ci['description'] = 13
     if 'counterparty' not in ci:
         ci['counterparty'] = 9
     for line in lines[header + 1:]:
@@ -2822,18 +2990,30 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
             if not date:
                 continue
             cp = parts[ci['counterparty']].strip() if ci['counterparty'] < len(parts) else ''
-            desc = parts[ci['description']].strip() if ci['description'] < len(parts) else ''
+            # [FIX-CPTY-6] Описание — все колонки Transaction Details
+            desc_parts = []
+            for di in desc_indices:
+                if di < len(parts):
+                    v = parts[di].strip()
+                    if v and v != 'nan':
+                        desc_parts.append(v)
+            desc = ' '.join(desc_parts).strip()
             if not desc:
                 for idx in range(len(parts) - 1, -1, -1):
                     if idx in (ci['amount'], ci['date'], ci['counterparty']):
+                        continue
+                    if idx in desc_indices:
                         continue
                     v = parts[idx].strip()
                     if v and v != 'nan' and len(v) > 2 and not re.match(r'^[\d.,\-]+$', v) and not re.match(r'^\d{4}-\d{2}-\d{2}$', v):
                         desc = v
                         break
+            if not cp:
+                cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp[:200], 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -2895,9 +3075,12 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 cp = row[ci.get('counterparty', 9)] if ci.get('counterparty', 9) < len(row) else ''
                 desc = row[ci.get('description', 13)] if ci.get('description', 13) < len(row) else ''
+                if not cp:
+                    cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp[:200], 'Наименование счета': account_name,
+                    'Контрагент': cp[:200] if cp else '',
+                    'Наименование счета': account_name,
                     'Описание': desc[:500]
                 })
             except Exception:
@@ -2915,9 +3098,11 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 desc = re.sub(r'\s+', ' ', m.group(4)).strip()
                 if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
+                cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': '', 'Наименование счета': account_name,
+                    'Контрагент': cp[:200] if cp else '',
+                    'Наименование счета': account_name,
                     'Описание': desc[:500]
                 })
             except Exception:
@@ -2969,19 +3154,22 @@ def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict]:
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = parts[ci['description']] if ci['description'] < len(parts) else ''
-            cp = desc
+            cp = ''
             if desc:
                 d1 = re.sub(r'/REF/.*$', '', desc)
                 d1 = re.sub(r'FOR \d+$', '', d1).strip()
                 if d1 and len(d1) > 2:
                     cp = d1[:200]
+            if not cp:
+                cp, _ = extract_counterparty_from_description(desc)
             notes = parts[ci['notes']] if 'notes' in ci and ci['notes'] < len(parts) else ''
             full = desc
             if notes and notes != 'N/A' and notes:
                 full = f"{desc} | {notes}" if desc else notes
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp[:200], 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': full[:500]
             })
         except Exception:
@@ -3004,9 +3192,11 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 desc = row[5] if len(row) > 5 else ''
+                cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': '', 'Наименование счета': account_name,
+                    'Контрагент': cp[:200] if cp else '',
+                    'Наименование счета': account_name,
                     'Описание': desc[:500]
                 })
             except Exception:
@@ -3040,10 +3230,13 @@ def parse_saida_n26_csv(file_content: bytes, account_name: str) -> List[Dict]:
             amount = parse_amount(parts[1].replace(',', '.'))
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
+            desc = ' '.join(parts[2:])[:500]
+            cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': '', 'Наименование счета': account_name,
-                'Описание': ' '.join(parts[2:])[:500]
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
+                'Описание': desc
             })
         except Exception:
             continue
@@ -3054,9 +3247,14 @@ def parse_saida_wise(file_content, account_name):
     return parse_saida_n26_csv(file_content, account_name)
 
 
-# ==================== Saida Wise XLSX ====================
+# ==================== [FIX-CPTY-7] Saida Wise XLSX ====================
 
 def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    [FIX-CPTY-7] Wise Excel.
+    Контрагент = Имя получателя / Имя плательщика.
+    Описание = Описание | Пояснение к переводу (полностью).
+    """
     result = []
     df = read_xlsx(file_content, sheet_name='All transactions')
     if df is None or df.empty:
@@ -3123,12 +3321,15 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
             cp = safe_str(row.iloc[ci['recipient']]) if 'recipient' in ci and ci['recipient'] < len(row) else ''
             if not cp:
                 cp = safe_str(row.iloc[ci['payer']]) if 'payer' in ci and ci['payer'] < len(row) else ''
+            if not cp:
+                cp, _ = extract_counterparty_from_description(desc)
             full_desc = desc
             if note and note != 'nan':
                 full_desc = f"{desc} | {note}" if desc else note
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp[:200], 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': full_desc[:500]
             })
         except Exception:
@@ -3136,13 +3337,9 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== Pasha Bank (BUNDA LLC) ====================
+# ==================== [FIX-CPTY-4] Pasha Bank ====================
 
 def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX 2] Pasha Bank XLSX.
-    Отбрасываем строки DÖVRÜN SONUNA BALANS AZN и MÖVCUD BALANS AED/AZN.
-    """
     result = []
     df = read_xlsx(file_content, sheet_name='Statement')
     if df is None or df.empty:
@@ -3204,10 +3401,8 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
             desc = safe_str(row.iloc[ci['description']]) if ci['description'] < len(row) else ''
             low_desc = desc.lower()
-            # [FIX 2] Явные проверки итоговых строк Pasha
             if 'balans' in low_desc and ('dövr' in low_desc or 'mövcud' in low_desc):
                 continue
-            # Дополнительная защита: если это строка-заголовок итогов
             if 'dövrün sonuna balans' in low_desc or 'mövcud balans' in low_desc:
                 continue
             credit = 0.0
@@ -3235,289 +3430,8 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
             desc = re.sub(r'\s+', ' ', desc).strip()
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp[:200], 'Наименование счета': account_name,
-                'Описание': desc[:500]
-            })
-        except Exception:
-            continue
-    return result
-
-
-# ==================== Универсальный PDF fallback ====================
-
-def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
-    result = []
-    tables = pdf_all_tables(file_content)
-    for table in tables:
-        if not table or len(table) < 2:
-            continue
-        header_idx = -1
-        for i, row in enumerate(table[:5]):
-            joined = ' '.join(row).lower()
-            if ('date' in joined or 'дата' in joined) and ('amount' in joined or 'сумма' in joined or 'sum' in joined):
-                header_idx = i
-                break
-        if header_idx == -1:
-            continue
-        hdr = table[header_idx]
-        date_i = amount_i = desc_i = cp_i = -1
-        for i, h in enumerate(hdr):
-            hl = h.lower()
-            if 'date' in hl or 'дата' in hl or 'értéknap' in hl:
-                if date_i == -1:
-                    date_i = i
-            elif 'amount' in hl or 'сумма' in hl or 'összeg' in hl or 'betrag' in hl:
-                if amount_i == -1:
-                    amount_i = i
-            elif 'description' in hl or 'описание' in hl or 'details' in hl or 'közlemény' in hl:
-                if desc_i == -1:
-                    desc_i = i
-            elif 'name' in hl or 'recipient' in hl or 'counterparty' in hl or 'kedvezményezett' in hl:
-                if cp_i == -1:
-                    cp_i = i
-        if date_i == -1 or amount_i == -1:
-            continue
-        for row in table[header_idx + 1:]:
-            try:
-                date = parse_date(row[date_i] if date_i < len(row) else '')
-                if not date:
-                    continue
-                amount = parse_amount(row[amount_i] if amount_i < len(row) else '')
-                if amount == 0.0 or not _is_reasonable_amount(amount):
-                    continue
-                desc = row[desc_i] if desc_i >= 0 and desc_i < len(row) else ''
-                cp = row[cp_i] if cp_i >= 0 and cp_i < len(row) else ''
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp[:200], 'Наименование счета': account_name,
-                    'Описание': desc[:500]
-                })
-            except Exception:
-                continue
-    return result
-
-
-# ==================== PDF-ПАРСЕРЫ ====================
-
-def parse_csob_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    result = []
-    tables = pdf_all_tables(file_content)
-    for table in tables:
-        if not table or len(table) < 2:
-            continue
-        header_idx = -1
-        for i, row in enumerate(table[:6]):
-            joined = ' '.join(row).lower()
-            if 'account number' in joined and 'posting date' in joined:
-                header_idx = i
-                break
-        if header_idx == -1:
-            continue
-        hdr = table[header_idx]
-        ci = {}
-        for i, h in enumerate(hdr):
-            hl = h.lower()
-            if 'account number' in hl and 'account' not in ci:
-                ci['account'] = i
-            elif 'posting date' in hl and 'date' not in ci:
-                ci['date'] = i
-            elif 'amount' in hl and 'amount' not in ci:
-                ci['amount'] = i
-            elif 'counterparty' in hl and 'counterparty' not in ci:
-                ci['counterparty'] = i
-            elif 'description' in hl and 'description' not in ci:
-                ci['description'] = i
-        for row in table[header_idx + 1:]:
-            try:
-                dstr = row[ci.get('date', 4)] if ci.get('date', 4) < len(row) else ''
-                date = parse_date(dstr)
-                if not date:
-                    continue
-                astr = row[ci.get('amount', 6)] if ci.get('amount', 6) < len(row) else ''
-                amount = parse_amount(astr)
-                if amount == 0.0 or not _is_reasonable_amount(amount):
-                    continue
-                cp = row[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-                desc = row[ci['description']] if 'description' in ci and ci['description'] < len(row) else ''
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp[:200], 'Наименование счета': account_name,
-                    'Описание': desc[:500]
-                })
-            except Exception:
-                continue
-        if result:
-            return result
-    full_text = pdf_all_text(file_content)
-    if not full_text:
-        return result
-    pattern = re.compile(
-        r'(\d{1,2}\.\d{1,2}\.\d{4}|\d{4}-\d{2}-\d{2})\s+'
-        r'([^\n;]{3,120}?)\s+'
-        r'(-?[\d\s]+[.,]\d{2})\s*([A-Z]{3})?',
-        re.MULTILINE
-    )
-    for m in pattern.finditer(full_text):
-        try:
-            date = parse_date(m.group(1))
-            desc = re.sub(r'\s+', ' ', m.group(2)).strip()
-            amount = parse_amount(m.group(3))
-            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-                continue
-            low = desc.lower()
-            if any(w in low for w in ['počáteční zůstatek', 'konečný zůstatek',
-                                      'opening balance', 'closing balance',
-                                      'celkem', 'total']):
-                continue
-            result.append({
-                'Дата': date, 'Сумма': amount,
-                'Контрагент': '', 'Наименование счета': account_name,
-                'Описание': desc[:500]
-            })
-        except Exception:
-            continue
-    return result
-
-
-def parse_stalkin_fio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    result = []
-    tables = pdf_all_tables(file_content)
-    for table in tables:
-        if not table or len(table) < 2:
-            continue
-        header_idx = -1
-        for i, row in enumerate(table[:6]):
-            joined = ' '.join(row).lower()
-            if 'date' in joined and ('volume' in joined or 'amount' in joined):
-                header_idx = i
-                break
-        if header_idx == -1:
-            continue
-        hdr = table[header_idx]
-        ci = {}
-        for i, h in enumerate(hdr):
-            hl = h.lower()
-            if 'date' in hl and 'date' not in ci:
-                ci['date'] = i
-            elif ('volume' in hl or 'amount' in hl) and 'amount' not in ci:
-                ci['amount'] = i
-            elif 'counterparty' in hl or 'account' in hl:
-                if 'counterparty' not in ci:
-                    ci['counterparty'] = i
-            elif 'description' in hl or 'details' in hl:
-                if 'description' not in ci:
-                    ci['description'] = i
-        for row in table[header_idx + 1:]:
-            try:
-                date = parse_date(row[ci.get('date', 0)] if ci.get('date', 0) < len(row) else '')
-                if not date:
-                    continue
-                amount = parse_amount(row[ci.get('amount', 1)] if ci.get('amount', 1) < len(row) else '')
-                if amount == 0.0 or not _is_reasonable_amount(amount):
-                    continue
-                cp = row[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-                desc = row[ci['description']] if 'description' in ci and ci['description'] < len(row) else ''
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp[:200], 'Наименование счета': account_name,
-                    'Описание': desc[:500]
-                })
-            except Exception:
-                continue
-        if result:
-            return result
-    full_text = pdf_all_text(file_content)
-    if not full_text:
-        return result
-    pattern = re.compile(
-        r'(\d{1,2}\.\d{1,2}\.\d{4}|\d{4}-\d{2}-\d{2})\s+'
-        r'(-?[\d\s]+[.,]\d{2})\s+'
-        r'([^\n;]{3,200})',
-        re.MULTILINE
-    )
-    for m in pattern.finditer(full_text):
-        try:
-            date = parse_date(m.group(1))
-            amount = parse_amount(m.group(2))
-            desc = re.sub(r'\s+', ' ', m.group(3)).strip()
-            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-                continue
-            result.append({
-                'Дата': date, 'Сумма': amount,
-                'Контрагент': '', 'Наименование счета': account_name,
-                'Описание': desc[:500]
-            })
-        except Exception:
-            continue
-    return result
-
-
-def parse_saida_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    result = []
-    tables = pdf_all_tables(file_content)
-    for table in tables:
-        if not table or len(table) < 2:
-            continue
-        header_idx = -1
-        for i, row in enumerate(table[:6]):
-            joined = ' '.join(row).lower()
-            if 'date' in joined and ('amount' in joined or 'sum' in joined):
-                header_idx = i
-                break
-        if header_idx == -1:
-            continue
-        hdr = table[header_idx]
-        ci = {}
-        for i, h in enumerate(hdr):
-            hl = h.lower()
-            if 'date' in hl and 'date' not in ci:
-                ci['date'] = i
-            elif ('amount' in hl or 'sum' in hl) and 'amount' not in ci:
-                ci['amount'] = i
-            elif 'description' in hl or 'details' in hl:
-                if 'description' not in ci:
-                    ci['description'] = i
-            elif 'recipient' in hl or 'payer' in hl or 'name' in hl:
-                if 'counterparty' not in ci:
-                    ci['counterparty'] = i
-        for row in table[header_idx + 1:]:
-            try:
-                date = parse_date(row[ci.get('date', 0)] if ci.get('date', 0) < len(row) else '')
-                if not date:
-                    continue
-                amount = parse_amount(row[ci.get('amount', 1)] if ci.get('amount', 1) < len(row) else '')
-                if amount == 0.0 or not _is_reasonable_amount(amount):
-                    continue
-                desc = row[ci['description']] if 'description' in ci and ci['description'] < len(row) else ''
-                cp = row[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp[:200], 'Наименование счета': account_name,
-                    'Описание': desc[:500]
-                })
-            except Exception:
-                continue
-        if result:
-            return result
-    full_text = pdf_all_text(file_content)
-    if not full_text:
-        return result
-    pattern = re.compile(
-        r'(\d{1,2}\.\d{1,2}\.\d{4}|\d{4}-\d{2}-\d{2})\s+'
-        r'([^\n;]{3,120}?)\s+'
-        r'(-?[\d\s]+[.,]\d{2})\s*([A-Z]{3})',
-        re.MULTILINE
-    )
-    for m in pattern.finditer(full_text):
-        try:
-            date = parse_date(m.group(1))
-            desc = re.sub(r'\s+', ' ', m.group(2)).strip()
-            amount = parse_amount(m.group(3))
-            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-                continue
-            result.append({
-                'Дата': date, 'Сумма': amount,
-                'Контрагент': 'Wise', 'Наименование счета': account_name,
+                'Контрагент': cp[:200],
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -3569,43 +3483,75 @@ def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 cp = row[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp[:200], 'Наименование счета': account_name,
+                    'Контрагент': cp[:200],
+                    'Наименование счета': account_name,
                     'Описание': desc[:500]
                 })
             except Exception:
                 continue
         if result:
             return result
-    full_text = pdf_all_text(file_content)
-    if not full_text:
-        return result
-    pattern = re.compile(
-        r'(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})\s+'
-        r'([^\n;]{3,150}?)\s+'
-        r'(-?[\d\s]+[.,]\d{2})\s+'
-        r'(-?[\d\s]+[.,]\d{2})',
-        re.MULTILINE
-    )
-    for m in pattern.finditer(full_text):
-        try:
-            date = parse_date(m.group(1))
-            desc = re.sub(r'\s+', ' ', m.group(2)).strip()
-            v1 = parse_amount(m.group(3))
-            v2 = parse_amount(m.group(4))
-            amount = abs(v1) if v1 != 0.0 else -abs(v2)
-            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-                continue
-            result.append({
-                'Дата': date, 'Сумма': amount,
-                'Контрагент': 'Pasha Bank', 'Наименование счета': account_name,
-                'Описание': desc[:500]
-            })
-        except Exception:
-            continue
     return result
 
 
-# ==================== УНИВЕРСАЛЬНЫЕ ПАРСЕРЫ ====================
+# ==================== Универсальный PDF fallback ====================
+
+def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
+    result = []
+    tables = pdf_all_tables(file_content)
+    for table in tables:
+        if not table or len(table) < 2:
+            continue
+        header_idx = -1
+        for i, row in enumerate(table[:5]):
+            joined = ' '.join(row).lower()
+            if ('date' in joined or 'дата' in joined) and ('amount' in joined or 'сумма' in joined or 'sum' in joined):
+                header_idx = i
+                break
+        if header_idx == -1:
+            continue
+        hdr = table[header_idx]
+        date_i = amount_i = desc_i = cp_i = -1
+        for i, h in enumerate(hdr):
+            hl = h.lower()
+            if 'date' in hl or 'дата' in hl or 'értéknap' in hl:
+                if date_i == -1:
+                    date_i = i
+            elif 'amount' in hl or 'сумма' in hl or 'összeg' in hl or 'betrag' in hl:
+                if amount_i == -1:
+                    amount_i = i
+            elif 'description' in hl or 'описание' in hl or 'details' in hl or 'közlemény' in hl:
+                if desc_i == -1:
+                    desc_i = i
+            elif 'name' in hl or 'recipient' in hl or 'counterparty' in hl or 'kedvezményezett' in hl:
+                if cp_i == -1:
+                    cp_i = i
+        if date_i == -1 or amount_i == -1:
+            continue
+        for row in table[header_idx + 1:]:
+            try:
+                date = parse_date(row[date_i] if date_i < len(row) else '')
+                if not date:
+                    continue
+                amount = parse_amount(row[amount_i] if amount_i < len(row) else '')
+                if amount == 0.0 or not _is_reasonable_amount(amount):
+                    continue
+                desc = row[desc_i] if desc_i >= 0 and desc_i < len(row) else ''
+                cp = row[cp_i] if cp_i >= 0 and cp_i < len(row) else ''
+                if not cp:
+                    cp, _ = extract_counterparty_from_description(desc)
+                result.append({
+                    'Дата': date, 'Сумма': amount,
+                    'Контрагент': cp[:200] if cp else '',
+                    'Наименование счета': account_name,
+                    'Описание': desc[:500]
+                })
+            except Exception:
+                continue
+    return result
+
+
+# ==================== ОБЩИЕ CSV/XLSX/DOCX ====================
 
 def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -3650,29 +3596,17 @@ def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
             desc = parts[ci['description']] if 'description' in ci and ci['description'] < len(parts) else ''
             cp = parts[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(parts) else ''
+            if not cp:
+                cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp[:200], 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
             continue
     return result
-
-
-# [FIX-INCOME-8] parse_xlsx_universal: сумма только если ячейка — чистое число.
-_NUMERIC_CELL_RE = re.compile(r'^-?[\d\s\u00a0]*[.,]?\d*$')
-
-
-def _cell_is_numeric(v) -> bool:
-    if v is None or pd.isna(v):
-        return False
-    if isinstance(v, (int, float)):
-        return True
-    s = str(v).strip()
-    if not s:
-        return False
-    return bool(_NUMERIC_CELL_RE.match(s))
 
 
 def parse_xlsx_universal(file_content: bytes, account_name: str) -> List[Dict]:
@@ -3715,7 +3649,6 @@ def parse_xlsx_universal(file_content: bytes, account_name: str) -> List[Dict]:
             if not date:
                 continue
             av = row.iloc[ci['amount']] if ci['amount'] < len(row) else None
-            # [FIX-INCOME-8] Не считаем сумму, если ячейка — не число.
             if not _cell_is_numeric(av):
                 continue
             amount = parse_amount(str(av))
@@ -3723,9 +3656,12 @@ def parse_xlsx_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
             desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
             cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
+            if not cp:
+                cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp[:200], 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -3766,9 +3702,12 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 desc = cells[desc_i] if desc_i >= 0 and desc_i < len(cells) else ''
                 cp = cells[cp_i] if cp_i >= 0 and cp_i < len(cells) else ''
+                if not cp:
+                    cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp[:200], 'Наименование счета': account_name,
+                    'Контрагент': cp[:200] if cp else '',
+                    'Наименование счета': account_name,
                     'Описание': desc[:500]
                 })
             except Exception:
@@ -3791,9 +3730,11 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
             amount = parse_amount(m.group(3))
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
+            cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': '', 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         except Exception:
@@ -3801,15 +3742,9 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# [FIX-INCOME-7] parse_any_format: убрана эвристика «первое ненулевое число».
 def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
     result: List[Dict] = []
-
-    # 1) PDF-таблицы
-    try:
-        tables = pdf_all_tables(file_content)
-    except Exception:
-        tables = []
+    tables = pdf_all_tables(file_content)
     for table in tables:
         if not table or len(table) < 2:
             continue
@@ -3848,19 +3783,16 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 if v and len(v) > 2 and not re.match(r'^[\d.,\-]+$', v):
                     desc = v
                     break
+            cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': '', 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
     if result:
         return result
-
-    # 2) PDF-текст
-    try:
-        full_text = pdf_all_text(file_content)
-    except Exception:
-        full_text = ''
+    full_text = pdf_all_text(file_content)
     if full_text:
         pattern = re.compile(
             r'(\d{1,2}\.\d{1,2}\.\d{4}|\d{4}-\d{2}-\d{2})\s+'
@@ -3875,21 +3807,18 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = parse_amount(m.group(3))
                 if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
+                cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': '', 'Наименование счета': account_name,
+                    'Контрагент': cp[:200] if cp else '',
+                    'Наименование счета': account_name,
                     'Описание': desc[:500]
                 })
             except Exception:
                 continue
         if result:
             return result
-
-    # 3) XLSX-таблица: строка содержит дату И числовую ячейку
-    try:
-        df = read_xlsx(file_content)
-    except Exception:
-        df = None
+    df = read_xlsx(file_content)
     if df is not None and not df.empty:
         for idx, row in df.iterrows():
             rv = [x for x in row.values if pd.notna(x)]
@@ -3927,19 +3856,16 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 if vs and len(vs) > 2 and not re.match(r'^[\d.,\-]+$', vs):
                     desc = vs
                     break
+            cp, _ = extract_counterparty_from_description(desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': '', 'Наименование счета': account_name,
+                'Контрагент': cp[:200] if cp else '',
+                'Наименование счета': account_name,
                 'Описание': desc[:500]
             })
         if result:
             return result
-
-    # 4) CSV/TSV: строка с датой и числовой ячейкой
-    try:
-        content = read_text_with_encoding(file_content)
-    except Exception:
-        content = ''
+    content = read_text_with_encoding(file_content)
     if content:
         lines = [l.strip() for l in content.split('\n') if l.strip()]
         for line in lines:
@@ -3980,20 +3906,17 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                     if p and len(p) > 2 and not re.match(r'^[\d.,\-]+$', p):
                         desc = p
                         break
+                cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': '', 'Наименование счета': account_name,
+                    'Контрагент': cp[:200] if cp else '',
+                    'Наименование счета': account_name,
                     'Описание': desc[:500]
                 })
                 break
         if result:
             return result
-
-    # 5) DOCX-текст
-    try:
-        docx_text = docx_all_text(file_content)
-    except Exception:
-        docx_text = ''
+    docx_text = docx_all_text(file_content)
     if docx_text:
         pattern = re.compile(
             r'(\d{1,2}\.\d{1,2}\.\d{4}|\d{4}-\d{2}-\d{2})\s+'
@@ -4008,14 +3931,15 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = parse_amount(m.group(3))
                 if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
+                cp, _ = extract_counterparty_from_description(desc)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': '', 'Наименование счета': account_name,
+                    'Контрагент': cp[:200] if cp else '',
+                    'Наименование счета': account_name,
                     'Описание': desc[:500]
                 })
             except Exception:
                 continue
-
     return result
 
 
@@ -4053,12 +3977,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_unicredit_pdf, 'unicredit_pdf'
         if 'wio' in low:
             return parse_wio_pdf, 'wio_pdf'
-        if 'csob' in low:
-            return parse_csob_pdf, 'csob_pdf'
-        if 'stalkin' in low or 'fio' in low:
-            return parse_stalkin_fio_pdf, 'stalkin_fio_pdf'
-        if 'wise' in low or ('saida' in low and 'wise' in low):
-            return parse_saida_wise_pdf, 'saida_wise_pdf'
         if 'pasha' in low or 'bunda' in low:
             return parse_pasha_bank_pdf, 'pasha_bank_pdf'
         return parse_pdf_universal, 'pdf_universal'
@@ -4360,16 +4278,9 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
     return [], msg
 
 
-# ==================== [FIX-INCOME-9] СВОДКА ПО СЧЕТАМ ====================
+# ==================== СВОДКА ПО СЧЕТАМ ====================
 
 def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
-    """
-    Строит «Сводку по счетам».
-
-    [FIX-INCOME-9] Добавлена жёсткая отбраковка строк с |Сумма| >= 1e12 —
-    это артефакты парсинга (например, BluOr «Конечный остаток» 81228270300030.00).
-    Реальные суммы банковских операций < триллиона.
-    """
     columns = [
         "Наименование счета",
         "Количество приходных операций",
@@ -4405,7 +4316,6 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     df["Сумма"] = df["Сумма"].map(_to_float)
     df["Наименование счета"] = df["Наименование счета"].fillna("").astype(str)
 
-    # [FIX-INCOME-9] Отбраковка абсурдных сумм.
     mask_reasonable = df["Сумма"].abs() < MAX_REASONABLE_AMOUNT
     df = df[mask_reasonable].copy()
 
@@ -4440,7 +4350,7 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     return summary[columns]
 
 
-# ==================== ЭКСПОРТ В EXCEL ====================
+# ==================== ЭКСПОРТ ====================
 
 def build_operations_excel(df_display: pd.DataFrame) -> BytesIO:
     output = BytesIO()
@@ -4467,7 +4377,7 @@ def build_combined_excel(df_display: pd.DataFrame, summary_df: pd.DataFrame) -> 
     return output
 
 
-# ==================== ОБРАБОТКА БЕЗ ЗАДВОЕНИЯ ====================
+# ==================== ОБРАБОТКА ====================
 
 def _files_signature(uploaded_files) -> str:
     h = hashlib.md5()
@@ -4481,12 +4391,6 @@ def _files_signature(uploaded_files) -> str:
 
 
 def _process_uploaded_files(uploaded_files) -> Dict:
-    """
-    Обрабатывает загруженные файлы.
-    [FIX 5] Дедупликация по md5(content): если один и тот же файл загружен
-    дважды (например, Koruna Strojka CZK/EUR CSOB), второй экземпляр
-    пропускается.
-    """
     all_tx: List[Dict] = []
     failed: List[str] = []
     file_stats: List[str] = []
@@ -4507,7 +4411,6 @@ def _process_uploaded_files(uploaded_files) -> Dict:
                 progress.progress((i + 1) / max(1, len(uploaded_files)))
                 continue
 
-            # [FIX 5] Дедупликация по md5
             h = hashlib.md5(content).hexdigest()
             if h in seen_hashes:
                 skipped_dupes.append(f"{uf.name} (дубликат {seen_hashes[h]})")
@@ -4569,10 +4472,6 @@ def _process_uploaded_files(uploaded_files) -> Dict:
 
 
 def _render_results(result: Dict):
-    """
-    [FIX 4] df_raw и df_display строятся из одного и того же all_tx —
-    операции не теряются.
-    """
     all_tx = result.get('all_tx', [])
     failed = result.get('failed', [])
     file_stats = result.get('file_stats', [])
