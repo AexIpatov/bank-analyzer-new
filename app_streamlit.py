@@ -4,18 +4,10 @@ app.py — Аналитик банковских выписок.
 Полная версия.
 
 FIX-пакет:
-  [FIX-DESC-FULL-1]  Описание операции сохраняется ЦЕЛИКОМ, без обрезки [:500].
-                     Это касается ВСЕХ парсеров (CSV, XLSX, DOCX, PDF).
-  [FIX-DESC-FULL-2]  extract_counterparty_from_description() больше НЕ меняет
-                     описание: возвращает (counterparty, original_description).
-                     Описание в отчёте = ровно то, что в выписке.
-  [FIX-DESC-FULL-3]  Контрагент тоже сохраняется полностью, без [:200].
-  [FIX-DESC-FULL-4]  В Revolut поле Description используется как есть;
-                     контрагент извлекается отдельно (Beneficiary → Payer →
-                     из 'To ...' в Description).
-  [FIX-DESC-FULL-5]  Убраны срезы [:500] в CSOB, FIO, Industra, MKB, Pasha,
-                     UniCredit, BluOr, Mashreq, Kapital, RAK, WIO, Wise,
-                     N26, Paysera, Revolut, универсальных парсерах.
+  [FIX-DESC-FULL-1..6] — см. предыдущую версию.
+  [FIX-PDF-1]  parse_revolut_pdf  — переписан по тексту, а не по таблицам.
+  [FIX-PDF-2]  parse_paysera_pdf  — переписан по маркеру 'Назначение платежа:'.
+  [FIX-PDF-3]  parse_industra_pdf — переписан по тексту с датами.
 """
 
 import streamlit as st
@@ -374,8 +366,14 @@ def parse_date(date_str) -> str:
     if m:
         y, mo, d = m.groups()
         return f"{d}-{mo}-{y}"
+    # Revolut PDF: "10 Sept 2026"
+    for fmt in ["%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d-%b-%y"]:
+        try:
+            return datetime.strptime(s, fmt).strftime("%d-%m-%Y")
+        except Exception:
+            continue
     for fmt in ["%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%Y.%m.%d", "%d-%m-%Y",
-                "%Y%m%d", "%d.%m.%y", "%d/%m/%y", "%d-%b-%Y", "%d-%b-%y"]:
+                "%Y%m%d", "%d.%m.%y", "%d/%m/%y"]:
         try:
             return datetime.strptime(s, fmt).strftime("%d-%m-%Y")
         except Exception:
@@ -398,7 +396,8 @@ def parse_amount(amount_str) -> float:
     elif s.startswith('(') and s.endswith(')'):
         is_negative = True
         s = s[1:-1]
-    s = re.sub(r'\s*[₽$€£]\s*$', '', s)
+    s = re.sub(r'^[€$£¥]\s*', '', s)
+    s = re.sub(r'\s*[€$£¥]\s*$', '', s)
     s = re.sub(r'\s*[A-Z]{3}\s*$', '', s)
     s = s.replace(' ', '').replace('\xa0', '').replace('\u202f', '')
     if ',' in s and '.' in s:
@@ -443,10 +442,7 @@ def safe_str(v) -> str:
 # ==================== [FIX-DESC-FULL-2] ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
 
 def _clean_counterparty_name(name: str) -> str:
-    """
-    Очищает ТОЛЬКО имя контрагента (не описание!).
-    Убирает типичные хвосты: ' • Apmaksa par rek. Nr.', ' | ...', ';', и т.п.
-    """
+    """Очищает ТОЛЬКО имя контрагента (не описание!)."""
     if not name:
         return ''
     s = name.strip()
@@ -463,28 +459,16 @@ def _clean_counterparty_name(name: str) -> str:
 def extract_counterparty_from_description(description: str,
                                           payer: str = '',
                                           beneficiary: str = '') -> Tuple[str, str]:
-    """
-    [FIX-DESC-FULL-2] Возвращает (counterparty, ORIGINAL_description).
-
-    Описание НЕ МЕНЯЕТСЯ — возвращается ровно то, что пришло.
-    Контрагент извлекается отдельно:
-      1) beneficiary (если не пусто)
-      2) payer (если не пусто и не похоже на банк)
-      3) имя после маркеров 'To ...', 'from ...', 'Payment to ...',
-         'Плата за ...', 'Оплата ...', 'Перевод ...'
-      4) fallback — пустая строка
-    """
+    """[FIX-DESC-FULL-2] Возвращает (counterparty, ORIGINAL_description)."""
     desc = (description or '').strip()
     if not desc:
         return ('', '')
 
-    # 1) beneficiary
     if beneficiary:
         b = beneficiary.strip()
         if b and b.lower() not in ('nan', 'none', 'n/a'):
             return (_clean_counterparty_name(b), desc)
 
-    # 2) payer — только если он не похож на банк
     if payer:
         p = payer.strip()
         if p and p.lower() not in ('nan', 'none', 'n/a'):
@@ -496,11 +480,9 @@ def extract_counterparty_from_description(description: str,
             if not bank_like:
                 return (_clean_counterparty_name(p), desc)
 
-    # 3) Маркеры в описании
-    # 'To XXX' / 'From XXX' / 'Payment to XXX'
     m = re.search(
         r'\b(?:payment\s+to|transfer\s+to|paid\s+to|sent\s+to|to|from)\s+'
-        r'([A-Z0-9][^\n\r•|;]{1,120})',
+        r'([A-Z0-9][^\n\r•|;]{1,500})',
         desc, re.IGNORECASE
     )
     if m:
@@ -509,9 +491,8 @@ def extract_counterparty_from_description(description: str,
         if name and len(name) >= 2 and not re.match(r'^\d+$', name):
             return (name, desc)
 
-    # 'Плата за XXX' / 'Оплата XXX'
     m = re.search(
-        r'\b(?:плата\s+за|оплата|перевод)\s+([A-ZА-Я0-9][^\n\r•|;]{1,120})',
+        r'\b(?:плата\s+за|оплата|перевод)\s+([A-ZА-Я0-9][^\n\r•|;]{1,500})',
         desc, re.IGNORECASE
     )
     if m:
@@ -807,7 +788,6 @@ def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
                     if not re.match(r'^[\d.,\-]+$', val):
                         description = val
                         break
-            # [FIX-DESC-FULL-1] без [:500]
             transactions.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': counterparty,
@@ -898,12 +878,14 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
             if current_date and current_amount is not None:
                 amt = parse_amount(str(current_amount))
                 if amt != 0.0 and _is_reasonable_amount(amt):
+                    desc_val = (current_desc or '').strip()
+                    cp, _ = extract_counterparty_from_description(desc_val)
                     transactions.append({
                         'Дата': parse_date(str(current_date)),
                         'Сумма': amt,
-                        'Контрагент': '',
+                        'Контрагент': cp if cp else '',
                         'Наименование счета': account_name,
-                        'Описание': (current_desc or '')
+                        'Описание': desc_val
                     })
             current_date = date_val
             current_desc = ''
@@ -930,12 +912,14 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
     if current_date and current_amount is not None:
         amt = parse_amount(str(current_amount))
         if amt != 0.0 and _is_reasonable_amount(amt):
+            desc_val = (current_desc or '').strip()
+            cp, _ = extract_counterparty_from_description(desc_val)
             transactions.append({
                 'Дата': parse_date(str(current_date)),
                 'Сумма': amt,
-                'Контрагент': '',
+                'Контрагент': cp if cp else '',
                 'Наименование счета': account_name,
-                'Описание': (current_desc or '')
+                'Описание': desc_val
             })
     return transactions
 
@@ -945,7 +929,7 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
     if not full_text:
         return []
     pattern = re.compile(
-        r'(\d{2}\.\d{2}\.\d{4})\s*([A-Z0-9\_]+)\s*(.+?)(-?[\d\s]+,\d{2})\s*RUR',
+        r'(\d{2}\.\d{2}\.\d{4})\s*([A-Z0-9\_]+)\s*(.{1,2000}?)(-?[\d\s]+,\d{2})\s*RUR',
         re.DOTALL
     )
     result = []
@@ -957,10 +941,13 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
             amount = parse_amount(m.group(4))
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
+            full_desc = f"{code} {desc}"
+            cp, _ = extract_counterparty_from_description(full_desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': '', 'Наименование счета': account_name,
-                'Описание': f"{code} {desc}"
+                'Контрагент': cp if cp else '',
+                'Наименование счета': account_name,
+                'Описание': full_desc
             })
         except Exception:
             continue
@@ -972,7 +959,7 @@ def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     if not full_text:
         return []
     pattern = re.compile(
-        r'(\d{2}\.\d{2}\.\d{4})\s*([A-Z0-9\_]+)\s*(.+?)(-?[\d\s]+,\d{2})\s*RUR',
+        r'(\d{2}\.\d{2}\.\d{4})\s*([A-Z0-9\_]+)\s*(.{1,2000}?)(-?[\d\s]+,\d{2})\s*RUR',
         re.DOTALL
     )
     result = []
@@ -984,10 +971,13 @@ def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             amount = parse_amount(m.group(4))
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
+            full_desc = f"{code} {desc}"
+            cp, _ = extract_counterparty_from_description(full_desc)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': '', 'Наименование счета': account_name,
-                'Описание': f"{code} {desc}"
+                'Контрагент': cp if cp else '',
+                'Наименование счета': account_name,
+                'Описание': full_desc
             })
         except Exception:
             continue
@@ -1074,7 +1064,7 @@ def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         r'(\d{2}\.\d{2}\.\d{4})\s+\d{2}:\d{2}\s+'
         r'([+\-]?[\d\s]+[.,]\d{2})\s*[₽PР]\s*'
         r'([+\-]?[\d\s]+[.,]\d{2})\s*[₽PР]\s*'
-        r'([^\n]{2,300}?)(?:\s+7596|\s+---|\n|$)',
+        r'([^\n]{2,1000}?)(?:\s+7596|\s+---|\n|$)',
         re.MULTILINE
     )
     for m in pattern.finditer(full_text):
@@ -1118,19 +1108,17 @@ _BLUOR_SERVICE_MARKERS = [
     'debit (d)', 'credit (c)',
     'saldo počáteční', 'saldo konečné',
     'sākuma atlikums', 'beigu atlikums',
-    'total',
 ]
 
 
 def _is_bluor_service_row(parts: List[str]) -> bool:
-    for idx in (2, 3, 4):
-        if idx < len(parts):
-            v = parts[idx].strip().lower()
-            if not v:
-                continue
-            for marker in _BLUOR_SERVICE_MARKERS:
-                if marker in v:
-                    return True
+    for part in parts:
+        v = (part or '').strip().lower()
+        if not v:
+            continue
+        for marker in _BLUOR_SERVICE_MARKERS:
+            if marker in v:
+                return True
     return False
 
 
@@ -1232,7 +1220,7 @@ def parse_bluor_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     pattern = re.compile(
         r'(\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})\s+'
         r'([A-Z0-9_/\(\)\.]{3,60}?)\s+'
-        r'([^\n]{3,300}?)\s+'
+        r'([^\n]{3,1000}?)\s+'
         r'([\d\s]+[.,]\d{2})\s*([A-Z]{3})\s*([DC])',
         re.MULTILINE
     )
@@ -1245,7 +1233,7 @@ def parse_bluor_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             low = desc.lower()
-            if any(w in low for w in ['starting balance', 'ending balance', 'total']):
+            if any(w in low for w in ['starting balance', 'ending balance']):
                 continue
             if ttype == 'D':
                 amount = -abs(amount)
@@ -1410,7 +1398,7 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                 'pocet polozek', 'pocet cekajicich',
             ]):
                 continue
-            m = re.search(r'(\d{1,2}\.\d{1,2}\.\d{2,4})\s+(.+?)\s+(-?\d[\d\s]*[,.]\d{2})(?!\d)', t)
+            m = re.search(r'(\d{1,2}\.\d{1,2}\.\d{2,4})\s+(.{1,2000}?)\s+(-?\d[\d\s]*[,.]\d{2})(?!\d)', t)
             if not m:
                 continue
             date = parse_date(m.group(1))
@@ -1432,7 +1420,7 @@ def parse_jenhor_unelma_pdf(file_content: bytes, account_name: str) -> List[Dict
         return []
     result = []
     pattern = re.compile(
-        r'(\d{2}\.\d{2}\.\d{4})\s+(.+?)\s+(-?\d[\d\s]*[,.]\d{2})(?!\d)',
+        r'(\d{2}\.\d{2}\.\d{4})\s+(.{1,2000}?)\s+(-?\d[\d\s]*[,.]\d{2})(?!\d)',
         re.DOTALL
     )
     for m in pattern.finditer(full_text):
@@ -1675,64 +1663,124 @@ def parse_industra_kl59(file_content, account_name):
     return _parse_industra_generic(file_content, account_name)
 
 
+# [FIX-PDF-3] Полностью переписанный парсер Industra PDF по тексту
 def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Industra PDF. pdfplumber отдаёт таблицу одной большой ячейкой.
+    Парсим по тексту: находим даты 'DD.MM.YYYY', между ними — данные операции.
+    Формат строки:
+      DD.MM.YYYY <ref>, #<num>, <тип>, <контрагент>, <IBAN>, <банк>, <SWIFT>,
+      <описание> <сумма>
+    Сумма — последнее число перед следующей датой.
+    Знак: 'Дебет (D)' → минус, 'Кредит (C)' → плюс; иначе по знаку числа.
+    """
     result = []
-    tables = pdf_all_tables(file_content)
-    for table in tables:
-        header_idx = -1
-        for i, row in enumerate(table):
-            joined = ' '.join(row)
-            if 'Дата транзакции' in joined and 'Дебет' in joined and 'Кредит' in joined:
-                header_idx = i
-                break
-        if header_idx == -1:
+    full_text = pdf_all_text(file_content)
+    if not full_text:
+        return []
+
+    # Разбиваем по датам DD.MM.YYYY
+    date_re = re.compile(r'\b(\d{2}\.\d{2}\.\d{4})\b')
+    matches = list(date_re.finditer(full_text))
+    if not matches:
+        return []
+
+    for mi, m in enumerate(matches):
+        date_str = m.group(1)
+        start = m.start()
+        end = matches[mi + 1].start() if mi + 1 < len(matches) else len(full_text)
+        chunk = full_text[start:end]
+        # Убираем первую дату и пробелы
+        chunk = chunk[m.end() - m.start():].strip()
+        if not chunk:
             continue
-        hdr = table[header_idx]
-        ci = {}
-        for i, h in enumerate(hdr):
-            if 'Дата транзакции' in h:
-                ci['date'] = i
-            elif 'Получатель' in h or 'Плательщик' in h:
-                ci['counterparty'] = i
-            elif 'Информация о транзакции' in h:
-                ci['description'] = i
-            elif 'Дебет' in h and 'Кредит' not in h:
-                ci['debit'] = i
-            elif 'Кредит' in h and 'Дебет' not in h:
-                ci['credit'] = i
-        for row in table[header_idx + 1:]:
-            try:
-                dstr = row[ci.get('date', 0)] if ci.get('date', 0) < len(row) else ''
-                date = parse_date(dstr)
-                if not date:
-                    continue
-                amount = 0.0
-                found = False
-                if 'debit' in ci and ci['debit'] < len(row):
-                    p = parse_amount(row[ci['debit']].replace(',', '.').replace(' ', ''))
-                    if p != 0.0:
-                        amount = -abs(p)
-                        found = True
-                if not found and 'credit' in ci and ci['credit'] < len(row):
-                    p = parse_amount(row[ci['credit']].replace(',', '.').replace(' ', ''))
-                    if p != 0.0:
-                        amount = p
-                        found = True
-                if not found or not _is_reasonable_amount(amount):
-                    continue
-                cp = row[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-                desc = row[ci['description']] if 'description' in ci and ci['description'] < len(row) else ''
-                if not cp:
-                    cp, _ = extract_counterparty_from_description(desc)
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp if cp else '',
-                    'Наименование счета': account_name,
-                    'Описание': desc
-                })
-            except Exception:
+
+        # Ищем сумму в конце chunk: последнее число с 2 знаками
+        amount_re = re.compile(r'(-?\d[\d\s\u00a0]*[.,]\d{2})(?!\d)')
+        amount_matches = list(amount_re.finditer(chunk))
+        if not amount_matches:
+            continue
+        amount_match = amount_matches[-1]
+        amount = parse_amount(amount_match.group(1))
+        if amount == 0.0 or not _is_reasonable_amount(amount):
+            continue
+
+        # Всё до суммы — это данные операции
+        head = chunk[:amount_match.start()].strip()
+        # Убираем хвостовые запятые/пробелы
+        head = head.rstrip(' ,;')
+
+        # Контрагент: обычно после типа операции (Исходящее перечисление /
+        # Зачисление входящего платежа) идёт имя.
+        # Убираем известные префиксы
+        head_clean = re.sub(
+            r'^(.*?),\s*#[\w/]+,\s*',
+            '',
+            head,
+            flags=re.DOTALL
+        )
+        # head_clean теперь: "Исходящее перечисление, Clean R SIA, LV61HABA..., SWEDBANK AS, HABALV22XXX, Apmaksa par rēķinu ..."
+        parts = [p.strip() for p in head_clean.split(',')]
+        # Ищем контрагента: первый элемент, который не тип операции и не IBAN/BIC
+        cp = ''
+        desc_parts = []
+        op_type = ''
+        for idx_p, p in enumerate(parts):
+            if not p:
                 continue
-    return result
+            if idx_p == 0 and any(w in p.lower() for w in [
+                'исходящее', 'зачисление', 'проводка', 'комиссия', 'перевод'
+            ]):
+                op_type = p
+                continue
+            # IBAN / BIC / рег.номер
+            if re.fullmatch(r'[A-Z]{2}\d{2}[A-Z0-9]{10,30}', p):
+                continue
+            if re.fullmatch(r'[A-Z]{4}[A-Z0-9]{2,5}[A-Z0-9]{0,5}', p):
+                continue
+            if re.fullmatch(r'\d{5,}', p):
+                continue
+            if re.fullmatch(r'[A-Z ]+', p) and len(p) < 20 and 'BANK' in p.upper():
+                continue
+            # Первый не-технический — контрагент
+            if not cp:
+                cp = p
+            else:
+                desc_parts.append(p)
+
+        desc = ', '.join(desc_parts).strip() if desc_parts else head_clean
+        # Если desc пуст — берём весь head_clean
+        if not desc:
+            desc = head_clean
+
+        # Знак: если в chunk есть 'Дебет' или 'D' — минус
+        low_chunk = chunk.lower()
+        if 'дебет' in low_chunk or ' (d)' in low_chunk:
+            amount = -abs(amount)
+        elif 'кредит' in low_chunk or ' (c)' in low_chunk:
+            amount = abs(amount)
+
+        if not cp:
+            cp, _ = extract_counterparty_from_description(desc)
+
+        result.append({
+            'Дата': parse_date(date_str),
+            'Сумма': amount,
+            'Контрагент': cp,
+            'Наименование счета': account_name,
+            'Описание': desc
+        })
+
+    # Дедупликация
+    seen = set()
+    deduped = []
+    for r in result:
+        key = (r['Дата'], r['Сумма'], r['Контрагент'], r['Описание'])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(r)
+    return deduped
 
 
 # ==================== Kapital bank Saida AZN ====================
@@ -1792,7 +1840,7 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
         r'([\d\s]+[.,]\d{1,2})\s+'
         r'([\d\s]+[.,]\d{1,2})\s+'
         r'([\d\s]+[.,]\d{1,2})\s+'
-        r'([A-Za-z][A-Za-z0-9\s\-\./]{2,120})',
+        r'([A-Za-z][A-Za-z0-9\s\-\./]{2,500})',
         re.MULTILINE
     )
     for line in lines:
@@ -1883,7 +1931,7 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
             r'([\d\s]+[.,]\d{1,2})\s+'
             r'([\d\s]+[.,]\d{1,2})\s+'
             r'([\d\s]+[.,]\d{1,2})\s+'
-            r'([A-Za-z][A-Za-z0-9\s\-\./]{2,80})',
+            r'([A-Za-z][A-Za-z0-9\s\-\./]{2,500})',
             re.MULTILINE
         )
         for m in pattern.finditer(full_text):
@@ -2043,12 +2091,20 @@ def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 # ==================== MKB (Budapest) ====================
 
-def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
-    result = []
+def _read_mkb_dataframe(file_content: bytes):
     df = None
     if _is_real_xls(file_content):
         try:
-            df = pd.read_excel(BytesIO(file_content), header=None, engine='xlrd')
+            import xlrd
+            try:
+                wb = xlrd.open_workbook(file_contents=file_content, ignore_workbook_corruption=True)
+                sheet = wb.sheet_by_index(0)
+                data = []
+                for r in range(sheet.nrows):
+                    data.append([sheet.cell_value(r, c) for c in range(sheet.ncols)])
+                df = pd.DataFrame(data)
+            except TypeError:
+                df = pd.read_excel(BytesIO(file_content), header=None, engine='xlrd')
         except Exception:
             df = None
         if df is None or df.empty:
@@ -2075,6 +2131,12 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                     df = tables[0]
             except Exception:
                 df = None
+    return df
+
+
+def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
+    result = []
+    df = _read_mkb_dataframe(file_content)
 
     if df is not None and not df.empty:
         header_row = -1
@@ -2310,7 +2372,7 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
         return []
     result = []
     pattern = re.compile(
-        r'([A-Za-z0-9][^\n]{3,120}?)'
+        r'([A-Za-z0-9][^\n]{3,500}?)'
         r'(?:Fecha de valor\s+)?'
         r'(\d{2}\.\d{2}\.\d{4})'
         r'\s+'
@@ -2347,7 +2409,7 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         return []
     result = []
     pattern = re.compile(
-        r'([A-Za-z0-9][^\n]{3,120}?)'
+        r'([A-Za-z0-9][^\n]{3,500}?)'
         r'(?:Fecha de valor\s+)?'
         r'(\d{2}\.\d{2}\.\d{4})'
         r'\s+'
@@ -2532,11 +2594,12 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
         r'\s*'
         r'(\d{6,})'
         r'\s*'
-        r'([A-Za-zА-Яа-я][^\d\-+]{2,80}?)'
+        r'([A-Za-zА-Яа-я][^\d\-+]{2,500}?)'
         r'\s*'
         r'\((\d{6,})\)'
         r'\s*'
-        r'(-?\d[\d\s]*[.,]\d{2})\s*([A-Z]{3})',
+        r'(-?\d[\d\s]*[.,]\d{2})\s*([A-Z]{3})'
+        r'(?:\s+([^\n]{2,2000}))?',
         re.MULTILINE
     )
     for m in pattern.finditer(full_text):
@@ -2545,13 +2608,15 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
             amount = parse_amount(m.group(8))
             counterparty = re.sub(r'\s+', ' ', m.group(6)).strip()
             op_type = m.group(1).strip()
+            purpose = (m.group(10) or '').strip()
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
+            desc = purpose if purpose else f"{op_type}: {counterparty}"
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': counterparty,
                 'Наименование счета': account_name,
-                'Описание': f"{op_type}: {counterparty}"
+                'Описание': desc
             })
         except Exception:
             continue
@@ -2566,7 +2631,7 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
             r'\s+'
             r'(\d{6,})'
             r'\s*'
-            r'([A-Za-zА-Яа-я][^\d\-+]{2,80}?)'
+            r'([A-Za-zА-Яа-я][^\d\-+]{2,500}?)'
             r'\s+'
             r'(-?\d[\d\s]*[.,]\d{2})\s*([A-Z]{3})',
             re.MULTILINE
@@ -2592,101 +2657,116 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
 
 # ==================== Paysera PDF ====================
 
+# [FIX-PDF-2] Полностью переписанный парсер Paysera PDF
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Paysera PDF (BS RERUM, BS PROPERTY).
+
+    pdfplumber отдаёт всё в одной гигантской ячейке <table>...</table>.
+    Текст содержит блоки:
+      <Тип> YYYY-MM-DD HH:MM:SS +0200 <номер выписки> <номер перевода>
+      <Контрагент>[(<код>)]<IBAN> <Сумма со знаком> EUR <Остаток> EUR
+      Назначение платежа: <полное описание>
+
+    Стратегия:
+      1. Разбиваем текст по маркеру 'Назначение платежа:'.
+      2. Для каждого блока идём НАЗАД до предыдущего маркера
+         (или до 'Перевод'/'Комиссионная плата'/'Остаток в начале').
+      3. Из головы блока извлекаем: дату, контрагента, сумму.
+      4. Знак берём прямо из числа (у Paysera он уже со знаком).
+      5. Описание = текст после 'Назначение платежа:' до конца блока.
+    """
     result = []
     full_text = pdf_all_text(file_content)
     if not full_text:
         return []
-    date_pattern = re.compile(r'(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})')
-    raw_dates = list(date_pattern.finditer(full_text))
-    if not raw_dates:
+
+    # Нормализуем пробелы
+    text = re.sub(r'[ \t]+', ' ', full_text)
+    text = re.sub(r'\n+', '\n', text)
+
+    # Находим все вхождения "Назначение платежа:"
+    purpose_marker = re.compile(r'Назначение\s+платежа\s*:\s*', re.IGNORECASE)
+    purpose_matches = list(purpose_marker.finditer(text))
+    if not purpose_matches:
         return []
-    groups = []
-    cur = {'date': raw_dates[0].group(1), 'start': raw_dates[0].start(), 'end': raw_dates[0].end()}
-    for dm in raw_dates[1:]:
-        if dm.start() - cur['end'] < 400:
-            cur['end'] = dm.end()
-        else:
-            groups.append(cur)
-            cur = {'date': dm.group(1), 'start': dm.start(), 'end': dm.end()}
-    groups.append(cur)
 
-    eur_pattern = re.compile(r'([+\-]?\d[\d\s]*[.,]\d{2})\s*EUR')
-    eur_matches = []
-    for m in eur_pattern.finditer(full_text):
-        eur_matches.append({
-            'start': m.start(),
-            'end': m.end(),
-            'amount': parse_amount(m.group(1)),
-        })
+    # Границы блоков: от предыдущего маркера (или от начала) до следующего
+    boundaries = [0]
+    for pm in purpose_matches:
+        boundaries.append(pm.end())
+    boundaries.append(len(text))
 
-    STOP_WORDS = ['balance', 'turnover', 'final', 'start', 'debit', 'credit']
+    date_time_re = re.compile(r'(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})')
+    amount_re = re.compile(r'(-?\d[\d\s\u00a0]*[.,]\d{2})\s*EUR')
 
-    for gi, g in enumerate(groups):
-        date = parse_date(g['date'])
+    for pi, pm in enumerate(purpose_matches):
+        # Описание — от конца маркера до следующего маркера / конца
+        desc_start = pm.end()
+        desc_end = boundaries[pi + 2] if pi + 2 < len(boundaries) else len(text)
+        purpose = text[desc_start:desc_end]
+        # Отрезаем по 'Остаток в конце' / 'Дебетовый оборот' / 'Кредитовый оборот'
+        purpose = re.split(
+            r'(?:Остаток\s+в\s+конце|Дебетовый\s+оборот|Кредитовый\s+оборот|Перевод\s+\d{4}-)',
+            purpose
+        )[0].strip()
+        purpose = re.sub(r'\s+', ' ', purpose).strip()
+
+        # Голова блока — от предыдущего маркера до 'Назначение платежа'
+        head_start = boundaries[pi]
+        head_end = pm.start()
+        head = text[head_start:head_end]
+
+        # Дата: последняя дата в head
+        date_matches = list(date_time_re.finditer(head))
+        if not date_matches:
+            continue
+        date_str = date_matches[-1].group(1)
+        date = parse_date(date_str)
         if not date:
             continue
-        window_start = g['end']
-        window_end = groups[gi + 1]['start'] if gi + 1 < len(groups) else window_start + 2000
-        if window_end <= window_start:
+
+        # Отрезаем всё до последней даты — это "хвост" с контрагентом и суммой
+        tail = head[date_matches[-1].end():].strip()
+
+        # Сумма: первая EUR-сумма в tail
+        amount_matches = list(amount_re.finditer(tail))
+        if not amount_matches:
             continue
-        window_eur = [e for e in eur_matches if window_start <= e['start'] < window_end]
-        negative = [e for e in window_eur if e['amount'] < 0]
-        positive = [e for e in window_eur if e['amount'] > 0]
-        chosen_amount = None
-        chosen_pos = None
-        if negative:
-            chosen = negative[0]
-            chosen_amount = chosen['amount']
-            chosen_pos = chosen['start']
-        elif positive:
-            for e in positive:
-                pre = full_text[max(0, e['start'] - 60):e['start']].lower()
-                if any(w in pre for w in STOP_WORDS):
-                    continue
-                chosen_amount = e['amount']
-                chosen_pos = e['start']
-                break
-        if chosen_amount is None or chosen_amount == 0.0 or not _is_reasonable_amount(chosen_amount):
+        amount = parse_amount(amount_matches[0].group(1))
+        if amount == 0.0 or not _is_reasonable_amount(amount):
             continue
 
-        window_text = full_text[window_start:window_end]
-        full_purpose = ''
-        purpose_match = re.search(
-            r'Purpose of payment\s*:\s*([^\n]{1,2000})',
-            window_text, re.IGNORECASE
-        )
-        if purpose_match:
-            full_purpose = purpose_match.group(1).strip()
-            full_purpose = re.sub(r'\s+', ' ', full_purpose)
+        # Контрагент: всё до первой суммы, минус номер выписки/перевода
+        party_raw = tail[:amount_matches[0].start()].strip()
+        # Убираем '+0200' и числа-номера (6+ цифр)
+        party_raw = re.sub(r'\+\d{4}', ' ', party_raw)
+        party_raw = re.sub(r'\b\d{6,}\b', ' ', party_raw)
+        # Убираем IBAN-подобное
+        party_raw = re.sub(r'\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b', ' ', party_raw)
+        # Убираем (код)
+        party_raw = re.sub(r'\(\s*\d+\s*\)', ' ', party_raw)
+        party_raw = re.sub(r'\s+', ' ', party_raw).strip()
+        # Если осталось что-то осмысленное — это контрагент
+        cp = party_raw.strip(' .,;:-')
 
-        desc = full_purpose
-        if not desc:
-            head = full_text[max(0, chosen_pos - 120):chosen_pos]
-            for marker in ['Commission fee', 'Commission', 'Плата за', 'Плата',
-                           'Payment', 'Transfer', 'Fee',
-                           'Sąskaitos palaikymo mokestis']:
-                if marker.lower() in head.lower() or marker.lower() in window_text.lower():
-                    desc = marker
-                    break
-        if not desc:
-            desc = 'Paysera operation'
-
-        cp, _ = extract_counterparty_from_description(desc)
+        # Fallback: из описания
         if not cp:
-            cp = 'Paysera LT'
+            cp, _ = extract_counterparty_from_description(purpose)
 
         result.append({
-            'Дата': date, 'Сумма': chosen_amount,
+            'Дата': date,
+            'Сумма': amount,
             'Контрагент': cp,
             'Наименование счета': account_name,
-            'Описание': desc
+            'Описание': purpose
         })
 
+    # Дедупликация
     seen = set()
     deduped = []
     for r in result:
-        key = (r['Дата'], r['Сумма'])
+        key = (r['Дата'], r['Сумма'], r['Контрагент'], r['Описание'])
         if key in seen:
             continue
         seen.add(key)
@@ -2752,6 +2832,16 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 # ==================== Revolut ====================
+
+def _extract_after_to(desc: str) -> str:
+    """Из 'To TAIPANS SIA' -> 'TAIPANS SIA'."""
+    if not desc:
+        return ''
+    m = re.match(r'^\s*To\s+(.+)$', desc.strip(), flags=re.IGNORECASE | re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return ''
+
 
 def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -2825,14 +2915,28 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
             desc = parts[ci['description']] if ci['description'] < len(parts) else ''
 
             cp = ''
-            if beneficiary and beneficiary.lower() not in ('nan', 'none', 'n/a'):
-                cp = _clean_counterparty_name(beneficiary)
-            if not cp and payer and payer.lower() not in ('nan', 'none', 'n/a'):
-                pl = payer.lower()
-                bank_like = any(w in pl for w in ['bank', 'payments', 'finance', 'revolut',
-                                                  'paysera', 'wise', 'sepa', 'transfer'])
-                if not bank_like:
-                    cp = _clean_counterparty_name(payer)
+            if ttype == 'TOPUP':
+                if payer and payer.lower() not in ('nan', 'none', 'n/a'):
+                    pl = payer.lower()
+                    bank_like = any(w in pl for w in ['bank', 'payments', 'finance',
+                                                      'revolut', 'paysera', 'wise', 'sepa'])
+                    if not bank_like:
+                        cp = _clean_counterparty_name(payer)
+                if not cp and beneficiary:
+                    cp = _clean_counterparty_name(beneficiary)
+            else:
+                if beneficiary and beneficiary.lower() not in ('nan', 'none', 'n/a'):
+                    cp = _clean_counterparty_name(beneficiary)
+                if not cp:
+                    after_to = _extract_after_to(desc)
+                    if after_to:
+                        cp = _clean_counterparty_name(after_to)
+                if not cp and payer and payer.lower() not in ('nan', 'none', 'n/a'):
+                    pl = payer.lower()
+                    bank_like = any(w in pl for w in ['bank', 'payments', 'finance',
+                                                      'revolut', 'paysera', 'wise', 'sepa'])
+                    if not bank_like:
+                        cp = _clean_counterparty_name(payer)
             if not cp:
                 cp, _ = extract_counterparty_from_description(desc)
 
@@ -2859,40 +2963,134 @@ def parse_revolut_plavas(file_content, account_name):
     return parse_revolut_generic(file_content, account_name)
 
 
+# [FIX-PDF-1] Полностью переписанный парсер Revolut PDF по тексту
 def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Revolut PDF (AN14_Estate_EUR_Revolut.pdf).
+
+    Формат строки:
+      <Date> <Type> <Description> <Money out | Money in> <Balance>
+    Пример:
+      10 Sept 2026 MOA Money added from JANIS LIELMANIS • A14-7-09/2026. Rek. Nr. INV-2026-0156 €423.41 €59 470.42
+      9 Sept 2026 MOS To SANDAR BLAZMA • Kompensacijas izmaksa (1.2.15.1) €333.39 €57 397.29
+      1 Sept 2026 FEE Revolut Business Fee • Grow plan fee €35.00 €57 720.77
+
+    Стратегия:
+      1. Ищем строки, начинающиеся с даты вида 'DD Mon YYYY'.
+      2. После даты идёт тип (MOA/MOS/FEE/MOR/...).
+      3. Description — до первой €-суммы.
+      4. Первая €-сумма — Money out или Money in (знак определяем по типу:
+         MOA/MOR — приход, MOS/FEE/CAR/ATM — расход).
+      5. Balance — последняя €-сумма в строке.
+      6. Контрагент: из Description по маркерам 'from X' / 'To Y'.
+    """
     result = []
-    tables = pdf_all_tables(file_content)
-    for table in tables:
-        for row in table:
-            if len(row) < 6:
-                continue
-            try:
-                dstr = row[0]
-                m = re.match(r'(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})', dstr)
-                if not m:
-                    continue
-                date = parse_date(m.group(1))
-                if not date:
-                    continue
-                amount = 0.0
-                for cell in row[2:8]:
-                    p = parse_amount(cell)
-                    if p != 0.0:
-                        amount = p
-                        break
-                if amount == 0.0 or not _is_reasonable_amount(amount):
-                    continue
-                desc = row[5] if len(row) > 5 else ''
-                cp, _ = extract_counterparty_from_description(desc)
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp if cp else '',
-                    'Наименование счета': account_name,
-                    'Описание': desc
-                })
-            except Exception:
-                continue
-    return result
+    full_text = pdf_all_text(file_content)
+    if not full_text:
+        return []
+
+    # Дата: '10 Sept 2026', '9 Sept 2026', '1 Sept 2026'
+    date_re = re.compile(
+        r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s+\d{4})',
+        re.IGNORECASE
+    )
+    # Тип: MOA, MOS, FEE, MOR, CAR, ATM, EXO, EXI и т.п.
+    type_re = re.compile(r'\b(MOA|MOS|MOR|FEE|CAR|ATM|EXO|EXI|TOPUP|TRANSFER)\b')
+
+    lines = full_text.split('\n')
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        dm = date_re.search(line)
+        if not dm:
+            continue
+        date_str = dm.group(1)
+        date = parse_date(date_str)
+        if not date:
+            continue
+
+        # Всё после даты
+        after = line[dm.end():].strip()
+
+        # Тип операции
+        tm = type_re.search(after)
+        ttype = ''
+        if tm:
+            ttype = tm.group(1)
+            after = after[tm.end():].strip()
+
+        # Ищем €-суммы
+        eur_re = re.compile(r'(-?\s?€\s?\d[\d\s\u00a0]*[.,]\d{2}|-?\d[\d\s\u00a0]*[.,]\d{2}\s?€)')
+        eur_matches = list(eur_re.finditer(after))
+        if not eur_matches:
+            continue
+
+        # Первая €-сумма = сумма операции; последняя = баланс
+        amount_match = eur_matches[0]
+        balance_match = eur_matches[-1]
+
+        # Если в строке только одна €-сумма — считаем её суммой операции
+        # (баланс может быть на следующей строке)
+        if len(eur_matches) == 1:
+            amount_raw = amount_match.group(0)
+            desc_raw = after[:amount_match.start()].strip()
+        else:
+            amount_raw = amount_match.group(0)
+            desc_raw = after[:amount_match.start()].strip()
+
+        amount = parse_amount(amount_raw)
+        if amount == 0.0 or not _is_reasonable_amount(amount):
+            continue
+
+        # Знак по типу
+        if ttype in ('MOA', 'MOR', 'TOPUP'):
+            amount = abs(amount)
+        elif ttype in ('MOS', 'FEE', 'CAR', 'ATM', 'EXO'):
+            amount = -abs(amount)
+        else:
+            # Если знак уже есть в строке — parse_amount его учтёт
+            pass
+
+        # Описание — до первой €-суммы, очищаем от '•'
+        desc = re.sub(r'\s+', ' ', desc_raw).strip()
+        # Убираем хвостовые '•' и пробелы
+        desc = desc.strip(' •')
+
+        # Контрагент
+        cp = ''
+        if ttype == 'MOA' or ttype == 'MOR':
+            # 'Money added from XXX'
+            m_from = re.search(r'\bfrom\s+(.+)$', desc, re.IGNORECASE)
+            if m_from:
+                cp = _clean_counterparty_name(m_from.group(1))
+        elif ttype == 'MOS':
+            # 'To XXX'
+            after_to = _extract_after_to(desc)
+            if after_to:
+                cp = _clean_counterparty_name(after_to)
+        if not cp and ttype in ('MOA', 'MOR', 'MOS'):
+            cp, _ = extract_counterparty_from_description(desc)
+        # FEE — контрагент не извлекаем (это комиссия банка)
+
+        result.append({
+            'Дата': date,
+            'Сумма': amount,
+            'Контрагент': cp if cp else '',
+            'Наименование счета': account_name,
+            'Описание': desc
+        })
+
+    # Дедупликация
+    seen = set()
+    deduped = []
+    for r in result:
+        key = (r['Дата'], r['Сумма'], r['Контрагент'], r['Описание'])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(r)
+    return deduped
 
 
 # ==================== UniCredit ====================
@@ -3040,7 +3238,7 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     if not result:
         full_text = pdf_all_text(file_content)
         pattern = re.compile(
-            r'(-?\d[\d\s]*[.,]\d{2})\s*[;,]?\s*([A-Z]{3})\s*[;,]?\s*(\d{4}-\d{2}-\d{2})\s*[;,]?\s*([^\n;]{3,300})',
+            r'(-?\d[\d\s]*[.,]\d{2})\s*[;,]?\s*([A-Z]{3})\s*[;,]?\s*(\d{4}-\d{2}-\d{2})\s*[;,]?\s*([^\n;]{3,1000})',
             re.MULTILINE
         )
         for m in pattern.finditer(full_text):
@@ -3666,7 +3864,7 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
         return result
     pattern = re.compile(
         r'(\d{1,2}\.\d{1,2}\.\d{4}|\d{4}-\d{2}-\d{2})\s+'
-        r'([^\n;]{3,200}?)\s+'
+        r'(.{3,2000}?)\s+'
         r'(-?[\d\s]+[.,]\d{2})',
         re.MULTILINE
     )
@@ -3743,7 +3941,7 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
     if full_text:
         pattern = re.compile(
             r'(\d{1,2}\.\d{1,2}\.\d{4}|\d{4}-\d{2}-\d{2})\s+'
-            r'([^\n;]{3,200}?)\s+'
+            r'(.{3,2000}?)\s+'
             r'(-?[\d\s]+[.,]\d{2})',
             re.MULTILINE
         )
@@ -3867,7 +4065,7 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
     if docx_text:
         pattern = re.compile(
             r'(\d{1,2}\.\d{1,2}\.\d{4}|\d{4}-\d{2}-\d{2})\s+'
-            r'([^\n;]{3,200}?)\s+'
+            r'(.{3,2000}?)\s+'
             r'(-?[\d\s]+[.,]\d{2})',
             re.MULTILINE
         )
@@ -4188,7 +4386,7 @@ def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[T
         other_exts.append('.docx')
     for oe in other_exts:
         op, ok = get_parser_by_ext(account_name, oe)
-        _add(op, ok or f'{oe[1:]}_other')
+        _add(op, ok or f'{oe[1:]} _other'.replace(' ', ''))
 
     up, uk = _get_universal_for_type(real_type)
     _add(up, uk or f'{real_type}_universal')
@@ -4379,6 +4577,21 @@ def _process_uploaded_files(uploaded_files) -> Dict:
                 file_stats.append(f"✅ {uf.name}: {len(tx)} операций")
             else:
                 file_stats.append(f"ℹ️ {uf.name}: транзакций не найдено")
+                try:
+                    raw_txt = ''
+                    ext = os.path.splitext(uf.name)[1].lower()
+                    if ext == '.pdf' or content[:4] == b'%PDF':
+                        raw_txt = pdf_all_text(content)
+                    elif ext == '.docx' or (content[:2] == b'PK' and b'word/' in content[:4096]):
+                        raw_txt = docx_all_text(content)
+                    else:
+                        raw_txt = read_text_with_encoding(content)
+                    debug_info.append(
+                        f"⚠️ `{uf.name}`: 0 операций. Первые 2000 символов сырого текста:\n"
+                        f"```\n{raw_txt[:2000]}\n```"
+                    )
+                except Exception as e:
+                    debug_info.append(f"⚠️ `{uf.name}`: 0 операций, не удалось получить сырой текст: {e}")
 
             if uf.name.lower().endswith('.docx'):
                 try:
