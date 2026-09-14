@@ -22,6 +22,7 @@ FIX-пакет:
   [FIX-2026-PASHA]       — Pasha Bank XLSX: усилен фильтр итоговых строк.
   [FIX-2026-BLUOR-EMPTY] — BluOr CSV: информативное сообщение для файлов без операций.
   [FIX-2026-XLS-NUMBER]  — Экспорт в Excel: суммы пишутся числами с числовым форматом '# ##0,00'.
+  [FIX-2026-XLRD-SYNTAX] — Исправлена случайная склейка строк в _read_xls_with_xlrd.
 """
 
 import streamlit as st
@@ -380,7 +381,6 @@ def parse_date(date_str) -> str:
     if m:
         y, mo, d = m.groups()
         return f"{d}-{mo}-{y}"
-    # Revolut PDF: "10 Sept 2026"
     for fmt in ["%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d-%b-%y"]:
         try:
             return datetime.strptime(s, fmt).strftime("%d-%m-%Y")
@@ -436,7 +436,6 @@ def parse_amount(amount_str) -> float:
 
 
 def format_amount(amount: float) -> str:
-    """Строковое представление суммы для отображения (10 000,05)."""
     if amount is None or pd.isna(amount):
         return "0,00"
     sign = "-" if amount < 0 else ""
@@ -1603,7 +1602,8 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
 def _read_xls_with_xlrd(file_content: bytes):
     """[FIX-2026-XLS-FALLBACK] Чтение старого .xls через xlrd с ignore_workbook_corruption."""
     try:
-        import xlrd    except ImportError:
+        import xlrd
+    except ImportError:
         return None
     try:
         wb = xlrd.open_workbook(file_contents=file_content, ignore_workbook_corruption=True)
@@ -4724,8 +4724,6 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
 # [FIX-2026-XLS-NUMBER] Числовой формат Excel:
 #   '# ##0,00' — разряды разделяются пробелом, десятичный разделитель — запятая.
 #   Excel хранит само число (10000,05), а формат влияет только на отображение.
-#   Это позволяет суммировать/сортировать ячейки как числа, но визуально
-#   видеть «10 000,05» и «-985,57».
 EXCEL_NUM_FMT = '# ##0,00'
 EXCEL_NUM_FMT_INT = '# ##0'
 
@@ -4745,11 +4743,9 @@ def _write_df_to_excel_with_number_format(
 
     worksheet = writer.sheets[sheet_name]
 
-    # Применяем формат к перечисленным колонкам
     num_cols = numeric_columns or []
     int_cols = integer_columns or []
 
-    # Определяем индексы колонок (openpyxl использует 1-based индексы)
     col_positions_num = []
     col_positions_int = []
     for col_name in num_cols:
@@ -4761,14 +4757,12 @@ def _write_df_to_excel_with_number_format(
             idx = list(df.columns).index(col_name) + 1
             col_positions_int.append(idx)
 
-    # Строка 1 — заголовок; данные начинаются со строки 2
     max_row = len(df) + 1
 
     for col_idx in col_positions_num:
         for row_idx in range(2, max_row + 1):
             cell = worksheet.cell(row=row_idx, column=col_idx)
             cell.number_format = EXCEL_NUM_FMT
-            # На всякий случай, если значение пришло строкой — пробуем преобразовать
             v = cell.value
             if isinstance(v, str):
                 s = v.strip().replace(' ', '').replace('\xa0', '').replace(',', '.')
@@ -4789,7 +4783,6 @@ def _write_df_to_excel_with_number_format(
                 except Exception:
                     pass
 
-    # Автоширина по заголовкам (простая)
     for column_cells in worksheet.columns:
         try:
             length = max(len(str(c.value)) if c.value is not None else 0 for c in column_cells)
@@ -4804,7 +4797,6 @@ def _prepare_operations_export(df_raw: pd.DataFrame) -> pd.DataFrame:
     """
     df_export = df_raw.copy()
     if 'Сумма' in df_export.columns:
-        # Гарантируем числовой тип
         df_export['Сумма'] = pd.to_numeric(df_export['Сумма'], errors='coerce').fillna(0.0).astype(float)
     return df_export
 
@@ -4949,13 +4941,11 @@ def _process_uploaded_files(uploaded_files) -> Dict:
                 all_tx.extend(tx)
                 file_stats.append(f"✅ {uf.name}: {len(tx)} операций")
             else:
-                # Определяем, является ли файл служебным (только остатки)
                 ext_low = os.path.splitext(uf.name)[1].lower()
                 is_service_file = False
                 if 'bluor' in account_name.lower() and ext_low in ('.csv', '.xls', '.xlsx'):
                     raw = read_text_with_encoding(content)
                     if raw and 'начальный остаток' in raw.lower() and 'дебет (d)' in raw.lower():
-                        # Все транзакционные строки — служебные
                         is_service_file = True
                 if is_service_file:
                     file_stats.append(f"ℹ️ {uf.name}: служебный файл (только остатки), операций нет")
@@ -5046,7 +5036,6 @@ def _render_results(result: Dict):
     income = float(df_raw['Сумма_число'][df_raw['Сумма_число'] > 0].sum())
     expense = float(abs(df_raw['Сумма_число'][df_raw['Сумма_число'] < 0].sum()))
 
-    # Для отображения в Streamlit — форматированная копия (строки)
     df_display = df_raw.drop(columns=['Сумма_число']).copy()
     df_display['Сумма'] = df_display['Сумма'].apply(format_amount)
 
@@ -5087,8 +5076,6 @@ def _render_results(result: Dict):
         "или всё вместе одним файлом. Суммы в Excel — настоящие числа с числовым форматом."
     )
 
-    # [FIX-2026-XLS-NUMBER] Для экспорта используем исходный df_raw (с числовой Суммой),
-    # а не df_display (где Сумма отформатирована как строка).
     ops_excel = build_operations_excel(df_raw)
     summary_excel = build_summary_excel(summary_df) if not summary_df.empty else None
     combined_excel = build_combined_excel(df_raw, summary_df) if not summary_df.empty else None
@@ -5157,7 +5144,6 @@ def main():
     st.markdown("### 📥 Загрузка файлов")
     st.markdown("Перетащите выписки в окно ниже или нажмите **Browse files**.")
 
-    # [FIX-2026-RESET] Кнопка сброса
     col_reset, col_info = st.columns([1, 4])
     with col_reset:
         reset_clicked = st.button("🔄 Сбросить файлы", key="reset_btn")
