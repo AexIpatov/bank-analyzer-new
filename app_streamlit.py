@@ -15,6 +15,8 @@ FIX-пакет:
   [NEW-AMOUNT-FORMAT]    — Суммы на экране: 1 234,56
   [NEW-EXCEL-NUMERIC]    — В Excel суммы — числа с форматом # ##0.00
   [NEW-SMART-COUNTERPARTY] — Умное извлечение контрагента
+  [FIX-KAPITAL-XLSX]     — Новый парсер Kapital bank Saida AZN (XLSX, 2-колоночный)
+  [FIX-KAPITAL-PDF]      — Улучшен PDF-парсер Kapital bank (склейка Məxaric/Mədaxil)
 """
 
 import streamlit as st
@@ -46,10 +48,6 @@ st.set_page_config(
 
 
 # ==================== [NEW-GORODETS-TEA] ФОН: ГОРОДЕЦКАЯ РОСПИСЬ "ЧАЕПИТИЕ" ====================
-#
-# Тайл 520×460 px. Сюжет: стол, самовар, две чашки с блюдцами, купчиха,
-# веточки с розанами и купавками, листья, завитки.
-# Палитра: красный, синий, жёлтый, зелёный, оранжевый, розовый, фиолетовый.
 
 _GORODETS_SVG = (
     "<svg xmlns='http://www.w3.org/2000/svg' width='520' height='460'>"
@@ -57,7 +55,6 @@ _GORODETS_SVG = (
     "patternUnits='userSpaceOnUse'>"
     "<g opacity='0.55'>"
 
-    # ============ ФОНОВЫЕ ВЕТОЧКИ ============
     "<g fill='none' stroke='#2C3E50' stroke-width='2' stroke-linecap='round'>"
     "<path d='M10 380 Q120 320 240 360 Q360 400 510 340'/>"
     "<path d='M5 120 Q90 70 190 100 Q290 130 390 90 Q470 55 520 85'/>"
@@ -65,7 +62,6 @@ _GORODETS_SVG = (
     "<path d='M0 445 Q130 415 260 440 Q400 465 520 430'/>"
     "</g>"
 
-    # ============ ЛИСТЬЯ ============
     "<g fill='#43A047' stroke='#1B5E20' stroke-width='1.6'>"
     "<path d='M120 350 q18 -28 46 -18 q-4 26 -24 34 q-24 10 -22 -16 z'/>"
     "<path d='M120 350 q22 -10 46 -18' fill='none' stroke='#1B5E20' stroke-width='1.3'/>"
@@ -80,45 +76,33 @@ _GORODETS_SVG = (
     "<path d='M70 210 q16 -20 40 -10 q-4 22 -24 30 q-24 8 -16 -20 z'/>"
     "</g>"
 
-    # ============ СТОЛ (центр) ============
     "<g transform='translate(260,360)'>"
     "<ellipse cx='0' cy='0' rx='170' ry='34' fill='#8D6E63' stroke='#4E342E' stroke-width='2'/>"
     "<ellipse cx='0' cy='-6' rx='170' ry='30' fill='#A1887F' stroke='#4E342E' stroke-width='1.6'/>"
     "<ellipse cx='0' cy='-12' rx='160' ry='24' fill='#D7CCC8' stroke='#4E342E' stroke-width='1.2'/>"
-    # Кружевная салфетка по центру
     "<ellipse cx='0' cy='-14' rx='90' ry='16' fill='#FFFFFF' opacity='0.6' stroke='#BCAAA4' stroke-width='1'/>"
     "</g>"
 
-    # ============ САМОВАР (центр стола) ============
     "<g transform='translate(260,300)'>"
-    # тело
     "<path d='M-30 0 q-8 -55 30 -60 q38 5 30 60 z' fill='#FBC02D' stroke='#F57F17' stroke-width='2'/>"
-    # крышка
     "<ellipse cx='0' cy='-60' rx='30' ry='8' fill='#FDD835' stroke='#F57F17' stroke-width='1.8'/>"
-    # носик
     "<path d='M-30 -20 l-18 -6 l18 -6 z' fill='#FBC02D' stroke='#F57F17' stroke-width='1.6'/>"
-    # ручки
     "<path d='M30 -30 q14 10 0 20' fill='none' stroke='#F57F17' stroke-width='3'/>"
     "<path d='M-30 -30 q-14 10 0 20' fill='none' stroke='#F57F17' stroke-width='3'/>"
-    # ножка
     "<rect x='-4' y='0' width='8' height='14' fill='#F57F17'/>"
     "<ellipse cx='0' cy='14' rx='14' ry='4' fill='#FDD835' stroke='#F57F17' stroke-width='1.4'/>"
-    # блик
     "<path d='M-15 -50 q0 -6 6 -6' fill='none' stroke='#FFF9C4' stroke-width='2'/>"
     "</g>"
 
-    # ============ ЧАШКА СЛЕВА ============
     "<g transform='translate(180,340)'>"
     "<ellipse cx='0' cy='0' rx='24' ry='7' fill='#FFFFFF' stroke='#1565C0' stroke-width='1.6'/>"
     "<path d='M-20 -2 q0 -18 20 -18 q20 0 20 18 z' fill='#FFFFFF' stroke='#1565C0' stroke-width='1.8'/>"
     "<path d='M20 -14 q12 4 0 12' fill='none' stroke='#1565C0' stroke-width='2'/>"
-    # цветочек на чашке
     "<circle cx='-4' cy='-8' r='3' fill='#E91E63' stroke='#880E4F' stroke-width='1'/>"
     "<circle cx='4' cy='-8' r='3' fill='#E91E63' stroke='#880E4F' stroke-width='1'/>"
     "<circle cx='0' cy='-3' r='2.4' fill='#FBC02D' stroke='#F57F17' stroke-width='1'/>"
     "</g>"
 
-    # ============ ЧАШКА СПРАВА ============
     "<g transform='translate(340,340)'>"
     "<ellipse cx='0' cy='0' rx='24' ry='7' fill='#FFFFFF' stroke='#C62828' stroke-width='1.6'/>"
     "<path d='M-20 -2 q0 -18 20 -18 q20 0 20 18 z' fill='#FFFFFF' stroke='#C62828' stroke-width='1.8'/>"
@@ -128,14 +112,12 @@ _GORODETS_SVG = (
     "<circle cx='0' cy='-3' r='2.4' fill='#FBC02D' stroke='#F57F17' stroke-width='1'/>"
     "</g>"
 
-    # ============ БЛЮДЦЕ С ПИРОЖКАМИ ============
     "<g transform='translate(260,335)'>"
     "<ellipse cx='0' cy='0' rx='22' ry='6' fill='#FFFFFF' stroke='#7E57C2' stroke-width='1.4'/>"
     "<circle cx='-6' cy='-4' r='5' fill='#FFB74D' stroke='#E65100' stroke-width='1'/>"
     "<circle cx='4' cy='-4' r='5' fill='#FFB74D' stroke='#E65100' stroke-width='1'/>"
     "</g>"
 
-    # ============ РОЗАН (слева, крупный) ============
     "<g transform='translate(90,150)'>"
     "<circle r='34' fill='#E91E63' stroke='#880E4F' stroke-width='2.2'/>"
     "<circle r='24' fill='#F48FB1' stroke='#C2185B' stroke-width='1.8'/>"
@@ -149,7 +131,6 @@ _GORODETS_SVG = (
     "</g>"
     "</g>"
 
-    # ============ КУПАВКА (справа) ============
     "<g transform='translate(430,170)'>"
     "<path d='M-30 8 q0 -32 30 -44 q30 12 30 44 q0 32 -30 44 q-30 -12 -30 -44 z' "
     "fill='#1E88E5' stroke='#0D47A1' stroke-width='2.2'/>"
@@ -163,7 +144,6 @@ _GORODETS_SVG = (
     "</g>"
     "</g>"
 
-    # ============ БУТОНЫ ============
     "<g transform='translate(340,120)'>"
     "<path d='M-16 5 q0 -20 16 -27 q16 7 16 27 q0 20 -16 27 q-16 -7 -16 -27 z' "
     "fill='#F06292' stroke='#AD1457' stroke-width='1.8'/>"
@@ -182,7 +162,6 @@ _GORODETS_SVG = (
     "</g>"
     "</g>"
 
-    # ============ ЯГОДКИ ============
     "<g fill='#E53935' stroke='#B71C1C' stroke-width='1.2'>"
     "<circle cx='160' cy='60' r='4.5'/><circle cx='172' cy='66' r='4.5'/>"
     "<circle cx='166' cy='74' r='4.5'/>"
@@ -195,7 +174,6 @@ _GORODETS_SVG = (
     "<circle cx='300' cy='270' r='4'/><circle cx='312' cy='264' r='4'/>"
     "</g>"
 
-    # ============ ЗАВИТКИ ============
     "<g fill='none' stroke='#2C3E50' stroke-width='1.8' stroke-linecap='round'>"
     "<path d='M220 180 q-24 10 -30 34 q-4 22 16 32'/>"
     "<path d='M340 220 q24 10 30 34 q4 22 -16 32'/>"
@@ -211,34 +189,24 @@ _GORODETS_SVG_B64 = base64.b64encode(_GORODETS_SVG.encode('utf-8')).decode('asci
 
 
 # ==================== [NEW-NORMALIZE-ACCOUNT] ЭТАЛОННЫЙ СПИСОК СЧЕТОВ ====================
-#
-# Пользовательский список. Все парсеры получают уже нормализованное имя.
-# Сопоставление: убираем пробелы/дефисы/подчёркивания, приводим к lower и
-# ищем по ключевым словам.
 
 _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
-    # (набор ключей через нижний регистр без пробелов/дефисов/подчёркиваний, эталонное имя)
-    # --- Industra / Revolut AN14 ---
     ("an14estateeurindustra", "AN14_Estate_EUR_Industra"),
     ("an14estateeurrevolut",  "AN14_Estate_EUR_Revolut"),
-    # --- B1 Estate ---
     ("b1estateczkuc",         "B1_Estate_CZK_UC"),
     ("b1estate",              "B1_Estate_CZK_UC"),
-    # --- BluOr ---
     ("bsrestateeurbluor2",    "BSR_Estate_EUR_BluOr_2"),
     ("bsrestateeurbluor3",    "BSR_Estate_EUR_BluOr_3"),
     ("bsrbluor2",             "BSR_Estate_EUR_BluOr_2"),
     ("bsrbluor3",             "BSR_Estate_EUR_BluOr_3"),
     ("kl59revnbeurbluor",     "KL59_Rev_NB_EUR_BluOR"),
     ("kl59bluor",             "KL59_Rev_NB_EUR_BluOR"),
-    # --- MKB Budapest ---
     ("budapesthufmkb",        "Budapest HUF-MKB"),
     ("budapesthuf",           "Budapest HUF-MKB"),
     ("budapesteurmkb",        "Budapest EUR-MKB"),
     ("budapesteuro",          "Budapest EUR-MKB"),
     ("budapest",              "Budapest EUR-MKB"),
     ("mkbbudapest",           "Budapest EUR-MKB"),
-    # --- Pasha / BUNDA ---
     ("bundallcpashabankaedдирхам", "BUNDA LLC-Pasha Bank - AED-дирхам"),
     ("bundallcpashabankaed",  "BUNDA LLC-Pasha Bank - AED-дирхам"),
     ("bundapashaaed",         "BUNDA LLC-Pasha Bank - AED-дирхам"),
@@ -248,7 +216,6 @@ _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
     ("bundapashaazn",         "BUNDA LLC-Pasha Bank-AZN"),
     ("pashabankazn",          "BUNDA LLC-Pasha Bank-AZN"),
     ("pashaazn",              "BUNDA LLC-Pasha Bank-AZN"),
-    # --- CSOB ---
     ("dzibikmaincsobczk",     "DŽIBIK Main CSOB CZK"),
     ("dzibikcsob",            "DŽIBIK Main CSOB CZK"),
     ("dzibik",                "DŽIBIK Main CSOB CZK"),
@@ -270,7 +237,6 @@ _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
     ("rrstrovkaeur",          "RR_Strojka_EUR_CSOB"),
     ("rrstrovka",             "RR_Strojka_CZK_CSOB"),
     ("rrrevostr",             "RR_Strojka_CZK_CSOB"),
-    # --- UniCredit ---
     ("garpizunicreditbankczk", "Garpiz UniCredit Bank CZK"),
     ("garpizunicredit",        "Garpiz UniCredit Bank CZK"),
     ("garpiz",                 "Garpiz UniCredit Bank CZK"),
@@ -283,32 +249,26 @@ _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
     ("twohillsmollyunicredit", "TwoHills_Molly_Unicredit_CZK"),
     ("twohillsmolly",          "TwoHills_Molly_Unicredit_CZK"),
     ("twohills",               "TwoHills_Molly_Unicredit_CZK"),
-    # --- JenHor ---
     ("jenhorunelmaczkcsas",    "JenHor_Unelma_CZK_CSAS"),
     ("jenhorunelma",           "JenHor_Unelma_CZK_CSAS"),
     ("jenhor",                 "JenHor_Unelma_CZK_CSAS"),
     ("unelma",                 "JenHor_Unelma_CZK_CSAS"),
-    # --- Kapital Saida ---
     ("kapitalbanksaidaazn",    "Kapital bank_Saida_AZN"),
     ("kapitalbanksaida",       "Kapital bank_Saida_AZN"),
     ("kapitalbankazn",         "Kapital bank_Saida_AZN"),
     ("kapitalazn",             "Kapital bank_Saida_AZN"),
     ("saidaazn",               "Kapital bank_Saida_AZN"),
-    # --- KL59 ---
     ("kl59revnbeurindustra",   "KL59_Rev_NB_EUR_Industra"),
     ("kl59industra",           "KL59_Rev_NB_EUR_Industra"),
     ("kl59",                   "KL59_Rev_NB_EUR_Industra"),
-    # --- Mashreq ---
     ("mashreqbankaednomiqa",   "MASHREQ BANK-AED-NOMIQA"),
     ("mashreqaednomiqa",       "MASHREQ BANK-AED-NOMIQA"),
     ("mashreqnomiqa",          "MASHREQ BANK-AED-NOMIQA"),
     ("mashreq",                "MASHREQ BANK-AED-NOMIQA"),
     ("nomiqa",                 "MASHREQ BANK-AED-NOMIQA"),
-    # --- Revolut NB ---
     ("nbreveurrevolut",        "NB_Rev_EUR_Revolut"),
     ("nbreveur",               "NB_Rev_EUR_Revolut"),
     ("nbrev",                  "NB_Rev_EUR_Revolut"),
-    # --- Paysera ---
     ("payserabalticsolutionseur", "Paysera Baltic Solutions EUR"),
     ("payserabalticsolutions", "Paysera Baltic Solutions EUR"),
     ("payserabaltic",          "Paysera Baltic Solutions EUR"),
@@ -322,41 +282,34 @@ _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
     ("payserabsrerum",         "Paysera-BS RERUM, SIA"),
     ("payserarerum",           "Paysera-BS RERUM, SIA"),
     ("paysera",                "Paysera Baltic Solutions EUR"),
-    # --- Plavas ---
     ("plavas1estateeurindustra", "Plavas1_Estate_EUR_Industra"),
     ("plavas1industra",        "Plavas1_Estate_EUR_Industra"),
     ("plavasestateeurindustra", "Plavas1_Estate_EUR_Industra"),
     ("plavas1",                "Plavas1_Estate_EUR_Industra"),
     ("plavas",                 "Plavas1_Estate_EUR_Industra"),
-    # --- Regina Alfa ---
     ("reginaalfabanknomiqarub", "Regina Alfa-bank_NOMIQA_RUB"),
     ("reginaalfanomiqarub",     "Regina Alfa-bank_NOMIQA_RUB"),
     ("reginaalfabanknomiqa",    "Regina Alfa-bank_NOMIQA_RUB"),
     ("reginaalfanomiqa",        "Regina Alfa-bank_NOMIQA_RUB"),
     ("reginaalfa",              "Regina Alfa-bank_NOMIQA_RUB"),
-    # --- Revolut Plavas ---
     ("revolutplavas1sia",      "Revolut_Plavas 1 SIA"),
     ("revolutplavas1",         "Revolut_Plavas 1 SIA"),
     ("revolutplavas",          "Revolut_Plavas 1 SIA"),
     ("revolutnb",              "NB_Rev_EUR_Revolut"),
     ("revolutan14",            "AN14_Estate_EUR_Revolut"),
     ("revolut",                "AN14_Estate_EUR_Revolut"),
-    # --- Saida ---
     ("saidan26",               "Saida_N26"),
     ("saida26",                "Saida_N26"),
     ("n26",                    "Saida_N26"),
     ("saidawise",              "Saida_Wise"),
     ("wise",                   "Saida_Wise"),
-    # --- Stalkin FIO ---
     ("stalkinml2czkfio",       "Stalkin_ML2_CZK_FIO"),
     ("stalkinml2fio",          "Stalkin_ML2_CZK_FIO"),
     ("stalkinfio",             "Stalkin_ML2_CZK_FIO"),
     ("stalkin",                "Stalkin_ML2_CZK_FIO"),
     ("fio",                    "Stalkin_ML2_CZK_FIO"),
-    # --- Tinkoff ---
     ("tinkoffrub",             "Tinkoff RUB"),
     ("tinkoff",                "Tinkoff RUB"),
-    # --- WIO ---
     ("wiobusinessbank",        "WIO Business Bank"),
     ("wiobusiness",            "WIO Business Bank"),
     ("wio",                    "WIO Business Bank"),
@@ -364,7 +317,6 @@ _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
 
 
 def _normalize_key(s: str) -> str:
-    """Убирает пробелы, дефисы, подчёркивания, точки, приводит к lower."""
     if s is None:
         return ""
     s = str(s).lower()
@@ -373,14 +325,9 @@ def _normalize_key(s: str) -> str:
 
 
 def normalize_account_name(raw_name: str) -> str:
-    """
-    Сопоставляет сырое имя счёта с эталонным списком.
-    Возвращает эталонное имя или исходное, если ничего не нашли.
-    """
     if not raw_name:
         return raw_name
 
-    # Сначала убираем даты / IBAN / длинные номера как в clean_account_name
     clean = raw_name
     clean = re.sub(
         r'\(\s*(?:'
@@ -399,7 +346,7 @@ def normalize_account_name(raw_name: str) -> str:
     )
     clean = re.sub(r'\b\d{2}-[A-Za-z]{3}-\d{4}\b', ' ', clean)
     clean = re.sub(r'\b\d{4}-\d{2}-\d{2}\b', ' ', clean)
-    clean = re.sub(r'\b\d{8}\b', ' ', clean)          # 20260801
+    clean = re.sub(r'\b\d{8}\b', ' ', clean)
     clean = re.sub(r'\b\d{2}\.\d{2}\.\d{4}\b', ' ', clean)
     clean = re.sub(r'\bLV\d{2}[A-Z]{4}\d{13,}\b', ' ', clean)
     clean = re.sub(r'\b\d{10,}\b', ' ', clean)
@@ -407,7 +354,6 @@ def normalize_account_name(raw_name: str) -> str:
 
     key = _normalize_key(clean)
 
-    # Сначала ищем самое длинное совпадение
     best = None
     best_len = -1
     for alias_key, canonical in _ACCOUNT_ALIASES:
@@ -418,7 +364,6 @@ def normalize_account_name(raw_name: str) -> str:
     if best:
         return best
 
-    # Если не нашли — вернём очищенное имя как есть
     return clean if clean else raw_name
 
 
@@ -441,7 +386,6 @@ _CSS = """
     --border: #C8E6C9;
 }
 
-/* ---------- [FIX-BG-BASE64] ФОН: городецкая роспись "Чаепитие" ---------- */
 html, body {
     background-color: #FFFDF2 !important;
 }
@@ -471,7 +415,6 @@ html, body {
 footer {visibility: hidden;}
 #MainMenu {visibility: hidden;}
 
-/* ---------- HERO ---------- */
 .hero {
     background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 50%, #4CAF50 100%);
     padding: 2.2rem 2rem;
@@ -509,10 +452,6 @@ footer {visibility: hidden;}
 }
 
 .hero-illustration { position: relative; z-index: 2; }
-
-/* ============================================================ */
-/* [FIX-BUTTONS-SMALL] КНОПКИ — уменьшенный шрифт                */
-/* ============================================================ */
 
 .stButton > button,
 .stButton > button[kind="primary"],
@@ -595,7 +534,6 @@ section[data-testid="stFileUploaderDropzone"] button {
     filter: brightness(0.95) !important;
 }
 
-/* --- Красная кнопка сброса --- */
 .stButton > button[kind="secondary"],
 [data-testid="stBaseButton-secondary"] {
     background:
@@ -609,7 +547,6 @@ section[data-testid="stFileUploaderDropzone"] button {
         0 3px 0 #5C0000 !important;
 }
 
-/* --- Кнопка внутри file_uploader --- */
 .stFileUploader {
     background: #FFFFFF;
     border-radius: 16px;
@@ -652,7 +589,6 @@ section[data-testid="stFileUploaderDropzone"] button {
     margin: 0 !important;
 }
 
-/* ---------- МЕТРИКИ ---------- */
 .stMetric {
     background: #FFFFFF;
     border-radius: 16px;
@@ -801,7 +737,6 @@ st.markdown("""
 # ==================== ОБЩИЕ УТИЛИТЫ ====================
 
 def clean_account_name(filename: str) -> str:
-    """Сырое имя счёта из имени файла (без дат, IBAN, длинных номеров)."""
     name = os.path.splitext(filename)[0]
     name = re.sub(
         r'\(\s*(?:'
@@ -986,7 +921,6 @@ def safe_str(v) -> str:
 # ==================== [FIX-TRANSLATE-FULL] ПЕРЕВОД ОПИСАНИЙ ====================
 
 _PHRASE_DICT: Dict[str, str] = {
-    # ---------- English (многословные) ----------
     "value added tax - output": "НДС к уплате",
     "value added tax - input": "НДС к возмещению",
     "value added tax": "НДС",
@@ -1097,7 +1031,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "tinkoff": "Тинькофф",
     "sberbank": "Сбербанк",
 
-    # ---------- Czech (CS) ----------
     "trvalý příkaz": "постоянное поручение",
     "vklad hotovosti": "внесение наличных",
     "výběr hotovosti": "снятие наличных",
@@ -1141,7 +1074,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "zůstatek": "остаток",
     "pohyby": "операции",
 
-    # ---------- Latvian (LV) ----------
     "skaidras naudas iemaksa": "внесение наличных",
     "skaidras naudas izņemšana": "снятие наличных",
     "maksājums ar karti": "оплата картой",
@@ -1189,7 +1121,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "veids": "тип",
     "konts": "счёт",
 
-    # ---------- Hungarian (HU) ----------
     "készpénzfelvétel": "снятие наличных",
     "készpénzbefizetés": "внесение наличных",
     "kártyás fizetés": "оплата картой",
@@ -1244,7 +1175,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "befizetés": "внесение",
     "kifizetés": "выплата",
 
-    # ---------- Azeri (AZ) ----------
     "hesaba mədaxil": "зачисление на счёт",
     "hesaba medaxil": "зачисление на счёт",
     "dövrün sonuna balans": "остаток на конец периода",
@@ -1263,7 +1193,6 @@ _PHRASE_DICT: Dict[str, str] = {
 }
 
 _TRANSLATION_DICT: Dict[str, str] = {
-    # ---------- English (одиночные слова) ----------
     "fee": "комиссия",
     "fees": "комиссии",
     "payment": "платёж",
@@ -1308,7 +1237,6 @@ _TRANSLATION_DICT: Dict[str, str] = {
     "outgoing": "исходящий",
     "incoming": "входящий",
 
-    # ---------- Czech (одиночные) ----------
     "poplatek": "комиссия",
     "úrok": "проценты",
     "převod": "перевод",
@@ -1337,7 +1265,6 @@ _TRANSLATION_DICT: Dict[str, str] = {
     "příchozí": "входящий",
     "odchozí": "исходящий",
 
-    # ---------- Latvian (одиночные) ----------
     "maksājums": "платёж",
     "pārskaitījums": "перевод",
     "ienākošais": "входящий",
@@ -1368,7 +1295,6 @@ _TRANSLATION_DICT: Dict[str, str] = {
     "veids": "тип",
     "konts": "счёт",
 
-    # ---------- Hungarian (одиночные) ----------
     "fizetés": "платёж",
     "átutalás": "перевод",
     "bejövő": "входящий",
@@ -1820,12 +1746,37 @@ def _extract_industra_name(desc: str) -> str:
 
 
 def _extract_kapital_name(desc: str) -> str:
+    # [FIX-KAPITAL] Умное извлечение контрагента для Kapital bank Saida AZN
     if not desc:
         return ''
-    low = desc.lower()
-    if 'sms service' in low:
+    s = str(desc).strip()
+    low = s.lower()
+
+    # 1) Банковские комиссии
+    if 'sms service fee' in low or 'sms service' in low:
         return 'Kapital Bank'
-    return ''
+
+    # 2) Строки с длинным номером счёта + именем + служебным хвостом
+    #    Пример: "38810944013880896102 MEMMEDBEYLI SEIDE ALMAN QIZI Qeyri budca -> 1270532664"
+    m = re.match(
+        r'^\s*\d{10,}\s+'
+        r'([A-ZƏÜÖĞİŞÇ][A-ZƏÜÖĞİŞÇ\s]{2,80}?)'
+        r'(?:\s+(?:Qeyri|Köçürmə|Kocurma|Əməliyyat|Emeliyyat|Kart|Hesab|Оплата|Перевод|Комиссия|Mədaxil|Medaxil|Məxaric|Mexaric|->|→|>).*)?$',
+        s, re.IGNORECASE
+    )
+    if m:
+        name = m.group(1).strip()
+        name = re.sub(r'\s+', ' ', name)
+        if name and len(name) >= 3:
+            return name
+
+    # 3) Обычные осмысленные описания
+    if low in ('sms service fee', 'sms xidməti'):
+        return 'Kapital Bank'
+
+    # 4) Если описание похоже на обычное имя/магазин — возвращаем как есть
+    cleaned = _clean_counterparty_name(s)
+    return cleaned
 
 
 def extract_counterparty_smart(description: str,
@@ -1888,7 +1839,8 @@ def extract_counterparty_smart(description: str,
     if not cp and 'industra' in acc_low:
         cp = _extract_industra_name(desc)
 
-    if not cp and 'kapital' in acc_low:
+    # [FIX-KAPITAL] Kapital bank Saida AZN
+    if not cp and ('kapital' in acc_low or ('saida' in acc_low and 'azn' in acc_low)):
         cp = _extract_kapital_name(desc)
 
     if not cp:
@@ -3331,181 +3283,493 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return deduped
 
 
-# ==================== Kapital bank Saida AZN ====================
+# ==================== [FIX-KAPITAL-XLSX] Kapital bank Saida AZN (XLSX) ====================
 
-def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[Dict]:
-    result = []
-    content = read_text_with_encoding(file_content)
-    lines = [l.strip() for l in content.split('\n') if l.strip()]
-    for line in lines:
-        parts = [p.strip() for p in line.split(';')]
-        if len(parts) < 3:
-            continue
+def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Специальный парсер для XLSX-файлов Kapital bank Saida AZN.
+
+    Структура файла:
+      - Лист обычно называется 'AZ' (или первый лист).
+      - Верхняя часть (строки 0..~12) — «Kart Məlumatları» / «Kart hesabından çıxarış»,
+        там встречаются служебные строки с числами (18656.53, 6672.00 и т.п.).
+      - Ниже — таблица операций со столбцами:
+            Tarix | Məxaric | Mədaxil | Balans | Təsvir | Код
+        Данные начинаются со столбца B (индекс 1).
+      - Заголовок встречается ДВАЖДЫ: сверху таблицы и снизу (повтор).
+        Нижний заголовок нужно игнорировать.
+    """
+    result: List[Dict] = []
+
+    # --- 1. Читаем лист(ы) без заголовка ---
+    df = None
+    try:
+        df = pd.read_excel(BytesIO(file_content), sheet_name='AZ', header=None)
+    except Exception:
+        df = None
+    if df is None or df.empty:
         try:
-            date = parse_date(parts[0])
-            if not date:
+            df = pd.read_excel(BytesIO(file_content), header=None)
+        except Exception:
+            return []
+
+    if df is None or df.empty:
+        return []
+
+    # --- 2. Ищем строку-заголовок с 'Tarix' и 'Məxaric'/'Mədaxil' ---
+    header_row = -1
+    for idx, row in df.iterrows():
+        vals = [str(v).strip() if pd.notna(v) else '' for v in row.values]
+        joined = ' '.join(vals).lower()
+        # Ключевые слова заголовка Kapital bank
+        if ('tarix' in joined) and ('məxaric' in joined or 'mexaric' in joined) \
+                and ('mədaxil' in joined or 'medaxil' in joined):
+            header_row = idx
+            break
+
+    if header_row == -1:
+        return []
+
+    # --- 3. Определяем индексы колонок ---
+    hdr_vals = [str(v).strip() if pd.notna(v) else '' for v in df.iloc[header_row].values]
+
+    def _find_col(patterns: List[str]) -> int:
+        for i, h in enumerate(hdr_vals):
+            hl = h.lower()
+            if any(p in hl for p in patterns):
+                return i
+        return -1
+
+    date_i = _find_col(['tarix'])
+    debit_i = _find_col(['məxaric', 'mexaric'])   # расход
+    credit_i = _find_col(['mədaxil', 'medaxil'])  # приход
+    desc_i = _find_col(['təsvir', 'tesvir', 'описание', 'description'])
+    code_i = _find_col(['kod', 'код', 'code'])
+
+    # Fallback: стандартная раскладка (B..G → 1..6)
+    if date_i == -1:
+        date_i = 1
+    if debit_i == -1:
+        debit_i = 2
+    if credit_i == -1:
+        credit_i = 3
+    if desc_i == -1:
+        desc_i = 5
+    if code_i == -1:
+        code_i = 6
+
+    # --- 4. Проходим по строкам после заголовка ---
+    seen_keys = set()
+
+    for idx in range(header_row + 1, len(df)):
+        row = df.iloc[idx]
+        n = len(row)
+
+        def _get(ci: int):
+            if 0 <= ci < n:
+                v = row.iloc[ci]
+                if pd.isna(v):
+                    return ''
+                return str(v).strip()
+            return ''
+
+        date_raw = _get(date_i)
+        debit_raw = _get(debit_i)
+        credit_raw = _get(credit_i)
+        desc_raw = _get(desc_i)
+        code_raw = _get(code_i)
+
+        # --- Пропускаем повторный заголовок 'Tarix / Məxaric / Mədaxil ...' ---
+        joined_row = ' '.join([date_raw, debit_raw, credit_raw, desc_raw]).lower()
+        if ('tarix' in joined_row and ('məxaric' in joined_row or 'mexaric' in joined_row)
+                and ('mədaxil' in joined_row or 'medaxil' in joined_row)):
+            continue
+
+        # --- Пропускаем пустые строки ---
+        if not date_raw and not debit_raw and not credit_raw and not desc_raw:
+            continue
+
+        # --- Парсим дату ---
+        date = parse_date(date_raw)
+        if not date or not re.match(r'^\d{2}-\d{2}-\d{4}$', date):
+            continue
+
+        # --- Парсим суммы (Məxaric — расход; Mədaxil — приход) ---
+        # ВАЖНО: колонка "Məxaric" — расход, поэтому сумма идёт со знаком минус.
+        # Колонка "Mədaxil" — приход, знак плюс.
+        debit_val = parse_amount(debit_raw) if debit_raw else 0.0
+        credit_val = parse_amount(credit_raw) if credit_raw else 0.0
+
+        amount = 0.0
+        if credit_val != 0.0 and abs(credit_val) > abs(debit_val):
+            amount = abs(credit_val)
+        elif debit_val != 0.0:
+            amount = -abs(debit_val)
+        elif credit_val != 0.0:
+            amount = abs(credit_val)
+        else:
+            continue
+
+        if not _is_reasonable_amount(amount):
+            continue
+
+        # --- Описание: Təsvir + (если есть) Код ---
+        desc_parts = []
+        if desc_raw:
+            desc_parts.append(desc_raw)
+        if code_raw and code_raw.lower() not in ('nan', 'none'):
+            desc_parts.append(code_raw)
+        desc = ' | '.join(desc_parts) if len(desc_parts) > 1 else (desc_parts[0] if desc_parts else '')
+
+        # Дополнительная защита: если описание пустое, но есть код — берём код
+        if not desc:
+            desc = code_raw or ''
+
+        # --- Контрагент ---
+        cp_final, _ = extract_counterparty_smart(desc, account_name)
+        if not cp_final:
+            cp_final = 'Kapital Bank'
+
+        # --- Дедупликация ---
+        key = (date, round(amount, 2), cp_final, desc)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+
+        result.append({
+            'Дата': date,
+            'Сумма': amount,
+            'Контрагент': cp_final,
+            'Наименование счета': account_name,
+            'Описание': desc
+        })
+
+    return result
+
+
+# ==================== [FIX-KAPITAL-PDF] Kapital bank Saida AZN (PDF) ====================
+
+def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Специальный парсер для PDF-файлов Kapital bank Saida AZN.
+
+    Проблемы исходного файла:
+      - В строке таблицы колонки "Məxaric" и "Mədaxil" идут подряд и могут
+        «склеиваться»: "3.000" (3.00 + 0) или "06672.00" (0 + 6672.00).
+      - В шапке "Dövr üzrə mədaxil məbləği 6672" — целое число без десятичных.
+      - Заголовок "Tarix Məxaric Mədaxil Balans Təsvir Kartın son 4 rəqəmi"
+        встречается один раз.
+
+    Стратегия:
+      1) Пытаемся разобрать таблицу через pdfplumber (extract_tables).
+      2) Если не получилось — парсим сырой текст PDF.
+    """
+    result: List[Dict] = []
+
+    # ---------- 1. Пытаемся через таблицы pdfplumber ----------
+    tables = pdf_all_tables(file_content)
+    for table in tables:
+        if not table or len(table) < 2:
+            continue
+
+        header_idx = -1
+        for i, row in enumerate(table):
+            joined = ' '.join([str(c or '') for c in row]).lower()
+            if 'tarix' in joined and ('məxaric' in joined or 'mexaric' in joined) \
+                    and ('mədaxil' in joined or 'medaxil' in joined):
+                header_idx = i
+                break
+        if header_idx == -1:
+            continue
+
+        hdr = table[header_idx]
+        ci = {}
+        for i, h in enumerate(hdr):
+            hl = (h or '').lower()
+            if 'tarix' in hl and 'date' not in ci:
+                ci['date'] = i
+            elif ('məxaric' in hl or 'mexaric' in hl) and 'debit' not in ci:
+                ci['debit'] = i
+            elif ('mədaxil' in hl or 'medaxil' in hl) and 'credit' not in ci:
+                ci['credit'] = i
+            elif ('təsvir' in hl or 'tesvir' in hl or 'описание' in hl) and 'desc' not in ci:
+                ci['desc'] = i
+
+        if 'date' not in ci:
+            continue
+        if 'debit' not in ci and 'credit' not in ci:
+            continue
+
+        for row in table[header_idx + 1:]:
+            if not row:
                 continue
-            amount = parse_amount(parts[2].replace(',', '.'))
-            if amount == 0.0 or not _is_reasonable_amount(amount):
+            cells = [str(c or '').strip() for c in row]
+            joined = ' '.join(cells).lower()
+            if 'tarix' in joined and ('məxaric' in joined or 'mədaxil' in joined):
+                continue  # повтор заголовка
+
+            def _cell(ci_key):
+                idx_c = ci.get(ci_key, -1)
+                if 0 <= idx_c < len(cells):
+                    return cells[idx_c]
+                return ''
+
+            date = parse_date(_cell('date'))
+            if not date or not re.match(r'^\d{2}-\d{2}-\d{4}$', date):
                 continue
-            desc = parts[1] if len(parts) > 1 else ''
+
+            # Пытаемся понять, где Məxaric и где Mədaxil.
+            # Если в строке есть оба столбца — берём их значения.
+            # Но часто в pdfplumber они слипаются: "3.000" — на самом деле 3.00 | 0.
+            debit_raw = _cell('debit')
+            credit_raw = _cell('credit')
+
+            # Разбор "слипшихся" значений:
+            # "3.000" → debit=3.00, credit=0.00
+            # "06672.00" → debit=0, credit=6672.00
+            def _split_stuck(s: str) -> Tuple[float, float]:
+                s = (s or '').strip()
+                if not s:
+                    return 0.0, 0.0
+                # Случай "3.000" — два числа слиплись: 3.00 и 0
+                m = re.fullmatch(r'(\d+)[.,](\d{2})(\d)', s)
+                if m:
+                    a = float(f"{m.group(1)}.{m.group(2)}")
+                    b = float(m.group(3))
+                    return a, b
+                # Случай "06672.00" — 0 и 6672.00
+                m = re.fullmatch(r'0(\d+[.,]\d{2})', s)
+                if m:
+                    b = float(m.group(1).replace(',', '.'))
+                    return 0.0, b
+                # Обычное одно число
+                v = parse_amount(s)
+                return v, 0.0
+
+            d1, c1 = _split_stuck(debit_raw)
+            d2, c2 = _split_stuck(credit_raw)
+
+            # Итоговые debit/credit
+            debit_val = max(d1, d2)
+            credit_val = max(c1, c2)
+
+            amount = 0.0
+            if credit_val != 0.0 and abs(credit_val) >= abs(debit_val):
+                amount = abs(credit_val)
+            elif debit_val != 0.0:
+                amount = -abs(debit_val)
+            else:
+                continue
+
+            if not _is_reasonable_amount(amount):
+                continue
+
+            desc = _cell('desc')
             cp_final, _ = extract_counterparty_smart(desc, account_name)
+            if not cp_final:
+                cp_final = 'Kapital Bank'
+
             result.append({
-                'Дата': date, 'Сумма': amount,
-                'Контрагент': cp_final if cp_final else '',
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': cp_final,
                 'Наименование счета': account_name,
                 'Описание': desc
             })
-        except Exception:
-            continue
-    return result
 
+    if result:
+        return result
 
-def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dict]:
-    result = []
-    try:
-        doc = Document(BytesIO(file_content))
-    except Exception:
+    # ---------- 2. Fallback: разбор сырого текста ----------
+    full_text = pdf_all_text(file_content)
+    if not full_text:
         return []
-    lines = []
-    for para in doc.paragraphs:
-        t = para.text.strip()
-        if t:
-            lines.append(t)
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                t = cell.text.strip()
-                if t:
-                    lines.append(t)
-    table_rows_text = []
-    for table in doc.tables:
-        for row in table.rows:
-            cells = [c.text.strip() for c in row.cells]
-            table_rows_text.append(cells)
-    pattern = re.compile(
-        r'(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})\s+'
-        r'([\d\s]+[.,]\d{1,2})\s+'
-        r'([\d\s]+[.,]\d{1,2})\s+'
-        r'([\d\s]+[.,]\d{1,2})\s+'
-        r'([A-Za-z][A-Za-z0-9\s\-\./]{2,500})',
+
+    # Паттерн для строк вида:
+    #   2026-04-20 3.000 18656.53 SMS SERVICE FEE
+    #   2026-04-10 0 6672.00 18659.53 38810944013880896102 MEMMEDBEYLI SEIDE ALMAN QIZI Qeyri budca -> 1270532664
+    line_re = re.compile(
+        r'^\s*(\d{4}-\d{2}-\d{2})\s+'
+        r'([\d.,]+)\s+'                     # Məxaric (может быть пусто/0)
+        r'([\d.,]+)\s*'                     # Mədaxil (может быть пусто/0)
+        r'([\d.,]+)\s+'                     # Balans
+        r'(.+?)\s*$',                       # Təsvir
         re.MULTILINE
     )
-    for line in lines:
-        for m in pattern.finditer(line):
-            try:
-                date = parse_date(m.group(1).strip())
-                amount = parse_amount(m.group(2).strip())
-                desc = m.group(5).strip()
-                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-                    continue
-                low = desc.lower()
-                if any(w in low for w in ['balance', 'saldo', 'start', 'end', 'period',
-                                          'лимит', 'баланс', 'период', 'available', 'кредитн']):
-                    continue
-                cp_final, _ = extract_counterparty_smart(desc, account_name)
-                if not cp_final:
-                    cp_final = 'Kapital Bank'
-                result.append({
-                    'Дата': date, 'Сумма': -abs(amount),
-                    'Контрагент': cp_final,
-                    'Наименование счета': account_name,
-                    'Описание': desc
-                })
-            except Exception:
-                continue
-    if not result:
-        for cells in table_rows_text:
-            try:
-                date_cell = None
-                desc_cell = None
-                amount_cell = None
-                for c in cells:
-                    d = parse_date(c)
-                    if d and re.match(r'^\d{4}-\d{2}-\d{2}$', c.strip()):
-                        date_cell = d
-                        continue
-                    if re.match(r'^-?\d[\d\s]*[.,]\d{2}$', c.strip()) and amount_cell is None:
-                        amount_cell = parse_amount(c)
-                        continue
-                    if c and len(c) > 3 and re.search(r'[A-Za-zА-Яа-я]{3,}', c):
-                        if desc_cell is None:
-                            desc_cell = c
-                if date_cell and amount_cell is not None and amount_cell != 0.0 and _is_reasonable_amount(amount_cell):
-                    low = (desc_cell or '').lower()
-                    if any(w in low for w in ['balance', 'saldo', 'start', 'end', 'period']):
-                        continue
-                    cp_final, _ = extract_counterparty_smart(desc_cell or '', account_name)
-                    if not cp_final:
-                        cp_final = 'Kapital Bank'
-                    result.append({
-                        'Дата': date_cell, 'Сумма': -abs(amount_cell),
-                        'Контрагент': cp_final,
-                        'Наименование счета': account_name,
-                        'Описание': (desc_cell or '')
-                    })
-            except Exception:
-                continue
-    return result
+
+    for m in line_re.finditer(full_text):
+        date = parse_date(m.group(1))
+        if not date:
+            continue
+        # Если Məxaric = "3.000", а Mədaxil = "18656.53" — это НЕ транзакция, а
+        # строка с балансом (значения перепутаны местами). Проверим по описанию.
+        # Настоящий формат: Tarix | Məxaric | Mədaxil | Balans | Təsvir
+        # Пример: 2026-04-20 | 3.000 | 18656.53 | SMS SERVICE FEE  ← только 3 числа!
+        # Пример: 2026-04-10 | 0 | 6672.00 | 18659.53 | ...  ← 4 числа!
+
+        # Соберём все числа в строке
+        nums = re.findall(r'[\d]+(?:[.,]\d+)?', m.group(0))
+        # Первое число — дата (уже использована)
+        # nums[0] — год, nums[1] — месяц, nums[2] — день (если регулярка сработала по-другому)
+        # Проще: возьмём группы из регулярки
+        g2 = m.group(2)   # Məxaric
+        g3 = m.group(3)   # Mədaxil
+        g4 = m.group(4)   # Balans
+        desc = m.group(5).strip()
+
+        # Разбор "слипшихся" значений
+        def _split_stuck(s: str) -> Tuple[float, float]:
+            s = (s or '').strip()
+            if not s:
+                return 0.0, 0.0
+            m1 = re.fullmatch(r'(\d+)[.,](\d{2})(\d)', s)
+            if m1:
+                a = float(f"{m1.group(1)}.{m1.group(2)}")
+                b = float(m1.group(3))
+                return a, b
+            m2 = re.fullmatch(r'0(\d+[.,]\d{2})', s)
+            if m2:
+                b = float(m2.group(1).replace(',', '.'))
+                return 0.0, b
+            v = parse_amount(s)
+            return v, 0.0
+
+        d1, c1 = _split_stuck(g2)
+        d2, c2 = _split_stuck(g3)
+
+        debit_val = max(d1, d2)
+        credit_val = max(c1, c2)
+
+        amount = 0.0
+        if credit_val != 0.0 and abs(credit_val) >= abs(debit_val):
+            amount = abs(credit_val)
+        elif debit_val != 0.0:
+            amount = -abs(debit_val)
+        else:
+            continue
+
+        if not _is_reasonable_amount(amount):
+            continue
+
+        cp_final, _ = extract_counterparty_smart(desc, account_name)
+        if not cp_final:
+            cp_final = 'Kapital Bank'
+
+        result.append({
+            'Дата': date,
+            'Сумма': amount,
+            'Контрагент': cp_final,
+            'Наименование счета': account_name,
+            'Описание': desc
+        })
+
+    # Дедупликация
+    seen = set()
+    deduped = []
+    for r in result:
+        key = (r['Дата'], round(r['Сумма'], 2), r['Контрагент'], r['Описание'])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(r)
+    return deduped
 
 
-def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+# ==================== [FIX-KAPITAL] Kapital bank Saida AZN (CSV) ====================
+
+def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    CSV-парсер для Kapital bank Saida AZN (на случай, если выгрузка пойдёт в CSV).
+    Ожидаемый формат: Tarix;Məxaric;Mədaxil;Balans;Təsvir;Код
+    """
     result = []
-    tables = pdf_all_tables(file_content)
-    for table in tables:
-        for row in table:
-            if len(row) < 5:
-                continue
-            try:
-                date = parse_date(row[0])
-                if not date:
-                    continue
-                amount = parse_amount(row[1])
-                desc = row[4] if len(row) > 4 else ''
-                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-                    continue
-                low = (desc or '').lower()
-                if any(w in low for w in ['balance', 'saldo', 'start', 'end', 'period']):
-                    continue
-                cp_final, _ = extract_counterparty_smart(desc, account_name)
-                if not cp_final:
-                    cp_final = 'Kapital Bank'
-                result.append({
-                    'Дата': date, 'Сумма': -abs(amount),
-                    'Контрагент': cp_final,
-                    'Наименование счета': account_name,
-                    'Описание': desc
-                })
-            except Exception:
-                continue
-    if not result:
-        full_text = pdf_all_text(file_content)
-        pattern = re.compile(
-            r'(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})\s+'
-            r'([\d\s]+[.,]\d{1,2})\s+'
-            r'([\d\s]+[.,]\d{1,2})\s+'
-            r'([\d\s]+[.,]\d{1,2})\s+'
-            r'([A-Za-z][A-Za-z0-9\s\-\./]{2,500})',
-            re.MULTILINE
-        )
-        for m in pattern.finditer(full_text):
-            try:
-                date = parse_date(m.group(1).strip())
-                amount = parse_amount(m.group(2).strip())
-                desc = m.group(5).strip()
-                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-                    continue
-                cp_final, _ = extract_counterparty_smart(desc, account_name)
-                if not cp_final:
-                    cp_final = 'Kapital Bank'
-                result.append({
-                    'Дата': date, 'Сумма': -abs(amount),
-                    'Контрагент': cp_final,
-                    'Наименование счета': account_name,
-                    'Описание': desc
-                })
-            except Exception:
-                continue
+    content = read_text_with_encoding(file_content)
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+    if not lines:
+        return []
+
+    # Определяем разделитель
+    sample = '\n'.join(lines[:5])
+    sep = ';' if sample.count(';') >= sample.count(',') else ','
+
+    # Ищем заголовок
+    header_idx = -1
+    for i, l in enumerate(lines[:30]):
+        low = l.lower()
+        if 'tarix' in low and ('məxaric' in low or 'mexaric' in low) \
+                and ('mədaxil' in low or 'medaxil' in low):
+            header_idx = i
+            break
+    if header_idx == -1:
+        return []
+
+    hdr = _split_line(lines[header_idx], sep)
+
+    def _find_col(patterns):
+        for i, h in enumerate(hdr):
+            hl = h.lower().strip()
+            if any(p in hl for p in patterns):
+                return i
+        return -1
+
+    date_i = _find_col(['tarix'])
+    debit_i = _find_col(['məxaric', 'mexaric'])
+    credit_i = _find_col(['mədaxil', 'medaxil'])
+    desc_i = _find_col(['təsvir', 'tesvir'])
+    code_i = _find_col(['kod', 'код'])
+
+    if date_i == -1:
+        date_i = 0
+    if debit_i == -1:
+        debit_i = 1
+    if credit_i == -1:
+        credit_i = 2
+    if desc_i == -1:
+        desc_i = 4
+
+    for line in lines[header_idx + 1:]:
+        parts = _split_line(line, sep)
+        if len(parts) <= max(date_i, debit_i, credit_i):
+            continue
+        # Пропускаем повторный заголовок
+        joined_low = ' '.join(parts).lower()
+        if 'tarix' in joined_low and ('məxaric' in joined_low or 'mədaxil' in joined_low):
+            continue
+
+        date = parse_date(parts[date_i])
+        if not date or not re.match(r'^\d{2}-\d{2}-\d{4}$', date):
+            continue
+
+        debit_val = parse_amount(parts[debit_i]) if debit_i < len(parts) else 0.0
+        credit_val = parse_amount(parts[credit_i]) if credit_i < len(parts) else 0.0
+
+        amount = 0.0
+        if credit_val != 0.0 and abs(credit_val) > abs(debit_val):
+            amount = abs(credit_val)
+        elif debit_val != 0.0:
+            amount = -abs(debit_val)
+        elif credit_val != 0.0:
+            amount = abs(credit_val)
+        else:
+            continue
+
+        if not _is_reasonable_amount(amount):
+            continue
+
+        desc = parts[desc_i] if desc_i < len(parts) else ''
+        if code_i >= 0 and code_i < len(parts) and parts[code_i]:
+            desc = f"{desc} | {parts[code_i]}" if desc else parts[code_i]
+
+        cp_final, _ = extract_counterparty_smart(desc, account_name)
+        if not cp_final:
+            cp_final = 'Kapital Bank'
+
+        result.append({
+            'Дата': date, 'Сумма': amount,
+            'Контрагент': cp_final,
+            'Наименование счета': account_name,
+            'Описание': desc
+        })
     return result
 
 
@@ -5580,12 +5844,17 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== МАРШРУТИЗАЦИЯ ====================
+# ==================== [FIX-KAPITAL] МАРШРУТИЗАЦИЯ ====================
 
 def get_parser_by_ext(account_name: str, ext: str):
     low = account_name.lower()
 
+    # --- Kapital bank Saida AZN: отдельные парсеры для XLSX / PDF / CSV ---
+    is_kapital_saida = ('kapital' in low) or ('saida' in low and 'azn' in low)
+
     if ext == '.pdf':
+        if is_kapital_saida:
+            return parse_kapital_saida_pdf, 'kapital_saida_pdf'
         if 'regina alfa' in low:
             return parse_regina_alfa_pdf, 'regina_alfa_pdf'
         if 'tinkoff' in low:
@@ -5596,8 +5865,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_jenhor_unelma_pdf, 'jenhor_unelma_pdf'
         if 'industra' in low or 'plavas' in low or 'kl59' in low or 'p1 statement' in low:
             return parse_industra_pdf, 'industra_pdf'
-        if 'kapital' in low or ('saida' in low and 'azn' in low):
-            return parse_kapital_saida_pdf, 'kapital_saida_pdf'
         if 'mashreq' in low or 'nomiqa' in low:
             return parse_mashreq_pdf, 'mashreq_pdf'
         if 'mkb' in low or 'budapest' in low:
@@ -5619,6 +5886,8 @@ def get_parser_by_ext(account_name: str, ext: str):
         return parse_pdf_universal, 'pdf_universal'
 
     if ext == '.docx':
+        if is_kapital_saida:
+            return parse_kapital_saida_docx, 'kapital_saida_docx'
         if 'regina alfa' in low:
             return parse_regina_alfa_docx, 'regina_alfa_docx'
         if 'tinkoff' in low:
@@ -5629,11 +5898,12 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_n26_docx, 'n26_docx'
         if 'paysera' in low:
             return parse_paysera_docx, 'paysera_docx'
-        if 'kapital' in low or ('saida' in low and 'azn' in low):
-            return parse_kapital_saida_docx, 'kapital_saida_docx'
         return parse_docx_universal, 'docx_universal'
 
     if ext in ('.xlsx', '.xls'):
+        if is_kapital_saida:
+            # [FIX-KAPITAL-XLSX] Для XLSX — специальный парсер!
+            return parse_kapital_saida_xlsx, 'kapital_saida_xlsx'
         if 'revolut' in low:
             if 'nb rev' in low or 'nb_rev' in low:
                 return parse_revolut_nb, 'revolut_nb'
@@ -5680,8 +5950,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             if 'kl59' in low:
                 return parse_industra_kl59, 'industra_kl59'
             return parse_industra_an14, 'industra_an14'
-        if 'kapital' in low or ('saida' in low and 'azn' in low):
-            return parse_kapital_saida_azn_csv, 'kapital_saida_azn_csv'
         if 'mashreq' in low or ('nomiqa' in low and 'aed' in low):
             return parse_mashreq, 'mashreq'
         if 'budapest huf' in low or ('mkb' in low and 'huf' in low):
@@ -5729,6 +5997,8 @@ def get_parser_by_ext(account_name: str, ext: str):
         return parse_xlsx_universal, 'xlsx_universal'
 
     if ext == '.csv':
+        if is_kapital_saida:
+            return parse_kapital_saida_azn_csv, 'kapital_saida_azn_csv'
         if 'revolut' in low:
             if 'nb rev' in low or 'nb_rev' in low:
                 return parse_revolut_nb, 'revolut_nb'
@@ -5775,8 +6045,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             if 'kl59' in low:
                 return parse_industra_kl59, 'industra_kl59'
             return parse_industra_an14, 'industra_an14'
-        if 'kapital' in low or ('saida' in low and 'azn' in low):
-            return parse_kapital_saida_azn_csv, 'kapital_saida_azn_csv'
         if 'mashreq' in low or ('nomiqa' in low and 'aed' in low):
             return parse_mashreq, 'mashreq'
         if 'budapest huf' in low or ('mkb' in low and 'huf' in low):
@@ -5889,10 +6157,6 @@ def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[T
 
 
 def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
-    """
-    Возвращает (список операций, отчёт).
-    Все операции уже содержат НОРМАЛИЗОВАННОЕ имя счёта.
-    """
     raw_account_name = clean_account_name(filename)
     account_name = normalize_account_name(raw_account_name)
     ext = os.path.splitext(filename)[1].lower()
@@ -5912,7 +6176,6 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
             errors.append(f'{key}: {e}')
             continue
         if tx:
-            # На всякий случай — принудительно проставляем нормализованное имя счёта
             for t in tx:
                 t['Наименование счета'] = account_name
             return tx, f'{key} ({account_name}, real={real_type}, {len(tx)} операций)'
