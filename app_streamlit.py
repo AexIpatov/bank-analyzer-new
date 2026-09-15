@@ -28,9 +28,13 @@ FIX-пакет:
   [NEW-EXCEL-NUMERIC]    — В Excel-выгрузке суммы — ЧИСЛА с форматом ячейки
                            # ##0.00 (запятая как десятичный разделитель на экране,
                            в файле — числовое значение + числовой формат).
-  [NEW-GORODETS-BG]      — Фон: цветная городецкая роспись.
+  [NEW-GORODETS-BG]      — Фон: яркая цветная городецкая роспись (сюжетная).
   [NEW-SOLID-BUTTONS]    — Кнопки объёмные тёмно-зелёные, с жирной цветной
                            обводкой по периметру, БЕЗ неонового свечения.
+  [NEW-BIG-BUTTON-FONT]  — Размер шрифта кнопок увеличен в 1.5–2 раза.
+  [NEW-SMART-COUNTERPARTY] — Полностью переписанное извлечение контрагента:
+                             учитывает банк, чистит IBAN/REF/SRN/MCC/номера,
+                             убирает служебные строки, приоритет — beneficiary.
 """
 
 import streamlit as st
@@ -60,118 +64,163 @@ st.set_page_config(
 )
 
 
-# ==================== [NEW-GORODETS-BG] ГОРОДЕЦКАЯ РОСПИСЬ — SVG-ПАТТЕРН ====================
+# ==================== [NEW-GORODETS-BG] ЯРКАЯ ГОРОДЕЦКАЯ РОСПИСЬ ====================
 #
-# Тайл 320×260 px. Мотивы Городца:
-#   • Розан      — крупный круглый цветок с лепестками и белой «оживкой».
-#   • Купавка    — цветок-бутон с завитками и оживкой.
-#   • Бутоны     — маленькие цветки на веточках.
-#   • Листья     — перистые листочки.
-#   • Ягодки     — мелкие точки-горошины.
-#   • Веточки    — плавные дуги.
-# Общая прозрачность группы — 0.32 (мягкий, не отвлекающий фон).
+# Тайл 480×420 px. Крупный сюжет: розан, купавка, птица-павлин, конь,
+# листья, ягодки, завитки. Палитра — насыщенная: красный, синий, жёлтый,
+# зелёный, оранжевый, розовый. Прозрачность группы — 0.55 (яркий фон).
 
 _GORODETS_SVG = (
-    "<svg xmlns='http://www.w3.org/2000/svg' width='320' height='260'>"
-    "<defs><pattern id='gorodets' x='0' y='0' width='320' height='260' "
+    "<svg xmlns='http://www.w3.org/2000/svg' width='480' height='420'>"
+    "<defs><pattern id='gorodets' x='0' y='0' width='480' height='420' "
     "patternUnits='userSpaceOnUse'>"
-    "<g opacity='0.32'>"
+    "<g opacity='0.55'>"
 
-    # -------------------- ВЕТОЧКИ --------------------
-    "<g fill='none' stroke='#2C3E50' stroke-width='1.4' stroke-linecap='round'>"
-    "<path d='M10 210 Q60 170 120 195 Q180 220 240 185 Q290 155 315 175'/>"
-    "<path d='M5 60 Q50 30 100 55 Q150 80 200 50 Q250 20 315 45'/>"
-    "<path d='M40 130 Q90 100 140 128 Q190 156 245 128 Q285 108 315 125'/>"
-    "</g>"
-
-    # -------------------- ЛИСТЬЯ --------------------
-    "<g fill='#43A047' stroke='#2C3E50' stroke-width='1.1'>"
-    "<path d='M70 190 q10 -16 26 -10 q-2 14 -14 20 q-14 6 -12 -10 z'/>"
-    "<path d='M70 190 q12 -6 26 -10' fill='none' stroke='#2C3E50' stroke-width='0.9'/>"
-    "<path d='M200 200 q12 -14 28 -8 q-2 14 -14 20 q-14 6 -14 -12 z'/>"
-    "<path d='M200 200 q14 -6 28 -8' fill='none' stroke='#2C3E50' stroke-width='0.9'/>"
-    "<path d='M100 45 q10 -14 24 -8 q-2 12 -13 18 q-12 5 -11 -10 z'/>"
-    "<path d='M245 40 q12 -12 26 -6 q-2 12 -13 18 q-13 6 -13 -12 z'/>"
-    "</g>"
-    "<g fill='#26A69A' stroke='#2C3E50' stroke-width='1.1'>"
-    "<path d='M150 175 q10 -14 24 -8 q-2 12 -13 18 q-13 6 -11 -10 z'/>"
-    "<path d='M270 195 q10 -12 22 -6 q-2 11 -12 16 q-11 5 -10 -10 z'/>"
+    # ============ ФОНОВЫЕ ВЕТОЧКИ ============
+    "<g fill='none' stroke='#2C3E50' stroke-width='2' stroke-linecap='round'>"
+    "<path d='M15 340 Q90 270 180 310 Q270 350 360 290 Q430 245 470 275'/>"
+    "<path d='M10 100 Q80 50 160 85 Q240 120 320 75 Q400 35 475 70'/>"
+    "<path d='M60 210 Q140 165 220 205 Q300 245 380 205 Q440 175 480 200'/>"
+    "<path d='M0 400 Q100 370 200 395 Q320 425 480 385'/>"
     "</g>"
 
-    # -------------------- РОЗАН --------------------
-    "<g transform='translate(90,110)'>"
-    "<circle r='26' fill='#E91E63' stroke='#2C3E50' stroke-width='1.6'/>"
-    "<circle r='18' fill='#F48FB1' stroke='#2C3E50' stroke-width='1.2'/>"
-    "<circle r='10' fill='#FBC02D' stroke='#2C3E50' stroke-width='1.1'/>"
-    "<circle r='4' fill='#E53935' stroke='#2C3E50' stroke-width='1'/>"
-    "<g fill='#FFFFFF' opacity='0.95'>"
-    "<circle cx='-16' cy='-8' r='2.4'/><circle cx='-18' cy='6' r='2.4'/>"
-    "<circle cx='-6' cy='-16' r='2.4'/><circle cx='8' cy='-16' r='2.4'/>"
-    "<circle cx='16' cy='-6' r='2.4'/><circle cx='17' cy='8' r='2.4'/>"
-    "<circle cx='6' cy='17' r='2.4'/><circle cx='-7' cy='17' r='2.4'/>"
+    # ============ ЛИСТЬЯ ============
+    "<g fill='#43A047' stroke='#1B5E20' stroke-width='1.6'>"
+    "<path d='M110 305 q16 -26 42 -16 q-4 24 -22 32 q-22 10 -20 -16 z'/>"
+    "<path d='M110 305 q20 -10 42 -16' fill='none' stroke='#1B5E20' stroke-width='1.3'/>"
+    "<path d='M300 320 q18 -24 46 -14 q-4 24 -24 32 q-24 10 -22 -18 z'/>"
+    "<path d='M300 320 q22 -10 46 -14' fill='none' stroke='#1B5E20' stroke-width='1.3'/>"
+    "<path d='M160 70 q16 -22 38 -12 q-4 20 -20 28 q-20 8 -18 -16 z'/>"
+    "<path d='M380 60 q18 -20 40 -10 q-4 20 -22 28 q-22 8 -18 -18 z'/>"
     "</g>"
+    "<g fill='#26A69A' stroke='#00695C' stroke-width='1.6'>"
+    "<path d='M240 285 q16 -22 40 -12 q-4 20 -22 28 q-22 8 -18 -16 z'/>"
+    "<path d='M420 300 q16 -20 36 -10 q-4 20 -20 26 q-18 8 -16 -16 z'/>"
+    "<path d='M60 190 q16 -20 38 -10 q-4 20 -22 28 q-22 8 -16 -18 z'/>"
     "</g>"
 
-    # -------------------- КУПАВКА --------------------
-    "<g transform='translate(230,90)'>"
-    "<path d='M-20 6 q0 -22 20 -30 q20 8 20 30 q0 22 -20 30 q-20 -8 -20 -30 z' "
-    "fill='#1E88E5' stroke='#2C3E50' stroke-width='1.5'/>"
-    "<path d='M-12 4 q0 -14 12 -20 q12 6 12 20 q0 14 -12 20 q-12 -6 -12 -20 z' "
-    "fill='#90CAF9' stroke='#2C3E50' stroke-width='1.1'/>"
-    "<circle cy='-6' r='6' fill='#FBC02D' stroke='#2C3E50' stroke-width='1'/>"
-    "<g fill='#FFFFFF' opacity='0.95'>"
-    "<circle cx='-8' cy='6' r='1.9'/><circle cx='8' cy='6' r='1.9'/>"
-    "<circle cx='-4' cy='18' r='1.9'/><circle cx='4' cy='18' r='1.9'/>"
-    "<circle cy='-16' r='1.9'/>"
+    # ============ РОЗАН (крупный, левый нижний) ============
+    "<g transform='translate(140,220)'>"
+    "<circle r='42' fill='#E91E63' stroke='#880E4F' stroke-width='2.4'/>"
+    "<circle r='30' fill='#F48FB1' stroke='#C2185B' stroke-width='2'/>"
+    "<circle r='18' fill='#FBC02D' stroke='#F57F17' stroke-width='1.8'/>"
+    "<circle r='8' fill='#E53935' stroke='#B71C1C' stroke-width='1.5'/>"
+    "<g fill='#FFFFFF' opacity='0.98'>"
+    "<circle cx='-26' cy='-12' r='3.6'/><circle cx='-28' cy='10' r='3.6'/>"
+    "<circle cx='-10' cy='-26' r='3.6'/><circle cx='12' cy='-26' r='3.6'/>"
+    "<circle cx='26' cy='-10' r='3.6'/><circle cx='28' cy='12' r='3.6'/>"
+    "<circle cx='10' cy='28' r='3.6'/><circle cx='-12' cy='28' r='3.6'/>"
     "</g>"
     "</g>"
 
-    # -------------------- БУТОН №1 --------------------
-    "<g transform='translate(50,40)'>"
-    "<path d='M-12 4 q0 -14 12 -20 q12 6 12 20 q0 14 -12 20 q-12 -6 -12 -20 z' "
-    "fill='#F06292' stroke='#2C3E50' stroke-width='1.3'/>"
-    "<circle cy='-4' r='4.5' fill='#FBC02D' stroke='#2C3E50' stroke-width='1'/>"
-    "<g fill='#FFFFFF' opacity='0.95'>"
-    "<circle cx='-5' cy='6' r='1.6'/><circle cx='5' cy='6' r='1.6'/>"
+    # ============ КУПАВКА (правый верх) ============
+    "<g transform='translate(370,150)'>"
+    "<path d='M-34 10 q0 -36 34 -50 q34 14 34 50 q0 36 -34 50 q-34 -14 -34 -50 z' "
+    "fill='#1E88E5' stroke='#0D47A1' stroke-width='2.2'/>"
+    "<path d='M-20 6 q0 -22 20 -32 q20 10 20 32 q0 22 -20 32 q-20 -10 -20 -32 z' "
+    "fill='#90CAF9' stroke='#1565C0' stroke-width='1.8'/>"
+    "<circle cy='-10' r='10' fill='#FBC02D' stroke='#F57F17' stroke-width='1.5'/>"
+    "<g fill='#FFFFFF' opacity='0.98'>"
+    "<circle cx='-14' cy='10' r='2.8'/><circle cx='14' cy='10' r='2.8'/>"
+    "<circle cx='-6' cy='28' r='2.8'/><circle cx='6' cy='28' r='2.8'/>"
+    "<circle cy='-26' r='2.8'/>"
     "</g>"
     "</g>"
 
-    # -------------------- БУТОН №2 --------------------
-    "<g transform='translate(280,230)'>"
-    "<path d='M-12 4 q0 -14 12 -20 q12 6 12 20 q0 14 -12 20 q-12 -6 -12 -20 z' "
-    "fill='#26A69A' stroke='#2C3E50' stroke-width='1.3'/>"
-    "<circle cy='-4' r='4.5' fill='#FBC02D' stroke='#2C3E50' stroke-width='1'/>"
-    "<g fill='#FFFFFF' opacity='0.95'>"
-    "<circle cx='-5' cy='6' r='1.6'/><circle cx='5' cy='6' r='1.6'/>"
+    # ============ ПТИЦА-ПАВЛИН (центр, вверху) ============
+    "<g transform='translate(240,60)'>"
+    # тело
+    "<ellipse cx='0' cy='20' rx='34' ry='20' fill='#7E57C2' stroke='#4527A0' stroke-width='2'/>"
+    # хвост
+    "<path d='M25 25 q30 -5 45 15 q-10 12 -30 10 q-20 -2 -25 -10 z' "
+    "fill='#26A69A' stroke='#00695C' stroke-width='1.8'/>"
+    "<path d='M28 30 q20 0 30 12' fill='none' stroke='#FBC02D' stroke-width='1.6'/>"
+    # голова
+    "<circle cx='-30' cy='10' r='13' fill='#E91E63' stroke='#880E4F' stroke-width='1.8'/>"
+    # клюв
+    "<path d='M-42 10 l-10 3 l10 3 z' fill='#FBC02D' stroke='#F57F17' stroke-width='1.4'/>"
+    # глаз
+    "<circle cx='-32' cy='8' r='2.6' fill='#FFFFFF'/>"
+    "<circle cx='-32' cy='8' r='1.2' fill='#1A2E1F'/>"
+    # крылья
+    "<path d='M-12 14 q18 6 36 2 q-10 14 -30 12 q-14 -2 -6 -14 z' "
+    "fill='#FBC02D' stroke='#F57F17' stroke-width='1.4'/>"
+    # перья
+    "<g fill='#FFFFFF' opacity='0.9'>"
+    "<circle cx='20' cy='35' r='2'/><circle cx='30' cy='38' r='2'/>"
+    "<circle cx='38' cy='42' r='2'/><circle cx='46' cy='45' r='2'/>"
     "</g>"
     "</g>"
 
-    # -------------------- БУТОН №3 --------------------
-    "<g transform='translate(150,235)'>"
-    "<path d='M-10 4 q0 -12 10 -17 q10 5 10 17 q0 12 -10 17 q-10 -5 -10 -17 z' "
-    "fill='#FBC02D' stroke='#2C3E50' stroke-width='1.2'/>"
-    "<circle cy='-3' r='3.6' fill='#E53935' stroke='#2C3E50' stroke-width='1'/>"
-    "<g fill='#FFFFFF' opacity='0.95'>"
-    "<circle cx='-4' cy='6' r='1.4'/><circle cx='4' cy='6' r='1.4'/>"
+    # ============ КОНЬ (правый низ) ============
+    "<g transform='translate(380,340)'>"
+    # тело
+    "<ellipse cx='0' cy='0' rx='40' ry='22' fill='#3E2723' stroke='#1B0000' stroke-width='2'/>"
+    # голова
+    "<path d='M-38 -6 q-22 -10 -30 -28 q14 -4 22 4 q10 -8 18 2 z' "
+    "fill='#5D4037' stroke='#1B0000' stroke-width='1.8'/>"
+    # ухо
+    "<path d='M-50 -34 l-4 -12 l10 6 z' fill='#5D4037' stroke='#1B0000' stroke-width='1.4'/>"
+    # глаз
+    "<circle cx='-46' cy='-24' r='2.4' fill='#FFFFFF'/>"
+    "<circle cx='-46' cy='-24' r='1' fill='#1A2E1F'/>"
+    # грива
+    "<path d='M-32 -18 q-6 6 -2 14 q6 -4 10 -8 q-4 6 -2 12 q6 -4 10 -8' "
+    "fill='none' stroke='#FBC02D' stroke-width='2' stroke-linecap='round'/>"
+    # ноги
+    "<path d='M-20 20 l-4 26 M-6 20 l0 26 M14 20 l2 26 M28 20 l6 26' "
+    "stroke='#3E2723' stroke-width='5' stroke-linecap='round'/>"
+    # хвост
+    "<path d='M40 -4 q18 -6 24 -20' fill='none' stroke='#3E2723' stroke-width='4' stroke-linecap='round'/>"
+    "</g>"
+
+    # ============ БУТОНЫ ============
+    "<g transform='translate(60,60)'>"
+    "<path d='M-18 6 q0 -22 18 -30 q18 8 18 30 q0 22 -18 30 q-18 -8 -18 -30 z' "
+    "fill='#F06292' stroke='#AD1457' stroke-width='1.8'/>"
+    "<circle cy='-8' r='7' fill='#FBC02D' stroke='#F57F17' stroke-width='1.4'/>"
+    "<g fill='#FFFFFF' opacity='0.98'>"
+    "<circle cx='-8' cy='10' r='2.4'/><circle cx='8' cy='10' r='2.4'/>"
     "</g>"
     "</g>"
 
-    # -------------------- ЯГОДКИ --------------------
-    "<g fill='#E53935' stroke='#2C3E50' stroke-width='0.8'>"
-    "<circle cx='120' cy='30' r='3'/><circle cx='128' cy='34' r='3'/>"
-    "<circle cx='124' cy='40' r='3'/>"
-    "<circle cx='210' cy='235' r='3'/><circle cx='218' cy='231' r='3'/>"
-    "<circle cx='214' cy='225' r='3'/>"
+    "<g transform='translate(450,220)'>"
+    "<path d='M-16 5 q0 -20 16 -27 q16 7 16 27 q0 20 -16 27 q-16 -7 -16 -27 z' "
+    "fill='#26A69A' stroke='#00695C' stroke-width='1.8'/>"
+    "<circle cy='-7' r='6' fill='#FBC02D' stroke='#F57F17' stroke-width='1.4'/>"
+    "<g fill='#FFFFFF' opacity='0.98'>"
+    "<circle cx='-7' cy='9' r='2.2'/><circle cx='7' cy='9' r='2.2'/>"
     "</g>"
-    "<g fill='#FBC02D' stroke='#2C3E50' stroke-width='0.8'>"
-    "<circle cx='60' cy='250' r='2.6'/><circle cx='68' cy='246' r='2.6'/>"
-    "<circle cx='255' cy='35' r='2.6'/><circle cx='263' cy='31' r='2.6'/>"
     "</g>"
 
-    # -------------------- ЗАВИТКИ --------------------
-    "<g fill='none' stroke='#2C3E50' stroke-width='1.1' stroke-linecap='round'>"
-    "<path d='M100 100 q-16 6 -20 22 q-2 14 10 20'/>"
-    "<path d='M250 100 q16 6 20 22 q2 14 -10 20'/>"
+    "<g transform='translate(220,400)'>"
+    "<path d='M-14 5 q0 -18 14 -24 q14 6 14 24 q0 18 -14 24 q-14 -6 -14 -24 z' "
+    "fill='#FBC02D' stroke='#F57F17' stroke-width='1.6'/>"
+    "<circle cy='-5' r='5' fill='#E53935' stroke='#B71C1C' stroke-width='1.3'/>"
+    "<g fill='#FFFFFF' opacity='0.98'>"
+    "<circle cx='-6' cy='8' r='1.8'/><circle cx='6' cy='8' r='1.8'/>"
+    "</g>"
+    "</g>"
+
+    # ============ ЯГОДКИ ============
+    "<g fill='#E53935' stroke='#B71C1C' stroke-width='1.2'>"
+    "<circle cx='180' cy='45' r='4.5'/><circle cx='192' cy='52' r='4.5'/>"
+    "<circle cx='186' cy='60' r='4.5'/>"
+    "<circle cx='320' cy='380' r='4.5'/><circle cx='332' cy='374' r='4.5'/>"
+    "<circle cx='326' cy='364' r='4.5'/>"
+    "</g>"
+    "<g fill='#FBC02D' stroke='#F57F17' stroke-width='1.2'>"
+    "<circle cx='90' cy='390' r='4'/><circle cx='102' cy='384' r='4'/>"
+    "<circle cx='400' cy='55' r='4'/><circle cx='412' cy='50' r='4'/>"
+    "<circle cx='300' cy='250' r='4'/><circle cx='312' cy='244' r='4'/>"
+    "</g>"
+
+    # ============ ЗАВИТКИ ============
+    "<g fill='none' stroke='#2C3E50' stroke-width='1.8' stroke-linecap='round'>"
+    "<path d='M200 160 q-24 10 -30 34 q-4 22 16 32'/>"
+    "<path d='M340 220 q24 10 30 34 q4 22 -16 32'/>"
+    "<path d='M60 260 q-20 8 -24 28'/>"
+    "<path d='M440 130 q20 8 24 28'/>"
     "</g>"
 
     "</g></pattern></defs>"
@@ -198,13 +247,13 @@ st.markdown("""
     --border: #C8E6C9;
 }
 
-/* ---------- [NEW-GORODETS-BG] ФОН: цветная городецкая роспись ---------- */
+/* ---------- [NEW-GORODETS-BG] ФОН: яркая цветная городецкая роспись ---------- */
 .stApp {
     background-image:
         url("data:image/svg+xml;utf8,__GORODETS_SVG__"),
-        linear-gradient(180deg, #FFFDF7 0%, #FFF6E8 50%, #FDEEDC 100%);
+        linear-gradient(180deg, #FFFDF2 0%, #FFF6DE 50%, #FDEBC8 100%);
     background-repeat: repeat, no-repeat;
-    background-size: 320px 260px, cover;
+    background-size: 480px 420px, cover;
     background-attachment: fixed, fixed;
     background-position: 0 0, 0 0;
     font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
@@ -256,8 +305,10 @@ footer {visibility: hidden;}
 .hero-illustration { position: relative; z-index: 2; }
 
 /* ============================================================ */
-/* [NEW-SOLID-BUTTONS] ОБЪЁМНЫЕ ТЁМНО-ЗЕЛЁНЫЕ КНОПКИ            */
+/* [NEW-SOLID-BUTTONS] + [NEW-BIG-BUTTON-FONT]                  */
+/* ОБЪЁМНЫЕ ТЁМНО-ЗЕЛЁНЫЕ КНОПКИ                                */
 /* С жирной цветной обводкой по периметру, БЕЗ неонового свечения*/
+/* Шрифт увеличен в 1.5–2 раза по сравнению с исходным (1.25rem) */
 /* ============================================================ */
 
 .stButton > button,
@@ -268,19 +319,20 @@ footer {visibility: hidden;}
         linear-gradient(180deg, #3E8E41 0%, #1B5E20 45%, #0D3A12 100%);
     color: #FFFFFF !important;
     /* Жирная золотисто-жёлтая обводка по периметру */
-    border: 3px solid #FBC02D;
-    border-radius: 16px;
-    padding: 1rem 2.1rem;
+    border: 4px solid #FBC02D;
+    border-radius: 18px;
+    padding: 1.4rem 2.6rem;
     font-weight: 800;
-    font-size: 1.25rem !important;
-    letter-spacing: 0.4px;
+    font-size: 1.9rem !important;
+    letter-spacing: 0.5px;
+    line-height: 1.15;
     text-shadow: 0 2px 4px rgba(0,0,0,0.60);
     /* Объём: внутренний блик сверху, внутреннее затемнение снизу, внешняя тень */
     box-shadow:
-        inset 0 3px 0 rgba(255,255,255,0.35),
-        inset 0 -6px 0 rgba(0,0,0,0.45),
-        0 8px 18px rgba(0,0,0,0.35),
-        0 4px 0 #0D3A12;
+        inset 0 4px 0 rgba(255,255,255,0.35),
+        inset 0 -7px 0 rgba(0,0,0,0.45),
+        0 10px 22px rgba(0,0,0,0.35),
+        0 5px 0 #0D3A12;
     transition: transform 0.15s ease, filter 0.20s ease, box-shadow 0.20s ease;
     animation: none !important;
     transform: translateZ(0);
@@ -291,10 +343,10 @@ footer {visibility: hidden;}
     transform: translateY(-2px);
     filter: brightness(1.10) saturate(1.10);
     box-shadow:
-        inset 0 3px 0 rgba(255,255,255,0.45),
-        inset 0 -6px 0 rgba(0,0,0,0.50),
-        0 12px 22px rgba(0,0,0,0.40),
-        0 5px 0 #0D3A12;
+        inset 0 4px 0 rgba(255,255,255,0.45),
+        inset 0 -7px 0 rgba(0,0,0,0.50),
+        0 14px 26px rgba(0,0,0,0.40),
+        0 6px 0 #0D3A12;
     color: #FFFFFF !important;
 }
 
@@ -302,9 +354,9 @@ footer {visibility: hidden;}
 .stDownloadButton > button:active {
     transform: translateY(2px);
     box-shadow:
-        inset 0 3px 0 rgba(255,255,255,0.30),
+        inset 0 4px 0 rgba(255,255,255,0.30),
         inset 0 -3px 0 rgba(0,0,0,0.45),
-        0 4px 10px rgba(0,0,0,0.30),
+        0 5px 12px rgba(0,0,0,0.30),
         0 1px 0 #0D3A12;
     filter: brightness(0.95);
 }
@@ -314,12 +366,12 @@ footer {visibility: hidden;}
     background:
         radial-gradient(circle at 30% 22%, rgba(255,255,255,0.45), rgba(255,255,255,0) 60%),
         linear-gradient(180deg, #C62828 0%, #8E0000 45%, #5C0000 100%);
-    border: 3px solid #FBC02D;
+    border: 4px solid #FBC02D;
     box-shadow:
-        inset 0 3px 0 rgba(255,255,255,0.35),
-        inset 0 -6px 0 rgba(0,0,0,0.45),
-        0 8px 18px rgba(0,0,0,0.35),
-        0 4px 0 #5C0000;
+        inset 0 4px 0 rgba(255,255,255,0.35),
+        inset 0 -7px 0 rgba(0,0,0,0.45),
+        0 10px 22px rgba(0,0,0,0.35),
+        0 5px 0 #5C0000;
 }
 
 /* --- Кнопка внутри file_uploader --- */
@@ -337,8 +389,9 @@ footer {visibility: hidden;}
     color: var(--ink) !important;
     border: 2px solid var(--grass-accent) !important;
     border-radius: 12px !important;
-    font-size: 1.15rem !important;
+    font-size: 1.6rem !important;
     font-weight: 700 !important;
+    padding: 0.9rem 1.8rem !important;
     animation: none !important;
     text-shadow: none !important;
     box-shadow: 0 3px 10px rgba(27,94,32,0.20) !important;
@@ -533,6 +586,15 @@ def parse_date(date_str) -> str:
         s = s[:-2]
     if s.isdigit() and len(s) == 8:
         return f"{s[6:8]}-{s[4:6]}-{s[:4]}"
+    # Excel serial date (5 цифр, 40000..50000)
+    if s.isdigit() and len(s) == 5 and 40000 <= int(s) <= 50000:
+        try:
+            from datetime import timedelta
+            base = datetime(1899, 12, 30)
+            d = base + timedelta(days=int(s))
+            return d.strftime("%d-%m-%Y")
+        except Exception:
+            pass
     m = re.match(r'^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$', s)
     if m:
         d, mo, y = m.groups()
@@ -553,6 +615,10 @@ def parse_date(date_str) -> str:
     if m:
         y, mo, d = m.groups()
         return f"{d}-{mo}-{y}"
+    m = re.match(r'^(\d{1,2})-(\d{1,2})-(\d{4})$', s)
+    if m:
+        d, mo, y = m.groups()
+        return f"{d.zfill(2)}-{mo.zfill(2)}-{y}"
     for fmt in ["%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d-%b-%y"]:
         try:
             return datetime.strptime(s, fmt).strftime("%d-%m-%Y")
@@ -608,10 +674,6 @@ def parse_amount(amount_str) -> float:
 
 
 def format_amount(amount: float) -> str:
-    """
-    Формат отображения на экране: '0,00' — запятая как десятичный,
-    пробел между разрядами. Пример: '1 234,56', '-45,00', '0,00'.
-    """
     if amount is None:
         return "0,00"
     try:
@@ -633,7 +695,6 @@ def format_amount(amount: float) -> str:
 
 
 def to_float_amount(v) -> float:
-    """Приводит любое значение к float. Используется в экспорте."""
     if v is None:
         return 0.0
     if isinstance(v, (int, float)):
@@ -646,9 +707,7 @@ def to_float_amount(v) -> float:
     s = str(v).strip()
     if not s or s.lower() in ('nan', 'none', 'null'):
         return 0.0
-    # Убираем пробелы-разделители разрядов
     s = s.replace('\xa0', '').replace('\u202f', '').replace(' ', '')
-    # Если есть и точка, и запятая — считаем, что последняя из них — десятичный разделитель
     if ',' in s and '.' in s:
         if s.rfind('.') < s.rfind(','):
             s = s.replace('.', '').replace(',', '.')
@@ -669,13 +728,6 @@ def safe_str(v) -> str:
 
 
 # ==================== [NEW-TRANSLATE-INLINE] ПЕРЕВОД ОПИСАНИЙ ====================
-#
-# Логика:
-#   translate_description_inline(original) -> "original (перевод)"  — если перевод есть;
-#   translate_description_inline(original) -> "original"            — если перевода нет.
-#
-# Оригинал НИКОГДА не изменяется. Перевод добавляется только в круглых скобках
-# в ту же ячейку.
 
 _TRANSLATION_DICT: Dict[str, str] = {
     # ---------- English ----------
@@ -736,6 +788,8 @@ _TRANSLATION_DICT: Dict[str, str] = {
     "internal transfer": "внутренний перевод",
     "external transfer": "внешний перевод",
     "card": "карта",
+    "outgoing": "исходящий",
+    "incoming": "входящий",
 
     # ---------- Czech (CS) ----------
     "vklad hotovosti": "внесение наличных",
@@ -869,7 +923,6 @@ _TRANSLATION_DICT: Dict[str, str] = {
     "számlavezetési díj": "сбор за ведение счёта",
 }
 
-
 _TRANSLATE_KEYS_SORTED = sorted(_TRANSLATION_DICT.keys(), key=len, reverse=True)
 _TRANSLATE_PATTERN = re.compile(
     r'(?<![A-Za-zÀ-ÖØ-öø-ÿĀ-žА-Яа-я])'
@@ -894,10 +947,6 @@ def translate_to_russian(text: str) -> str:
 
 
 def translate_description_inline(original: str) -> str:
-    """
-    [NEW-TRANSLATE-INLINE] "оригинал (перевод)" — если перевод есть;
-    иначе — оригинал без изменений.
-    """
     if original is None:
         return ""
     orig = str(original).strip()
@@ -912,67 +961,537 @@ def translate_description_inline(original: str) -> str:
     return f"{orig} ({translated})"
 
 
-# ==================== ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
+# ==================== [NEW-SMART-COUNTERPARTY] ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
+#
+# Полностью переписанная логика. Работает в двух режимах:
+#   1) Специализированные правила для конкретного банка (по 'Наименование счета').
+#   2) Универсальные правила с приоритетом: beneficiary -> payer -> паттерны.
+#
+# На выходе — «чистое» имя контрагента без IBAN/SWIFT/REF/SRN/MCC/номеров.
+
+# --- Служебные банковские строки (не контрагенты) ---
+_BANK_SERVICE_MARKERS = [
+    'начальный остаток', 'конечный остаток', 'входящий остаток', 'исходящий остаток',
+    'opening balance', 'closing balance', 'starting balance', 'ending balance',
+    'saldo počáteční', 'saldo konečné', 'sākuma atlikums', 'beigu atlikums',
+    'nyitó egyenleg', 'záró egyenleg',
+    'acc. maintenance', 'account maintenance', 'banking charges',
+    'account maintenance charges', 'netbankár havi díj', 'netbankar havi dij',
+    'subscription fee for', 'popl.', 'poplatek', 'urok do', 'úrok do',
+    'úrok', 'kamatjóváírás', 'kamat',
+    'txn fee', 'transaction fee', 'foreign exchange transaction fee',
+    'tranzakciós díj', 'tranzakcios dij', 'tranzakciós díjrész',
+    'comission', 'commission', 'charge for', 'charges',
+    'dövrün sonuna balans', 'dovrun sonuna balans',
+    'hesaba mədaxil', 'hesaba medaxil',
+    'internal payment', 'outgoing xohks payment', 'incoming swift payment',
+    'outward clearing cheque', 'online international money transfer',
+    'funds transfer charges', 'corr.bank.charges', 'value added tax - output',
+    'currency exchange', 'sEPA átutalás jóváírása', 'sepa átutalás',
+    'giro átutalás', 'bankon belüli átutalás', 'napközbeni forint átvezetés',
+    'sms service fee', 'sms service', 'metal membership',
+    'charge accounting', 'místo:', 'misto:',
+    'transfer own funds', 'перевод own funds',
+    'message', 'notprovided',
+    'bankon belüli', 'átutalás', 'jóváírása', 'terhelése',
+    'készpénzfelvétel', 'készpénzbefizetés',
+    'atm withdrawal', 'atm', 'cash withdrawal', 'cash deposit',
+    'card payment', 'pos payment',
+]
+
+
+def _is_service_description(desc: str) -> bool:
+    if not desc:
+        return False
+    low = desc.lower().strip()
+    # Точное совпадение или короткая служебная строка
+    for m in _BANK_SERVICE_MARKERS:
+        if m in low:
+            return True
+    return False
+
+
+# --- Мусорные подстроки, которые надо вырезать из имени ---
+_JUNK_PATTERNS = [
+    r'\b[A-Z]{2}\d{2}[A-Z0-9]{10,}\b',               # IBAN
+    r'\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2,5}\b',            # SWIFT/BIC
+    r'\bREF\b[^\s]*', r'\bSRN\b[^\s]*', r'\bREC\b[^\s]*',
+    r'\bROC\b[^\s]*', r'\bMCC\d+\b', r'\bTOC-[A-Z0-9\-]+\b',
+    r'\bT_[A-F0-9]{10,}\b',
+    r'\b\d{10,}\b',                                   # длинные числа
+    r'\+\d[\d\s\(\)\-]{6,}',                          # телефоны
+    r'\b[A-Z]{2}\d{2}[A-Z]{4}\d{10,}\b',              # счёт с префиксом
+    r'\bLV\d{2}[A-Z]{4}\d{10,}\b',
+    r'\bLT\d{2}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b',
+    r'\bEE\d{2}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b',
+    r'\bAZ\d{2}[A-Z]{4}\d{16,}\b',
+    r'\bAE\d{2}\s?\d{3,}\b',
+    r'\b[A-Z]{2}\d{2}\s?[A-Z0-9 ]{10,}\b',
+    r'_x000D_', r'\r', r'\n',
+    r'\b[A-Z0-9]{4,}\*[A-Z0-9]+\b',                   # FACEBK *XXXX
+]
+
+
+def _strip_junk(s: str) -> str:
+    if not s:
+        return ''
+    out = s
+    for pat in _JUNK_PATTERNS:
+        out = re.sub(pat, ' ', out, flags=re.IGNORECASE)
+    out = re.sub(r'[\*\|<>]+', ' ', out)
+    out = re.sub(r'[,;:]+', ' ', out)
+    out = re.sub(r'\s+', ' ', out).strip(' .,;:-–—')
+    return out
+
 
 def _clean_counterparty_name(name: str) -> str:
+    """
+    Очищает имя контрагента от мусора, но НЕ режет составные имена
+    (Adobe Systems Software остаётся целиком).
+    """
     if not name:
         return ''
-    s = name.strip()
-    for sep in ['•', '|', ';', ' — ', ' – ', '  -  ']:
+    s = str(name).strip()
+    s = _strip_junk(s)
+    # Убираем "хвосты" после разделителей, если они выглядят как служебные
+    for sep in [' | ', ' • ', ' — ', ' – ']:
         if sep in s:
-            s = s.split(sep)[0].strip()
-    s = re.sub(r'\s+(Apmaksa|Rēķins|Rek\.|Inv\.|Invoice|Details|Реквизиты)\b.*$',
-               '', s, flags=re.IGNORECASE)
-    s = re.sub(r'\s*\([^)]*\)\s*$', '', s)
-    s = s.strip(' .,;:-')
+            parts = [p.strip() for p in s.split(sep) if p.strip()]
+            # Оставляем самую длинную часть, которая не является служебной
+            candidates = [p for p in parts if not _is_service_description(p)]
+            if candidates:
+                candidates.sort(key=len, reverse=True)
+                s = candidates[0]
+            else:
+                s = parts[0]
+            break
+    s = re.sub(r'\s*\([^)]*\)\s*$', '', s).strip()
+    s = s.strip(' .,;:-–—')
+    if len(s) < 2:
+        return ''
+    if re.fullmatch(r'[\d\s.,\-]+', s):
+        return ''
     return s
 
 
-def extract_counterparty_from_description(description: str,
-                                          payer: str = '',
-                                          beneficiary: str = '') -> Tuple[str, str]:
+def _looks_like_bank_name(s: str) -> bool:
+    if not s:
+        return False
+    low = s.lower()
+    bank_words = [
+        'bank', 'payments', 'finance', 'revolut', 'paysera', 'wise',
+        'sepa', 'transfer', 'csob', 'unicredit', 'tinkoff', 'bluor',
+        'industra', 'pasha', 'mashreq', 'wio', 'n26', 'mkb', 'fio',
+        'kapital', 'rak', 'fio banka',
+    ]
+    return any(w in low for w in bank_words)
+
+
+# --- Паттерны для извлечения имени ---
+_NAME_PATTERNS = [
+    # "Money added from X", "Money received from X", "From X"
+    (r'\bMoney added from\s+(.+)$', 1),
+    (r'\bMoney received from\s+(.+)$', 1),
+    (r'\bMoney sent to\s+(.+)$', 1),
+    (r'^\s*From\s+(.+)$', 1),
+    (r'^\s*To\s+(.+)$', 1),
+    # "списана <NAME>", "списан <NAME>"
+    (r'\bсписан[ао]?\s+(?:на\s+сумму\s+[\d\s.,]+\s*[A-Z]{0,3},?\s*)?(.+)$', 1),
+    # "оплата <NAME>", "платёж <NAME>"
+    (r'\bоплата\s+(.+)$', 1),
+    # "перевод в адрес <NAME>"
+    (r'\bперевод\s+в\s+адрес\s+(.+)$', 1),
+    # "Payment to X", "Transfer to X", "Paid to X", "Sent to X"
+    (r'\b(?:payment|transfer|paid|sent)\s+to\s+(.+)$', 1),
+    # "From: X", "To: X"
+    (r'\bFrom:\s*(.+)$', 1),
+    (r'\bTo:\s*(.+)$', 1),
+    # "at <NAME>" — для карточных операций
+    (r'\bсписана\s+(?:у\s+)?(.+)$', 1),
+]
+
+
+def _extract_name_by_patterns(desc: str) -> str:
+    if not desc:
+        return ''
+    for pat, grp in _NAME_PATTERNS:
+        m = re.search(pat, desc, re.IGNORECASE)
+        if m:
+            cand = m.group(grp).strip()
+            cand = _clean_counterparty_name(cand)
+            if cand and len(cand) >= 2 and not _looks_like_bank_name(cand) \
+                    and not _is_service_description(cand):
+                return cand
+    return ''
+
+
+def _extract_wio_name(desc: str) -> str:
+    """WIO Business: описание — это и есть имя мерчанта или 'MCC *XXXX'."""
+    if not desc:
+        return ''
+    s = desc.strip()
+    # Убираем хвосты после |
+    if '|' in s:
+        # оставляем первую часть
+        s = s.split('|')[0].strip()
+    # Если это 'FACEBK *XXXX' — оставляем FACEBK
+    m = re.match(r'^([A-Za-z][A-Za-z0-9\.\-_ ]{2,40}?)\s*\*', s)
+    if m:
+        name = m.group(1).strip()
+        if name:
+            return _clean_counterparty_name(name)
+    # Если это 'GOOGLE *ADS...' — оставляем GOOGLE
+    m = re.match(r'^(GOOGLE|FACEBOOK|FACEBK|APPLE|AMAZON|MICROSOFT|TIKTOK|META|DEBCARD|VISA|MASTERCARD)\b', s, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    # Иначе — первые 3-4 слова до цифр/служебных
+    s = _strip_junk(s)
+    if not s:
+        return ''
+    # Обрезаем по первому служебному слову
+    words = s.split()
+    out = []
+    for w in words:
+        if re.fullmatch(r'[\d.,\-]+', w):
+            continue
+        if w.lower() in ('for', 'internationalcardspend', 'and', 'the', 'of'):
+            break
+        out.append(w)
+        if len(out) >= 4:
+            break
+    return _clean_counterparty_name(' '.join(out))
+
+
+def _extract_pasha_name(desc: str) -> str:
+    """Pasha Bank: 'Salary and other Payments: SALARY AMOUNT TRANSFER' -> 'BUNDA LLC' (из отдельной колонки)."""
+    if not desc:
+        return ''
+    s = desc.strip()
+    low = s.lower()
+    # Служебные
+    if low.startswith('charge for'):
+        return 'Pasha Bank'
+    if 'currency exchange' in low:
+        return 'Pasha Bank'
+    if low.startswith('internal payment'):
+        # 'Internal payment DOVLET VERGI XIDMETI' -> DOVLET VERGI XIDMETI
+        m = re.match(r'internal payment\s+(.+)$', s, re.IGNORECASE)
+        if m:
+            return _clean_counterparty_name(m.group(1))
+        return 'Pasha Bank'
+    if low.startswith('outgoing xohks payment'):
+        m = re.match(r'outgoing xohks payment\s+(.+)$', s, re.IGNORECASE)
+        if m:
+            return _clean_counterparty_name(m.group(1))
+        return 'Pasha Bank'
+    if low.startswith('salary and other payments'):
+        return 'Salary transfer'
+    if 'hesaba mədaxil' in low or 'hesaba medaxil' in low:
+        return 'Cash deposit'
+    if 'korpon' in low or 'terminalindan' in low:
+        return 'Cash deposit'
+    if 'dövrün sonuna balans' in low or 'dovrun sonuna balans' in low:
+        return ''
+    return _clean_counterparty_name(s)
+
+
+def _extract_mashreq_name(desc: str) -> str:
+    """Mashreq: 'IPP TRANSFER ... - NAME - /REF/ ...' -> NAME."""
+    if not desc:
+        return ''
+    s = desc.strip()
+    low = s.lower()
+    if 'outward clearing cheque' in low:
+        return 'Outward clearing cheque'
+    if 'inward remittance' in low:
+        return 'Inward remittance'
+    if 'value added tax' in low:
+        return 'VAT'
+    if 'corr.bank.charges' in low:
+        return 'Corr. bank charges'
+    if 'online international money transfer' in low:
+        return 'Online transfer'
+    if 'funds transfer charges' in low:
+        return 'Funds transfer charges'
+    # 'IPP TRANSFER AE... - NOMIQA REAL ESTATE LLC - /REF/ ...'
+    m = re.search(r'\bIPP\s+TRANSFER\b[^\-]*-\s*(.+?)\s*-\s*/', s, re.IGNORECASE)
+    if m:
+        return _clean_counterparty_name(m.group(1))
+    m = re.search(r'-\s*([A-Z][A-Z\s\.\&]{3,60}?)\s*-\s*/', s)
+    if m:
+        return _clean_counterparty_name(m.group(1))
+    return ''
+
+
+def _extract_regina_alfa_name(desc: str) -> str:
+    """Regina Alfa: 'CRD_XXXX Операция по карте: ..., MCC####' или 'C###### Перевод ...'."""
+    if not desc:
+        return ''
+    s = desc.strip()
+    # CRD_XXXX -> операция по карте
+    m = re.match(r'^(CRD_[A-Z0-9]+)', s)
+    if m:
+        # Ищем MCC#### или место
+        mcc = re.search(r'MCC(\d{4})', s)
+        place = re.search(r'место совершения операции:\s*([^,]+?)(?:,|$)', s)
+        if place:
+            place_s = place.group(1).strip()
+            place_s = re.sub(r'^\d+\\?[A-Z]*\\?', '', place_s)
+            place_s = _clean_counterparty_name(place_s)
+            if place_s:
+                return place_s
+        if mcc:
+            return f"MCC{mcc.group(1)}"
+        return 'Card payment'
+    # C###### Перевод ...
+    m = re.match(r'^(C\d{10,})', s)
+    if m:
+        # Ищем адресата в описании
+        m2 = re.search(r'через Систему быстрых платежей (?:от|на)\s+([^\.]+)', s)
+        if m2:
+            return _clean_counterparty_name(m2.group(1))
+        return 'СБП перевод'
+    return ''
+
+
+def _extract_wise_name(desc: str) -> str:
+    """Wise: 'Транзакция по карте на сумму X, списана <NAME>' -> <NAME>."""
+    if not desc:
+        return ''
+    m = re.search(r'списан[ао]?\s+(.+?)(?:\s*\(|$)', desc, re.IGNORECASE)
+    if m:
+        return _clean_counterparty_name(m.group(1))
+    return ''
+
+
+def _extract_revolut_name(desc: str, account_name: str = '') -> str:
+    """Revolut: 'Money added from X', 'From X | ...', 'To X'."""
+    if not desc:
+        return ''
+    m = re.search(r'\bMoney added from\s+(.+?)(?:\s*\||$)', desc, re.IGNORECASE)
+    if m:
+        return _clean_counterparty_name(m.group(1))
+    m = re.search(r'^\s*From\s+(.+?)(?:\s*\||$)', desc, re.IGNORECASE)
+    if m:
+        return _clean_counterparty_name(m.group(1))
+    m = re.search(r'^\s*To\s+(.+?)(?:\s*\||$)', desc, re.IGNORECASE)
+    if m:
+        return _clean_counterparty_name(m.group(1))
+    return ''
+
+
+def _extract_csob_name(desc: str) -> str:
+    """CSOB: 'Acc. maintenance, statements and trans.' -> CSOB."""
+    if not desc:
+        return ''
+    low = desc.lower()
+    if 'acc. maintenance' in low or 'account maintenance' in low:
+        return 'ČSOB'
+    if 'charge' in low and len(desc) < 40:
+        return 'ČSOB'
+    return ''
+
+
+def _extract_unicredit_name(desc: str) -> str:
+    """UniCredit: 'POPL.*', 'UROK DO ...' -> UniCredit."""
+    if not desc:
+        return ''
+    low = desc.lower()
+    if low.startswith('popl.') or 'popl.' in low:
+        return 'UniCredit Bank'
+    if low.startswith('urok do') or 'urok do' in low:
+        return 'UniCredit Bank'
+    if 'vklad na bankomatu' in low:
+        return 'UniCredit Bank'
+    return ''
+
+
+def _extract_bluor_name(desc: str) -> str:
+    """BluOr: 'Banking charges...', 'Bank charges...', 'Комиссия банка...' -> BluOr Bank."""
+    if not desc:
+        return ''
+    low = desc.lower()
+    if 'banking charges' in low or 'bank charges' in low or 'комиссия банка' in low:
+        return 'BluOr Bank'
+    if 'commission' in low and 'bluor' in low:
+        return 'BluOr Bank'
+    return ''
+
+
+def _extract_mkb_name(desc: str) -> str:
+    """MKB (Budapest): 'NetBankár havi díj', 'GIRO átutalás', 'Bankon belüli átutalás'."""
+    if not desc:
+        return ''
+    low = desc.lower()
+    if 'netbankár havi díj' in low or 'netbankar havi dij' in low:
+        return 'MKB'
+    if 'tranzakciós díj' in low or 'tranzakcios dij' in low:
+        return 'MKB'
+    if 'giro átutalás' in low or 'giro atutalas' in low:
+        return 'MKB'
+    if 'bankon belüli' in low:
+        return 'MKB'
+    if 'napközbeni forint' in low or 'napkozbeni forint' in low:
+        return 'MKB'
+    return ''
+
+
+def _extract_tinkoff_name(desc: str) -> str:
+    if not desc:
+        return ''
+    low = desc.lower()
+    if 'внутренний перевод' in low:
+        return 'Внутренний перевод'
+    if 'внешний перевод' in low:
+        return 'Внешний перевод'
+    if 'перевод себе' in low:
+        return 'Перевод себе'
+    if 'плата за' in low:
+        return 'Т-Банк'
+    if 'перевод' in low:
+        return 'Перевод'
+    return ''
+
+
+def _extract_paysera_name(desc: str) -> str:
+    """Paysera: 'BV02/2026', 'INV-2026-0078/R' -> это референсы, контрагент в отдельной колонке."""
+    return ''
+
+
+def _extract_industra_name(desc: str) -> str:
+    if not desc:
+        return ''
+    low = desc.lower()
+    if 'комиссия за обслуживание' in low:
+        return 'Industra Bank'
+    if 'комиссия за банковскую операцию' in low:
+        return 'Industra Bank'
+    return ''
+
+
+def _extract_kapital_name(desc: str) -> str:
+    if not desc:
+        return ''
+    low = desc.lower()
+    if 'sms service' in low:
+        return 'Kapital Bank'
+    return ''
+
+
+# --- Основная функция ---
+
+def extract_counterparty_smart(description: str,
+                                account_name: str = '',
+                                payer: str = '',
+                                beneficiary: str = '') -> Tuple[str, str]:
+    """
+    Возвращает (контрагент, описание_оригинал).
+    Приоритет:
+      1) Явные колонки payer/beneficiary (если не банк).
+      2) Специализированные правила по банку из account_name.
+      3) Универсальные паттерны.
+      4) Первое «осмысленное» имя из описания.
+    """
     desc = (description or '').strip()
+    acc_low = (account_name or '').lower()
+
+    # --- 1. Явные колонки ---
+    if beneficiary:
+        b = beneficiary.strip()
+        if b and b.lower() not in ('nan', 'none', 'n/a', '-') and not _looks_like_bank_name(b):
+            return (_clean_counterparty_name(b), desc)
+    if payer:
+        p = payer.strip()
+        if p and p.lower() not in ('nan', 'none', 'n/a', '-') and not _looks_like_bank_name(p):
+            return (_clean_counterparty_name(p), desc)
+
     if not desc:
         return ('', '')
 
-    if beneficiary:
-        b = beneficiary.strip()
-        if b and b.lower() not in ('nan', 'none', 'n/a'):
-            return (_clean_counterparty_name(b), desc)
+    # --- 2. Специализированные правила по банку ---
+    cp = ''
 
-    if payer:
-        p = payer.strip()
-        if p and p.lower() not in ('nan', 'none', 'n/a'):
-            pl = p.lower()
-            bank_like = any(w in pl for w in [
-                'bank', 'payments', 'finance', 'revolut', 'paysera',
-                'wise', 'sepa', 'transfer'
-            ])
-            if not bank_like:
-                return (_clean_counterparty_name(p), desc)
+    if 'wise' in acc_low or 'saida wise' in acc_low:
+        cp = _extract_wise_name(desc)
 
-    m = re.search(
-        r'\b(?:payment\s+to|transfer\s+to|paid\s+to|sent\s+to|to|from)\s+'
-        r'([A-Z0-9][^\n\r•|;]{1,500})',
-        desc, re.IGNORECASE
-    )
-    if m:
-        name_raw = m.group(1).strip()
-        name = _clean_counterparty_name(name_raw)
-        if name and len(name) >= 2 and not re.match(r'^\d+$', name):
-            return (name, desc)
+    if not cp and ('wio' in acc_low):
+        cp = _extract_wio_name(desc)
 
-    m = re.search(
-        r'\b(?:плата\s+за|оплата|перевод)\s+([A-ZА-Я0-9][^\n\r•|;]{1,500})',
-        desc, re.IGNORECASE
-    )
-    if m:
-        name_raw = m.group(1).strip()
-        name = _clean_counterparty_name(name_raw)
-        if name and len(name) >= 2:
-            return (name, desc)
+    if not cp and ('pasha' in acc_low or 'bunda' in acc_low):
+        cp = _extract_pasha_name(desc)
 
-    return ('', desc)
+    if not cp and ('mashreq' in acc_low or 'nomiqa' in acc_low):
+        cp = _extract_mashreq_name(desc)
+
+    if not cp and ('regina alfa' in acc_low):
+        cp = _extract_regina_alfa_name(desc)
+
+    if not cp and ('revolut' in acc_low):
+        cp = _extract_revolut_name(desc, account_name)
+
+    if not cp and ('csob' in acc_low or 'jenhor' in acc_low or 'jenisov' in acc_low
+                   or 'dzibik' in acc_low or 'rr ' in acc_low or 'koruna strojka' in acc_low):
+        cp = _extract_csob_name(desc)
+
+    if not cp and ('unicredit' in acc_low or 'garpiz' in acc_low or 'twohills' in acc_low
+                   or 'koruna' in acc_low or 'b1 estate' in acc_low):
+        cp = _extract_unicredit_name(desc)
+
+    if not cp and 'bluor' in acc_low:
+        cp = _extract_bluor_name(desc)
+
+    if not cp and ('mkb' in acc_low or 'budapest' in acc_low):
+        cp = _extract_mkb_name(desc)
+
+    if not cp and 'tinkoff' in acc_low:
+        cp = _extract_tinkoff_name(desc)
+
+    if not cp and 'industra' in acc_low:
+        cp = _extract_industra_name(desc)
+
+    if not cp and 'kapital' in acc_low:
+        cp = _extract_kapital_name(desc)
+
+    # --- 3. Универсальные паттерны ---
+    if not cp:
+        cp = _extract_name_by_patterns(desc)
+
+    # --- 4. Последняя попытка: первое осмысленное имя из описания ---
+    if not cp:
+        # Разбиваем по разделителям
+        parts = re.split(r'[|•;]', desc)
+        for p in parts:
+            p_clean = _strip_junk(p.strip())
+            if not p_clean or len(p_clean) < 3:
+                continue
+            if _is_service_description(p_clean):
+                continue
+            if _looks_like_bank_name(p_clean):
+                continue
+            # Если в части есть буквы и она не похожа на число/код
+            if re.search(r'[A-Za-zА-Яа-я]{3,}', p_clean) and not re.fullmatch(r'[\d\s.,\-]+', p_clean):
+                cp = _clean_counterparty_name(p_clean)
+                if cp:
+                    break
+
+    # --- 5. Если совсем ничего — ставим имя банка по account_name ---
+    if not cp:
+        # Пытаемся вытащить имя банка из account_name
+        m = re.search(r'\b(CSOB|UniCredit|Revolut|Tinkoff|Paysera|Wise|BluOr|Industra|Pasha|Mashreq|WIO|N26|MKB|FIO|Kapital|RAK|ČSOB)\b',
+                      account_name, re.IGNORECASE)
+        if m:
+            cp = m.group(1)
+        else:
+            cp = ''
+
+    return (cp, desc)
+
+
+# Обратная совместимость с вызовами старого API
+def extract_counterparty_from_description(description: str,
+                                           payer: str = '',
+                                           beneficiary: str = '') -> Tuple[str, str]:
+    return extract_counterparty_smart(description, '', payer, beneficiary)
 
 
 # ==================== ФАЙЛОВЫЕ УТИЛИТЫ ====================
@@ -1259,9 +1778,12 @@ def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
                     if not re.match(r'^[\d.,\-]+$', val):
                         description = val
                         break
+            cp_final, _ = extract_counterparty_smart(
+                description, account_name, counterparty, ''
+            )
             transactions.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': counterparty,
+                'Контрагент': cp_final,
                 'Наименование счета': account_name,
                 'Описание': description
             })
@@ -1350,7 +1872,7 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
                 amt = parse_amount(str(current_amount))
                 if amt != 0.0 and _is_reasonable_amount(amt):
                     desc_val = (current_desc or '').strip()
-                    cp, _ = extract_counterparty_from_description(desc_val)
+                    cp, _ = extract_counterparty_smart(desc_val, account_name)
                     transactions.append({
                         'Дата': parse_date(str(current_date)),
                         'Сумма': amt,
@@ -1384,7 +1906,7 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
         amt = parse_amount(str(current_amount))
         if amt != 0.0 and _is_reasonable_amount(amt):
             desc_val = (current_desc or '').strip()
-            cp, _ = extract_counterparty_from_description(desc_val)
+            cp, _ = extract_counterparty_smart(desc_val, account_name)
             transactions.append({
                 'Дата': parse_date(str(current_date)),
                 'Сумма': amt,
@@ -1433,7 +1955,7 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
                 if amt != 0.0 and _is_reasonable_amount(amt):
                     desc_full = re.sub(r'\s+', ' ', ' '.join(current_desc_parts)).strip()
                     full_desc = f"{current_code} {desc_full}".strip() if current_code else desc_full
-                    cp, _ = extract_counterparty_from_description(full_desc)
+                    cp, _ = extract_counterparty_smart(full_desc, account_name)
                     result.append({
                         'Дата': parse_date(str(current_date)),
                         'Сумма': amt,
@@ -1492,7 +2014,7 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             full_desc = f"{code} {desc}"
-            cp, _ = extract_counterparty_from_description(full_desc)
+            cp, _ = extract_counterparty_smart(full_desc, account_name)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp if cp else '',
@@ -1522,7 +2044,7 @@ def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             full_desc = f"{code} {desc}"
-            cp, _ = extract_counterparty_from_description(full_desc)
+            cp, _ = extract_counterparty_smart(full_desc, account_name)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp if cp else '',
@@ -1580,19 +2102,7 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = re.sub(r'\s+', ' ', cells[desc_idx] if desc_idx < len(cells) else '').strip()
-            cp = ''
-            if 'Внутренний перевод' in desc:
-                cp = 'Внутренний перевод'
-            elif 'Внешний перевод' in desc:
-                cp = 'Внешний перевод'
-            elif 'Перевод себе' in desc:
-                cp = 'Перевод себе'
-            elif 'Плата за' in desc:
-                cp = 'Т-Банк'
-            elif 'Перевод' in desc:
-                cp = 'Перевод'
-            else:
-                cp, _ = extract_counterparty_from_description(desc)
+            cp, _ = extract_counterparty_smart(desc, account_name)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp if cp else '',
@@ -1624,18 +2134,7 @@ def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             desc = re.sub(r'\s+', ' ', m.group(5)).strip()
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
-            if 'Внутренний перевод' in desc:
-                cp = 'Внутренний перевод'
-            elif 'Внешний перевод' in desc:
-                cp = 'Внешний перевод'
-            elif 'Перевод себе' in desc:
-                cp = 'Перевод себе'
-            elif 'Плата за' in desc:
-                cp = 'Т-Банк'
-            elif 'Перевод' in desc:
-                cp = 'Перевод'
-            else:
-                cp, _ = extract_counterparty_from_description(desc)
+            cp, _ = extract_counterparty_smart(desc, account_name)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp if cp else '',
@@ -1735,9 +2234,7 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
             elif ttype == 'C':
                 amount = abs(amount)
 
-            cp = 'BluOr Bank' if 'bluor' in low or 'bank' in low else ''
-            if not cp:
-                cp, _ = extract_counterparty_from_description(desc)
+            cp, _ = extract_counterparty_smart(desc, account_name)
 
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -1789,9 +2286,7 @@ def parse_bluor_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = -abs(amount)
             elif ttype == 'C':
                 amount = abs(amount)
-            cp = 'BluOr Bank' if 'bluor' in low or 'bank' in low else ''
-            if not cp:
-                cp, _ = extract_counterparty_from_description(desc)
+            cp, _ = extract_counterparty_smart(desc, account_name)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp if cp else '',
@@ -1831,11 +2326,12 @@ def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict
                 continue
             cp = parts[2] if len(parts) > 2 else ''
             desc = ' '.join(parts[3:]) if len(parts) > 3 else ''
-            if not cp:
-                cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            if not cp_final:
+                cp_final = 'Česká spořitelna'
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp,
+                'Контрагент': cp_final,
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -1938,10 +2434,13 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = ' '.join([c for c in cleaned_cells if c.strip()])
+            cp_final, _ = extract_counterparty_smart(desc, account_name)
+            if not cp_final:
+                cp_final = 'Česká spořitelna'
             result.append({
                 'Дата': parse_date(date_found) if date_found else '',
                 'Сумма': amount,
-                'Контрагент': 'Česká spořitelna',
+                'Контрагент': cp_final,
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -1963,9 +2462,12 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
             amount = parse_amount(m.group(3))
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
+            cp_final, _ = extract_counterparty_smart(m.group(2).strip(), account_name)
+            if not cp_final:
+                cp_final = 'Česká spořitelna'
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': 'Česká spořitelna',
+                'Контрагент': cp_final,
                 'Наименование счета': account_name,
                 'Описание': m.group(2).strip()
             })
@@ -1993,9 +2495,12 @@ def parse_jenhor_unelma_pdf(file_content: bytes, account_name: str) -> List[Dict
                                       'celkem připsáno', 'celkem odepsáno',
                                       'přehled pohyb']):
                 continue
+            cp_final, _ = extract_counterparty_smart(desc, account_name)
+            if not cp_final:
+                cp_final = 'Česká spořitelna'
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': 'Česká spořitelna',
+                'Контрагент': cp_final,
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -2033,11 +2538,10 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
             desc = parts[5] if len(parts) > 5 and parts[5] else (parts[6] if len(parts) > 6 else '')
             cp = parts[3] if len(parts) > 3 else ''
-            if not cp:
-                cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -2157,11 +2661,10 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
                     ttype = safe_str(row.iloc[ci['ttype']]) if 'ttype' in ci and ci['ttype'] < len(row) else ''
                     if not desc and ttype:
                         desc = ttype
-                    if not cp:
-                        cp, _ = extract_counterparty_from_description(desc)
+                    cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
                     result.append({
                         'Дата': date, 'Сумма': amount,
-                        'Контрагент': cp if cp else '',
+                        'Контрагент': cp_final if cp_final else '',
                         'Наименование счета': account_name,
                         'Описание': desc
                     })
@@ -2237,11 +2740,10 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
             ttype = parts[ci['ttype']] if 'ttype' in ci and ci['ttype'] < len(parts) else ''
             if not desc and ttype:
                 desc = ttype
-            if not cp:
-                cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -2375,13 +2877,12 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if 'дебет' in low_chunk and ('(d)' in low_chunk or ' d ' in low_chunk):
             amount = -abs(amount)
 
-        if not cp:
-            cp, _ = extract_counterparty_from_description(desc)
+        cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
 
         result.append({
             'Дата': date,
             'Сумма': amount,
-            'Контрагент': cp,
+            'Контрагент': cp_final,
             'Наименование счета': account_name,
             'Описание': desc
         })
@@ -2415,10 +2916,10 @@ def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = parts[1] if len(parts) > 1 else ''
-            cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -2469,10 +2970,12 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
                 if any(w in low for w in ['balance', 'saldo', 'start', 'end', 'period',
                                           'лимит', 'баланс', 'период', 'available', 'кредитн']):
                     continue
-                cp, _ = extract_counterparty_from_description(desc)
+                cp_final, _ = extract_counterparty_smart(desc, account_name)
+                if not cp_final:
+                    cp_final = 'Kapital Bank'
                 result.append({
                     'Дата': date, 'Сумма': -abs(amount),
-                    'Контрагент': cp if cp else 'Kapital Bank',
+                    'Контрагент': cp_final,
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -2499,10 +3002,12 @@ def parse_kapital_saida_docx(file_content: bytes, account_name: str) -> List[Dic
                     low = (desc_cell or '').lower()
                     if any(w in low for w in ['balance', 'saldo', 'start', 'end', 'period']):
                         continue
-                    cp, _ = extract_counterparty_from_description(desc_cell or '')
+                    cp_final, _ = extract_counterparty_smart(desc_cell or '', account_name)
+                    if not cp_final:
+                        cp_final = 'Kapital Bank'
                     result.append({
                         'Дата': date_cell, 'Сумма': -abs(amount_cell),
-                        'Контрагент': cp if cp else 'Kapital Bank',
+                        'Контрагент': cp_final,
                         'Наименование счета': account_name,
                         'Описание': (desc_cell or '')
                     })
@@ -2529,10 +3034,12 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
                 low = (desc or '').lower()
                 if any(w in low for w in ['balance', 'saldo', 'start', 'end', 'period']):
                     continue
-                cp, _ = extract_counterparty_from_description(desc)
+                cp_final, _ = extract_counterparty_smart(desc, account_name)
+                if not cp_final:
+                    cp_final = 'Kapital Bank'
                 result.append({
                     'Дата': date, 'Сумма': -abs(amount),
-                    'Контрагент': cp if cp else 'Kapital Bank',
+                    'Контрагент': cp_final,
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -2555,10 +3062,12 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
                 desc = m.group(5).strip()
                 if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
-                cp, _ = extract_counterparty_from_description(desc)
+                cp_final, _ = extract_counterparty_smart(desc, account_name)
+                if not cp_final:
+                    cp_final = 'Kapital Bank'
                 result.append({
                     'Дата': date, 'Сумма': -abs(amount),
-                    'Контрагент': cp if cp else 'Kapital Bank',
+                    'Контрагент': cp_final,
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -2640,18 +3149,10 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
             if not found or not _is_reasonable_amount(amount):
                 continue
             desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
-            cp = ''
-            for p in desc.split('/'):
-                p_clean = p.strip()
-                if p_clean and len(p_clean) > 2 and 'REF' not in p_clean and 'SRN' not in p_clean and 'REC' not in p_clean:
-                    if not re.match(r'^[A-Z0-9]{10,}$', p_clean):
-                        cp = p_clean
-                        break
-            if not cp:
-                cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -2683,18 +3184,10 @@ def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 if not _is_reasonable_amount(amount):
                     continue
-                cp = ''
-                for p in desc.split('/'):
-                    p_clean = p.strip()
-                    if p_clean and len(p_clean) > 2 and 'REF' not in p_clean and 'SRN' not in p_clean and 'REC' not in p_clean:
-                        if not re.match(r'^[A-Z0-9]{10,}$', p_clean):
-                            cp = p_clean
-                            break
-                if not cp:
-                    cp, _ = extract_counterparty_from_description(desc)
+                cp_final, _ = extract_counterparty_smart(desc, account_name)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp if cp else '',
+                    'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -2833,11 +3326,10 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                     ttype = safe_str(row.iloc[ci['type']]) if 'type' in ci and ci['type'] < len(row) else ''
                     if cp in ['N/A', 'n/a']:
                         cp = ''
-                    if not cp:
-                        cp, _ = extract_counterparty_from_description(desc)
+                    cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
                     result.append({
                         'Дата': date, 'Сумма': amount,
-                        'Контрагент': cp if cp else '',
+                        'Контрагент': cp_final if cp_final else '',
                         'Наименование счета': account_name,
                         'Описание': (f"{ttype} | {desc}" if ttype else desc)
                     })
@@ -2910,11 +3402,10 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
             ttype = parts[type_idx] if 0 <= type_idx < len(parts) else ''
             if cp in ['N/A', 'n/a']:
                 cp = ''
-            if not cp:
-                cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': (f"{ttype} | {desc}" if ttype else desc)
             })
@@ -2965,11 +3456,10 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 desc = row[ci.get('description', 11)] if ci.get('description', 11) < len(row) else ''
                 cp = row[ci.get('counterparty', 0)] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-                if not cp:
-                    cp, _ = extract_counterparty_from_description(desc)
+                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp if cp else '',
+                    'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -3005,10 +3495,12 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
             low = desc.lower()
             if any(w in low for w in ['saldo previo', 'nuevo saldo', 'transacciones']):
                 continue
-            cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name)
+            if not cp_final:
+                cp_final = 'N26'
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else 'N26',
+                'Контрагент': cp_final,
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -3043,10 +3535,12 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if any(w in low for w in ['saldo previo', 'nuevo saldo', 'transacciones',
                                       'extracto', 'espacio', 'deseño']):
                 continue
-            cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name)
+            if not cp_final:
+                cp_final = 'N26'
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else 'N26',
+                'Контрагент': cp_final,
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -3173,11 +3667,10 @@ def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = abs(amount)
             cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
             desc = safe_str(row.iloc[ci['purpose']]) if 'purpose' in ci and ci['purpose'] < len(row) else ''
-            if not cp:
-                cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -3248,9 +3741,12 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = purpose if purpose else f"{op_type}: {counterparty}"
+            cp_final, _ = extract_counterparty_smart(desc, account_name, counterparty, '')
+            if not cp_final:
+                cp_final = counterparty
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': counterparty,
+                'Контрагент': cp_final,
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -3280,9 +3776,12 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
                 op_type = m.group(1).strip()
                 if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
+                cp_final, _ = extract_counterparty_smart(counterparty, account_name, counterparty, '')
+                if not cp_final:
+                    cp_final = counterparty
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': counterparty,
+                    'Контрагент': cp_final,
                     'Наименование счета': account_name,
                     'Описание': f"{op_type}: {counterparty}"
                 })
@@ -3364,13 +3863,12 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         party_raw = re.sub(r'\s+', ' ', party_raw).strip()
         cp = party_raw.strip(' .,;:-')
 
-        if not cp:
-            cp, _ = extract_counterparty_from_description(purpose)
+        cp_final, _ = extract_counterparty_smart(purpose, account_name, cp, '')
 
         result.append({
             'Дата': date,
             'Сумма': amount,
-            'Контрагент': cp,
+            'Контрагент': cp_final if cp_final else '',
             'Наименование счета': account_name,
             'Описание': purpose
         })
@@ -3404,10 +3902,10 @@ def parse_rak_bank(file_content: bytes, account_name: str) -> List[Dict]:
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = parts[1] if len(parts) > 1 else ''
-            cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -3431,10 +3929,10 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 desc = row[1]
-                cp, _ = extract_counterparty_from_description(desc)
+                cp_final, _ = extract_counterparty_smart(desc, account_name)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp if cp else '',
+                    'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -3532,35 +4030,11 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
             if reference and reference.strip() and reference.strip() != 'nan':
                 full_desc = f"{desc} | {reference}" if desc else reference
 
-            cp = ''
-            if ttype == 'TOPUP':
-                if payer and payer.lower() not in ('nan', 'none', 'n/a'):
-                    pl = payer.lower()
-                    bank_like = any(w in pl for w in ['bank', 'payments', 'finance',
-                                                      'revolut', 'paysera', 'wise', 'sepa'])
-                    if not bank_like:
-                        cp = _clean_counterparty_name(payer)
-                if not cp and beneficiary:
-                    cp = _clean_counterparty_name(beneficiary)
-            else:
-                if beneficiary and beneficiary.lower() not in ('nan', 'none', 'n/a'):
-                    cp = _clean_counterparty_name(beneficiary)
-                if not cp:
-                    after_to = _extract_after_to(desc)
-                    if after_to:
-                        cp = _clean_counterparty_name(after_to)
-                if not cp and payer and payer.lower() not in ('nan', 'none', 'n/a'):
-                    pl = payer.lower()
-                    bank_like = any(w in pl for w in ['bank', 'payments', 'finance',
-                                                      'revolut', 'paysera', 'wise', 'sepa'])
-                    if not bank_like:
-                        cp = _clean_counterparty_name(payer)
-            if not cp:
-                cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(full_desc, account_name, payer, beneficiary)
 
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': full_desc
             })
@@ -3670,22 +4144,12 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         elif ttype in ('MOS', 'FEE', 'CAR', 'ATM', 'EXO'):
             amount = -abs(amount)
 
-        cp = ''
-        if ttype in ('MOA', 'MOR'):
-            m_from = re.search(r'\bfrom\s+(.+?)(?:\s*•|$)', desc, re.IGNORECASE)
-            if m_from:
-                cp = _clean_counterparty_name(m_from.group(1))
-        elif ttype == 'MOS':
-            after_to = _extract_after_to(desc)
-            if after_to:
-                cp = _clean_counterparty_name(after_to)
-        if not cp and ttype in ('MOA', 'MOR', 'MOS'):
-            cp, _ = extract_counterparty_from_description(desc)
+        cp_final, _ = extract_counterparty_smart(desc, account_name)
 
         result.append({
             'Дата': date,
             'Сумма': amount,
-            'Контрагент': cp if cp else '',
+            'Контрагент': cp_final if cp_final else '',
             'Наименование счета': account_name,
             'Описание': desc
         })
@@ -3766,11 +4230,10 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
                     if v and v != 'nan' and len(v) > 2 and not re.match(r'^[\d.,\-]+$', v) and not re.match(r'^\d{4}-\d{2}-\d{2}$', v):
                         desc = v
                         break
-            if not cp:
-                cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -3833,11 +4296,10 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 cp = row[ci.get('counterparty', 9)] if ci.get('counterparty', 9) < len(row) else ''
                 desc = row[ci.get('description', 13)] if ci.get('description', 13) < len(row) else ''
-                if not cp:
-                    cp, _ = extract_counterparty_from_description(desc)
+                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp if cp else '',
+                    'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -3856,10 +4318,10 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 desc = re.sub(r'\s+', ' ', m.group(4)).strip()
                 if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
-                cp, _ = extract_counterparty_from_description(desc)
+                cp_final, _ = extract_counterparty_smart(desc, account_name)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp if cp else '',
+                    'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -3912,21 +4374,14 @@ def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict]:
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = parts[ci['description']] if ci['description'] < len(parts) else ''
-            cp = ''
-            if desc:
-                d1 = re.sub(r'/REF/.*$', '', desc)
-                d1 = re.sub(r'FOR \d+$', '', d1).strip()
-                if d1 and len(d1) > 2:
-                    cp = d1
-            if not cp:
-                cp, _ = extract_counterparty_from_description(desc)
             notes = parts[ci['notes']] if 'notes' in ci and ci['notes'] < len(parts) else ''
             full = desc
             if notes and notes != 'N/A' and notes:
                 full = f"{desc} | {notes}" if desc else notes
+            cp_final, _ = extract_counterparty_smart(full, account_name)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': full
             })
@@ -3950,10 +4405,10 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
                 desc = row[5] if len(row) > 5 else ''
-                cp, _ = extract_counterparty_from_description(desc)
+                cp_final, _ = extract_counterparty_smart(desc, account_name)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp if cp else '',
+                    'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -3989,10 +4444,10 @@ def parse_saida_n26_csv(file_content: bytes, account_name: str) -> List[Dict]:
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = ' '.join(parts[2:])
-            cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -4071,17 +4526,15 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
             desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
             note = safe_str(row.iloc[ci['note']]) if 'note' in ci and ci['note'] < len(row) else ''
-            cp = safe_str(row.iloc[ci['recipient']]) if 'recipient' in ci and ci['recipient'] < len(row) else ''
-            if not cp:
-                cp = safe_str(row.iloc[ci['payer']]) if 'payer' in ci and ci['payer'] < len(row) else ''
-            if not cp:
-                cp, _ = extract_counterparty_from_description(desc)
+            recipient = safe_str(row.iloc[ci['recipient']]) if 'recipient' in ci and ci['recipient'] < len(row) else ''
+            payer = safe_str(row.iloc[ci['payer']]) if 'payer' in ci and ci['payer'] < len(row) else ''
             full_desc = desc
             if note and note != 'nan':
                 full_desc = f"{desc} | {note}" if desc else note
+            cp_final, _ = extract_counterparty_smart(full_desc, account_name, payer, recipient)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': full_desc
             })
@@ -4183,9 +4636,10 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
             cp = re.sub(r'\s+', ' ', cp).strip()
             desc = desc.replace('_x000D_', ' ').replace('\r', ' ').replace('\n', ' ')
             desc = re.sub(r'\s+', ' ', desc).strip()
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp,
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -4236,9 +4690,10 @@ def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 desc = row[ci['description']] if 'description' in ci and ci['description'] < len(row) else ''
                 cp = row[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
+                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp,
+                    'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -4293,11 +4748,10 @@ def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 desc = row[desc_i] if desc_i >= 0 and desc_i < len(row) else ''
                 cp = row[cp_i] if cp_i >= 0 and cp_i < len(row) else ''
-                if not cp:
-                    cp, _ = extract_counterparty_from_description(desc)
+                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp if cp else '',
+                    'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -4351,11 +4805,10 @@ def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
             desc = parts[ci['description']] if 'description' in ci and ci['description'] < len(parts) else ''
             cp = parts[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(parts) else ''
-            if not cp:
-                cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -4411,11 +4864,10 @@ def parse_xlsx_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
             desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
             cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-            if not cp:
-                cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -4457,11 +4909,10 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 desc = cells[desc_i] if desc_i >= 0 and desc_i < len(cells) else ''
                 cp = cells[cp_i] if cp_i >= 0 and cp_i < len(cells) else ''
-                if not cp:
-                    cp, _ = extract_counterparty_from_description(desc)
+                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp if cp else '',
+                    'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -4485,10 +4936,10 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
             amount = parse_amount(m.group(3))
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
-            cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -4538,10 +4989,10 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 if v and len(v) > 2 and not re.match(r'^[\d.,\-]+$', v):
                     desc = v
                     break
-            cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -4562,10 +5013,10 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = parse_amount(m.group(3))
                 if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
-                cp, _ = extract_counterparty_from_description(desc)
+                cp_final, _ = extract_counterparty_smart(desc, account_name)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp if cp else '',
+                    'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -4611,10 +5062,10 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 if vs and len(vs) > 2 and not re.match(r'^[\d.,\-]+$', vs):
                     desc = vs
                     break
-            cp, _ = extract_counterparty_from_description(desc)
+            cp_final, _ = extract_counterparty_smart(desc, account_name)
             result.append({
                 'Дата': date, 'Сумма': amount,
-                'Контрагент': cp if cp else '',
+                'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc
             })
@@ -4661,10 +5112,10 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                     if p and len(p) > 2 and not re.match(r'^[\d.,\-]+$', p):
                         desc = p
                         break
-                cp, _ = extract_counterparty_from_description(desc)
+                cp_final, _ = extract_counterparty_smart(desc, account_name)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp if cp else '',
+                    'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -4686,10 +5137,10 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = parse_amount(m.group(3))
                 if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
-                cp, _ = extract_counterparty_from_description(desc)
+                cp_final, _ = extract_counterparty_smart(desc, account_name)
                 result.append({
                     'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp if cp else '',
+                    'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
                     'Описание': desc
                 })
@@ -4996,7 +5447,7 @@ def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[T
         other_exts.append('.docx')
     for oe in other_exts:
         op, ok = get_parser_by_ext(account_name, oe)
-        _add(op, ok or f'{oe[1:]}_other')
+        _add(op, ok or f'{oe[1:]} _other')
 
     up, uk = _get_universal_for_type(real_type)
     _add(up, uk or f'{real_type}_universal')
@@ -5089,7 +5540,7 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     return summary[columns]
 
 
-# ==================== ЭКСПОРТ (ЧИСЛОВЫЕ ЗНАЧЕНИЯ + ФОРМАТ 0,00) ====================
+# ==================== ЭКСПОРТ ====================
 
 _NUMERIC_FMT = '# ##0.00'
 _INT_FMT = '# ##0'
@@ -5116,11 +5567,6 @@ def _autosize_worksheet(ws, max_width=60):
 
 
 def _write_operations_sheet(ws, df_export: pd.DataFrame):
-    """
-    df_export: колонки Дата, Сумма (float), Контрагент, Наименование счета, Описание.
-    Заголовки — стилизованные. Сумма — формат '# ##0.00'.
-    """
-    # Заголовки
     for j, col_name in enumerate(df_export.columns, start=1):
         c = ws.cell(row=1, column=j, value=col_name)
         c.fill = _HEADER_FILL
@@ -5153,12 +5599,6 @@ def _write_operations_sheet(ws, df_export: pd.DataFrame):
 
 
 def _write_summary_sheet(ws, summary_df: pd.DataFrame):
-    """
-    summary_df: колонки:
-      Наименование счета, Количество приходных операций, Сумма приходных операций,
-      Количество расходных операций, Сумма расходных операций, Сальдо операций.
-    Суммовые колонки — числа + формат '# ##0.00'; счётчики — формат '# ##0'.
-    """
     for j, col_name in enumerate(summary_df.columns, start=1):
         c = ws.cell(row=1, column=j, value=col_name)
         c.fill = _HEADER_FILL
@@ -5202,20 +5642,11 @@ def _write_summary_sheet(ws, summary_df: pd.DataFrame):
 
 
 def build_operations_excel(df_display: pd.DataFrame, df_numeric: pd.DataFrame) -> BytesIO:
-    """
-    df_display — для отображения (не используется для значений),
-    df_numeric — источник настоящих чисел.
-
-    Возвращает Excel с числами и форматом '# ##0.00'.
-    """
     output = BytesIO()
     wb = Workbook()
     ws = wb.active
     ws.title = 'Транзакции'
 
-    # Готовим DataFrame для записи в Excel: берём из df_numeric, добавляем
-    # отформатированное описание (оригинал + перевод в скобках), если оно
-    # есть в df_display.
     df_export = pd.DataFrame({
         'Дата': df_numeric['Дата'].astype(str),
         'Сумма': df_numeric['Сумма'].astype(float),
@@ -5412,7 +5843,6 @@ def _render_results(result: Dict):
     income = float(df_raw['Сумма_число'][df_raw['Сумма_число'] > 0].sum())
     expense = float(abs(df_raw['Сумма_число'][df_raw['Сумма_число'] < 0].sum()))
 
-    # df_numeric — источник настоящих чисел для экспорта.
     df_numeric = pd.DataFrame({
         'Дата': df_raw['Дата'].astype(str),
         'Сумма': df_raw['Сумма_число'].astype(float),
@@ -5421,7 +5851,6 @@ def _render_results(result: Dict):
         'Описание': df_raw['Описание'].astype(str) if 'Описание' in df_raw.columns else '',
     })
 
-    # df_display — то, что показываем в интерфейсе (суммы — строкой '0,00', описание — с переводом).
     df_display = df_raw.drop(columns=['Сумма_число']).copy()
     df_display['Сумма'] = df_raw['Сумма_число'].apply(format_amount)
     if 'Описание' in df_display.columns:
