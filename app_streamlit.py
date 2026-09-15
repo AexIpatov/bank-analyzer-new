@@ -1,43 +1,36 @@
 # -*- coding: utf-8 -*-
 """
 app.py — Аналитик банковских выписок.
-Полная версия.
+Полная рабочая версия.
 
 FIX-пакет:
-  [FIX-DESC-FULL-1..6]   — описание сохраняется целиком.
-  [FIX-PDF-1]            — parse_revolut_pdf: склейка многострочных описаний.
-  [FIX-PDF-2]            — parse_paysera_pdf: разбор по блокам 'Назначение платежа:'.
-  [FIX-PDF-3]            — parse_industra_pdf: корректный разбор по датам.
-  [FIX-2026-DESC-REV]    — Revolut: описание = Description | Reference (полностью).
-  [FIX-2026-DESC-IND]    — Industra: если описание пустое — берём Тип транзакции.
-  [FIX-2026-ROUTE]       — убран 'an14' из условий Industra (матчил AN14 Revolut).
-  [FIX-2026-RESET]       — Кнопка сброса загруженных файлов.
-  [FIX-2026-PDF-REV-2]   — Revolut PDF: дата в любом месте строки, устойчивые EUR-суммы.
-  [FIX-2026-PDF-PAY-2]   — Paysera PDF: блоки по 'Назначение платежа' с переносами.
-  [FIX-2026-PDF-IND-2]   — Industra PDF: дата в любом месте, устойчивая сумма.
-  [FIX-2026-XLS-FALLBACK]— Industra XLS: fallback через xlrd с ignore_workbook_corruption.
-  [FIX-2026-PAY-XLSX]    — Paysera XLSX: расширенный поиск заголовков.
-  [FIX-2026-REG-DOCX]    — Regina Alfa DOCX: обработка ' | ' между ячейками.
-  [FIX-2026-JEN-DOCX]    — JenHor Unelma DOCX: ужесточён фильтр служебных строк.
-  [FIX-2026-PASHA]       — Pasha Bank XLSX: усилен фильтр итоговых строк.
-  [FIX-2026-BLUOR-EMPTY] — BluOr CSV: информативное сообщение для файлов без операций.
-
-  [NEW-TRANSLATE-INLINE] — Оригинал описания сохраняется; перевод добавляется
-                           в круглых скобках в ТУ ЖЕ ячейку.
-  [NEW-AMOUNT-FORMAT]    — Суммы на экране в формате 0,00.
-  [NEW-EXCEL-NUMERIC]    — В Excel-выгрузке суммы — ЧИСЛА с форматом ячейки
-                           # ##0.00 (запятая как десятичный разделитель на экране,
-                           в файле — числовое значение + числовой формат).
-  [NEW-GORODETS-BG]      — Фон: яркая цветная городецкая роспись (base64 SVG +
-                           CSS-градиенты как fallback).
-  [NEW-SOLID-BUTTONS]    — Кнопки объёмные тёмно-зелёные, с жирной цветной
-                           обводкой по периметру, БЕЗ неонового свечения.
-  [NEW-BIG-BUTTON-FONT]  — Размер шрифта кнопок увеличен в 1.5–2 раза,
-                           шрифт — ЖИРНЫЙ (font-weight: 900).
-  [NEW-SMART-COUNTERPARTY] — Умное извлечение контрагента (учитывает банк).
-  [NEW-TRANSLATE-V2]     — Расширенный словарь (~600 ключей) + морфология
-                           (падежи, окончания) + многословные фразы +
-                           постобработка (Nr. → №, N → №).
+  [FIX-SYNTAX-MASHREQ]   — устранена слипшаяся строка "amount = credit  elif ..."
+  [FIX-TRANSLATE-FULL]   — многословные фразы переводятся ПОЛНОСТЬЮ
+                           (Value Added Tax - Output, Corr.Bank.Charges,
+                            Inward Remittance FUND TRANSFER и т.д.)
+  [FIX-BG-BASE64]        — фон: SVG в base64 + CSS-градиенты (гарантированно
+                           работает в Streamlit 1.30+)
+  [FIX-BUTTONS-HUGE]     — крупный жирный шрифт, все селекторы Streamlit
+  [FIX-COUNTERPARTY-2]   — чистка имени контрагента от \ / ROC / REF / SRN /
+                           номера / телефонов / банковских хвостов
+  [FIX-2026-DESC-REV]    — Revolut: Description | Reference
+  [FIX-2026-DESC-IND]    — Industra: fallback на тип транзакции
+  [FIX-2026-ROUTE]       — убран 'an14' из условий Industra
+  [FIX-2026-RESET]       — кнопка сброса
+  [FIX-2026-PDF-*]       — устойчивые парсеры PDF Revolut/Paysera/Industra
+  [FIX-2026-XLS-FALLBACK]— Industra XLS через xlrd с ignore_workbook_corruption
+  [FIX-2026-PAY-XLSX]    — Paysera XLSX: расширенный поиск заголовков
+  [FIX-2026-REG-DOCX]    — Regina Alfa DOCX: ' | ' между ячейками
+  [FIX-2026-JEN-DOCX]    — JenHor Unelma DOCX: фильтр служебных строк
+  [FIX-2026-PASHA]       — Pasha Bank XLSX: фильтр итоговых строк
+  [FIX-2026-BLUOR-EMPTY] — BluOr CSV: информативное сообщение
+  [NEW-TRANSLATE-INLINE] — Оригинал + (перевод) в одной ячейке
+  [NEW-AMOUNT-FORMAT]    — Суммы на экране: 1 234,56
+  [NEW-EXCEL-NUMERIC]    — В Excel суммы — числа с форматом # ##0.00
+  [NEW-GORODETS-BG]      — Яркая цветная городецкая роспись
+  [NEW-SOLID-BUTTONS]    — Объёмные тёмно-зелёные кнопки без неона
+  [NEW-BIG-BUTTON-FONT]  — Крупный шрифт кнопок
+  [NEW-SMART-COUNTERPARTY] — Умное извлечение контрагента
 """
 
 import streamlit as st
@@ -47,7 +40,7 @@ import re
 import hashlib
 import csv
 import base64
-from datetime import datetime, timedelta
+from datetime import datetime
 from io import BytesIO, StringIO
 from typing import Dict, List, Tuple, Callable, Optional
 from docx import Document
@@ -68,16 +61,13 @@ st.set_page_config(
 )
 
 
-# ==================== [NEW-GORODETS-BG] ГОРОДЕЦКАЯ РОСПИСЬ ====================
+# ==================== [NEW-GORODETS-BG] ЯРКАЯ ГОРОДЕЦКАЯ РОСПИСЬ ====================
 #
-# Тайл 480×420 px. Крупный сюжет: розан, купавка, птица-павлин, конь,
-# листья, ягодки, завитки. Палитра — насыщенная: красный, синий, жёлтый,
-# зелёный, оранжевый, розовый, фиолетовый.
-#
-# SVG кодируется в base64, чтобы Streamlit НЕ вырезал его из CSS.
-# Плюс — дублируется отдельным <div> с position: fixed.
+# Тайл 480×420 px. Сюжет: розан, купавка, птица-павлин, конь, листья, бутоны,
+# ягодки, завитки. Палитра: красный, синий, жёлтый, зелёный, оранжевый,
+# розовый, фиолетовый. Прозрачность группы — 0.55.
 
-_GORODETS_SVG_RAW = (
+_GORODETS_SVG = (
     "<svg xmlns='http://www.w3.org/2000/svg' width='480' height='420'>"
     "<defs><pattern id='gorodets' x='0' y='0' width='480' height='420' "
     "patternUnits='userSpaceOnUse'>"
@@ -134,7 +124,7 @@ _GORODETS_SVG_RAW = (
     "</g>"
     "</g>"
 
-    # ============ ПТИЦА-ПАВЛИН ============
+    # ============ ПТИЦА-ПАВЛИН (центр, вверху) ============
     "<g transform='translate(240,60)'>"
     "<ellipse cx='0' cy='20' rx='34' ry='20' fill='#7E57C2' stroke='#4527A0' stroke-width='2'/>"
     "<path d='M25 25 q30 -5 45 15 q-10 12 -30 10 q-20 -2 -25 -10 z' "
@@ -152,7 +142,7 @@ _GORODETS_SVG_RAW = (
     "</g>"
     "</g>"
 
-    # ============ КОНЬ ============
+    # ============ КОНЬ (правый низ) ============
     "<g transform='translate(380,340)'>"
     "<ellipse cx='0' cy='0' rx='40' ry='22' fill='#3E2723' stroke='#1B0000' stroke-width='2'/>"
     "<path d='M-38 -6 q-22 -10 -30 -28 q14 -4 22 4 q10 -8 18 2 z' "
@@ -176,6 +166,7 @@ _GORODETS_SVG_RAW = (
     "<circle cx='-8' cy='10' r='2.4'/><circle cx='8' cy='10' r='2.4'/>"
     "</g>"
     "</g>"
+
     "<g transform='translate(450,220)'>"
     "<path d='M-16 5 q0 -20 16 -27 q16 7 16 27 q0 20 -16 27 q-16 -7 -16 -27 z' "
     "fill='#26A69A' stroke='#00695C' stroke-width='1.8'/>"
@@ -184,6 +175,7 @@ _GORODETS_SVG_RAW = (
     "<circle cx='-7' cy='9' r='2.2'/><circle cx='7' cy='9' r='2.2'/>"
     "</g>"
     "</g>"
+
     "<g transform='translate(220,400)'>"
     "<path d='M-14 5 q0 -18 14 -24 q14 6 14 24 q0 18 -14 24 q-14 -6 -14 -24 z' "
     "fill='#FBC02D' stroke='#F57F17' stroke-width='1.6'/>"
@@ -218,189 +210,875 @@ _GORODETS_SVG_RAW = (
     "<rect width='100%' height='100%' fill='url(%23gorodets)'/></svg>"
 )
 
-_GORODETS_SVG_B64 = base64.b64encode(_GORODETS_SVG_RAW.encode('utf-8')).decode('ascii')
-_GORODETS_DATA_URL = f"data:image/svg+xml;base64,{_GORODETS_SVG_B64}"
+# [FIX-BG-BASE64] Кодируем SVG в base64 — Streamlit 1.30+ гарантированно
+# пропускает data:image/svg+xml;base64 внутри url("...").
+_GORODETS_SVG_B64 = base64.b64encode(_GORODETS_SVG.encode('utf-8')).decode('ascii')
 
 
-# ==================== [NEW-TRANSLATE-V2] ПЕРЕВОД ОПИСАНИЙ ====================
+# ==================== CSS СТИЛИ ====================
+
+_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+:root {
+    --grass-dark: #1B5E20;
+    --grass: #2E7D32;
+    --grass-light: #4CAF50;
+    --grass-accent: #81C784;
+    --mint-light: #C8E6C9;
+    --mint-soft: #E8F5E9;
+    --ink: #1A2E1F;
+    --ink-soft: #3E5042;
+    --ink-muted: #6E8072;
+    --border: #C8E6C9;
+}
+
+/* ---------- [FIX-BG-BASE64] ФОН: яркая цветная городецкая роспись ---------- */
+html, body {
+    background-color: #FFFDF2 !important;
+}
+
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stHeader"],
+[data-testid="stToolbar"] {
+    background-image:
+        url("data:image/svg+xml;base64,__GORODETS_B64__"),
+        radial-gradient(circle at 20% 20%, #FFF6DE 0%, transparent 45%),
+        radial-gradient(circle at 80% 75%, #FFE9C8 0%, transparent 50%),
+        linear-gradient(180deg, #FFFDF2 0%, #FFF6DE 50%, #FDEBC8 100%);
+    background-repeat: repeat, no-repeat, no-repeat, no-repeat;
+    background-size: 480px 420px, cover, cover, cover;
+    background-attachment: fixed, fixed, fixed, fixed;
+    background-position: 0 0, 0 0, 0 0, 0 0;
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    color: var(--ink);
+}
+
+.main,
+.block-container {
+    background: transparent !important;
+}
+
+footer {visibility: hidden;}
+#MainMenu {visibility: hidden;}
+
+/* ---------- HERO ---------- */
+.hero {
+    background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 50%, #4CAF50 100%);
+    padding: 3rem 2.5rem;
+    border-radius: 28px;
+    color: #FFFFFF;
+    margin-bottom: 2rem;
+    box-shadow: 0 20px 45px rgba(27, 94, 32, 0.32);
+    position: relative;
+    overflow: hidden;
+}
+
+.hero::before {
+    content: '';
+    position: absolute;
+    top: -100px; right: -100px;
+    width: 400px; height: 400px;
+    background: radial-gradient(circle, rgba(255,255,255,0.18) 0%, transparent 70%);
+    border-radius: 50%;
+}
+
+.hero-content { position: relative; z-index: 2; display: flex; align-items: center; gap: 2rem; flex-wrap: wrap; }
+.hero-text { flex: 1; min-width: 280px; }
+.hero-text h1 { font-size: 2.5rem; font-weight: 800; margin: 0 0 0.6rem 0; letter-spacing: -1px; }
+.hero-text p { font-size: 1.1rem; margin: 0; opacity: 0.95; }
+.hero-chips { display: flex; gap: 0.5rem; margin-top: 1.2rem; flex-wrap: wrap; }
+
+.chip {
+    background: rgba(255,255,255,0.2);
+    border: 1px solid rgba(255,255,255,0.3);
+    padding: 0.35rem 0.85rem;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    backdrop-filter: blur(8px);
+}
+
+.hero-illustration { position: relative; z-index: 2; }
+
+/* ============================================================ */
+/* [FIX-BUTTONS-HUGE] КРУПНЫЕ ОБЪЁМНЫЕ КНОПКИ                    */
+/* Покрываем ВСЕ селекторы Streamlit 1.30+                       */
+/* ============================================================ */
+
+.stButton > button,
+.stButton > button[kind="primary"],
+.stButton > button[kind="secondary"],
+[data-testid="stBaseButton-primary"],
+[data-testid="stBaseButton-secondary"],
+[data-testid="stBaseButton-primaryFormSubmit"],
+[data-testid="stBaseButton-secondaryFormSubmit"],
+.stDownloadButton > button,
+[data-testid="stDownloadButton"] > button,
+[data-testid="stDownloadButton"] button,
+.stFormSubmitButton > button,
+[data-testid="stFormSubmitButton"] > button,
+.stFileUploader button,
+[data-testid="stFileUploader"] button,
+[data-testid="stFileUploaderDropzone"] button,
+section[data-testid="stFileUploaderDropzone"] button {
+    position: relative !important;
+    background:
+        radial-gradient(circle at 30% 22%, rgba(255,255,255,0.45), rgba(255,255,255,0) 60%),
+        linear-gradient(180deg, #3E8E41 0%, #1B5E20 45%, #0D3A12 100%) !important;
+    color: #FFFFFF !important;
+    border: 4px solid #FBC02D !important;
+    border-radius: 18px !important;
+    padding: 1.4rem 2.6rem !important;
+    font-weight: 900 !important;
+    font-size: 2rem !important;
+    letter-spacing: 0.5px !important;
+    line-height: 1.15 !important;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.60) !important;
+    box-shadow:
+        inset 0 4px 0 rgba(255,255,255,0.35),
+        inset 0 -7px 0 rgba(0,0,0,0.45),
+        0 10px 22px rgba(0,0,0,0.35),
+        0 5px 0 #0D3A12 !important;
+    transition: transform 0.15s ease, filter 0.20s ease, box-shadow 0.20s ease !important;
+    animation: none !important;
+    transform: translateZ(0);
+    width: auto !important;
+    min-width: 12rem !important;
+    min-height: 4.2rem !important;
+}
+
+.stButton > button p,
+.stButton > button span,
+.stButton > button div,
+[data-testid="stBaseButton-primary"] p,
+[data-testid="stBaseButton-secondary"] p,
+.stDownloadButton > button p,
+[data-testid="stDownloadButton"] > button p {
+    font-size: 2rem !important;
+    font-weight: 900 !important;
+    color: #FFFFFF !important;
+}
+
+.stButton > button:hover,
+.stDownloadButton > button:hover,
+[data-testid="stBaseButton-primary"]:hover,
+[data-testid="stBaseButton-secondary"]:hover,
+[data-testid="stDownloadButton"] > button:hover {
+    transform: translateY(-2px) !important;
+    filter: brightness(1.10) saturate(1.10) !important;
+    box-shadow:
+        inset 0 4px 0 rgba(255,255,255,0.45),
+        inset 0 -7px 0 rgba(0,0,0,0.50),
+        0 14px 26px rgba(0,0,0,0.40),
+        0 6px 0 #0D3A12 !important;
+    color: #FFFFFF !important;
+}
+
+.stButton > button:active,
+.stDownloadButton > button:active {
+    transform: translateY(2px) !important;
+    box-shadow:
+        inset 0 4px 0 rgba(255,255,255,0.30),
+        inset 0 -3px 0 rgba(0,0,0,0.45),
+        0 5px 12px rgba(0,0,0,0.30),
+        0 1px 0 #0D3A12 !important;
+    filter: brightness(0.95) !important;
+}
+
+/* --- Красная кнопка сброса: тот же объём, обводка — жёлтая --- */
+.stButton > button[kind="secondary"],
+[data-testid="stBaseButton-secondary"] {
+    background:
+        radial-gradient(circle at 30% 22%, rgba(255,255,255,0.45), rgba(255,255,255,0) 60%),
+        linear-gradient(180deg, #C62828 0%, #8E0000 45%, #5C0000 100%) !important;
+    border: 4px solid #FBC02D !important;
+    box-shadow:
+        inset 0 4px 0 rgba(255,255,255,0.35),
+        inset 0 -7px 0 rgba(0,0,0,0.45),
+        0 10px 22px rgba(0,0,0,0.35),
+        0 5px 0 #5C0000 !important;
+}
+
+/* --- Кнопка внутри file_uploader — крупнее и заметнее --- */
+.stFileUploader {
+    background: #FFFFFF;
+    border-radius: 20px;
+    padding: 1.2rem;
+    border: 2px dashed var(--border);
+    box-shadow: 0 4px 20px rgba(27, 94, 32, 0.05);
+}
+.stFileUploader:hover { border-color: var(--grass-light); }
+.stFileUploader section { border: none !important; background: transparent !important; }
+
+.stFileUploader button,
+[data-testid="stFileUploader"] button,
+[data-testid="stFileUploaderDropzone"] button {
+    background:
+        radial-gradient(circle at 30% 22%, rgba(255,255,255,0.6), rgba(255,255,255,0) 60%),
+        linear-gradient(180deg, #4CAF50 0%, #2E7D32 100%) !important;
+    color: #FFFFFF !important;
+    border: 3px solid #FBC02D !important;
+    border-radius: 14px !important;
+    font-size: 1.6rem !important;
+    font-weight: 900 !important;
+    padding: 1rem 2rem !important;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.55) !important;
+    box-shadow:
+        inset 0 3px 0 rgba(255,255,255,0.35),
+        inset 0 -5px 0 rgba(0,0,0,0.35),
+        0 6px 16px rgba(0,0,0,0.30) !important;
+    animation: none !important;
+}
+.stFileUploader button:hover,
+[data-testid="stFileUploader"] button:hover {
+    background: linear-gradient(180deg, #66BB6A 0%, #388E3C 100%) !important;
+    color: #FFFFFF !important;
+}
+.stFileUploader button p,
+[data-testid="stFileUploader"] button p {
+    font-size: 1.6rem !important;
+    font-weight: 900 !important;
+    color: #FFFFFF !important;
+}
+
+/* ---------- МЕТРИКИ ---------- */
+.stMetric {
+    background: #FFFFFF;
+    border-radius: 20px;
+    padding: 1.5rem 1.6rem;
+    border: 1px solid #E1EEDD;
+    box-shadow: 0 6px 22px rgba(27, 94, 32, 0.07);
+    position: relative;
+    overflow: hidden;
+}
+.stMetric::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; height: 100%; width: 6px;
+    background: linear-gradient(180deg, #1B5E20 0%, #4CAF50 100%);
+}
+.stMetric:hover { transform: translateY(-4px); box-shadow: 0 14px 32px rgba(27, 94, 32, 0.20); }
+.stMetric label { color: var(--ink-soft) !important; font-size: 0.9rem !important; text-transform: uppercase; }
+.stMetric [data-testid="stMetricValue"] { color: var(--ink) !important; font-weight: 700 !important; font-size: 1.7rem !important; }
+
+.stDataFrame { border-radius: 20px; overflow: hidden; box-shadow: 0 8px 28px rgba(27, 94, 32, 0.10); background: #FFFFFF; }
+
+.stAlert { border-radius: 14px; border: none; }
+div[data-baseweb="notification"][kind="positive"] { background: #E8F5E9; color: var(--ink); }
+div[data-baseweb="notification"][kind="info"] { background: #FFF6E8; color: var(--ink); }
+div[data-baseweb="notification"][kind="warning"] { background: #FBF3E0; color: #7A5B10; }
+
+.stProgress > div > div > div { background: linear-gradient(90deg, #1B5E20 0%, #4CAF50 100%); border-radius: 8px; }
+
+h3 {
+    color: var(--ink);
+    font-weight: 700;
+    padding-bottom: 0.6rem;
+    border-bottom: 2px solid #E1EEDD;
+    margin-top: 2rem;
+    margin-bottom: 1.2rem;
+    font-size: 1.25rem;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #FFF6E8; }
+::-webkit-scrollbar-thumb { background: #F48FB1; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #E91E63; }
+
+hr { border: none; border-top: 1px solid #E1EEDD; margin: 2rem 0; }
+
+.info-card {
+    background: #FFFFFF;
+    border-radius: 18px;
+    padding: 1.4rem 1.5rem;
+    border: 1px solid #E1EEDD;
+    display: flex;
+    align-items: center;
+    gap: 1.2rem;
+    box-shadow: 0 4px 16px rgba(27, 94, 32, 0.06);
+}
+
+.info-card-icon {
+    flex-shrink: 0; width: 56px; height: 56px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%);
+}
+
+.info-card-text h4 { color: var(--ink); margin: 0 0 0.25rem 0; font-size: 1rem; font-weight: 600; }
+.info-card-text p { color: var(--ink-muted); margin: 0; font-size: 0.88rem; }
+
+.footer-note { text-align: center; color: var(--ink-muted); font-size: 0.85rem; padding: 1.5rem 0 0.5rem 0; }
+
+.summary-table {
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 8px 28px rgba(27, 94, 32, 0.10);
+    background: #FFFFFF;
+    margin-bottom: 1rem;
+}
+.summary-table table {
+    border-collapse: collapse;
+    width: 100%;
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    font-size: 0.92rem;
+}
+.summary-table thead th {
+    background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 100%);
+    color: #FFFFFF;
+    padding: 12px 14px;
+    text-align: left;
+    font-weight: 600;
+    border: none;
+    white-space: nowrap;
+}
+.summary-table tbody td {
+    padding: 10px 14px;
+    border-bottom: 1px solid #E1EEDD;
+    color: var(--ink);
+    background: #FFFFFF;
+}
+.summary-table tbody tr:nth-child(even) td { background: #FFF6E8; }
+.summary-table tbody tr:hover td { background: #FCE4EC; }
+.summary-table tbody tr:last-child td { border-bottom: none; }
+</style>
+"""
+
+st.markdown(_CSS.replace("__GORODETS_B64__", _GORODETS_SVG_B64), unsafe_allow_html=True)
+
+
+# ==================== ШАПКА ====================
+
+st.markdown("""
+<div class="hero">
+<div class="hero-content">
+<div class="hero-text">
+<h1>💼 Аналитик банковских выписок</h1>
+<p>Загружайте выписки — получайте единый отчёт по доходам и расходам</p>
+<div class="hero-chips">
+<span class="chip">📄 CSV</span>
+<span class="chip">📊 XLSX</span>
+<span class="chip">📑 XLS</span>
+<span class="chip">📝 DOCX</span>
+<span class="chip">📕 PDF</span>
+<span class="chip">🌐 Перевод в скобках</span>
+</div>
+</div>
+<div class="hero-illustration">
+<svg width="180" height="180" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle cx="100" cy="100" r="90" fill="rgba(255,255,255,0.15)"/>
+<rect x="50" y="110" width="14" height="50" rx="4" fill="rgba(255,255,255,0.85)"/>
+<rect x="72" y="90" width="14" height="70" rx="4" fill="rgba(255,255,255,0.95)"/>
+<rect x="94" y="70" width="14" height="90" rx="4" fill="rgba(255,255,255,1)"/>
+<rect x="116" y="95" width="14" height="65" rx="4" fill="rgba(255,255,255,0.95)"/>
+<rect x="138" y="60" width="14" height="100" rx="4" fill="rgba(255,255,255,1)"/>
+<path d="M57 100 L79 80 L101 60 L123 85 L145 50" stroke="#FFFFFF" stroke-width="3" fill="none" stroke-linecap="round"/>
+<circle cx="57" cy="100" r="5" fill="#FFFFFF"/>
+<circle cx="79" cy="80" r="5" fill="#FFFFFF"/>
+<circle cx="101" cy="60" r="5" fill="#FFFFFF"/>
+<circle cx="123" cy="85" r="5" fill="#FFFFFF"/>
+<circle cx="145" cy="50" r="5" fill="#FFFFFF"/>
+<circle cx="160" cy="40" r="16" fill="#FFD86B" stroke="#FFFFFF" stroke-width="2"/>
+<text x="160" y="46" text-anchor="middle" font-size="16" font-weight="700" fill="#1B5E20">₽</text>
+</svg>
+</div>
+</div>
+</div>
+""", unsafe_allow_html=True)
+
+
+# ==================== ОБЩИЕ УТИЛИТЫ ====================
+
+def clean_account_name(filename: str) -> str:
+    name = os.path.splitext(filename)[0]
+    name = re.sub(
+        r'\(\s*(?:'
+        r'[A-Za-z]{3,9}\.?\s+\d{1,2},?\s*\d{4}'
+        r'|\d{1,2}[\.\-/]\d{1,2}[\.\-/]\d{2,4}'
+        r'|\d{4}[\.\-/]\d{1,2}[\.\-/]\d{1,2}'
+        r')'
+        r'(?:\s*[-–—]\s*'
+        r'(?:'
+        r'[A-Za-z]{3,9}\.?\s+\d{1,2},?\s*\d{4}'
+        r'|\d{1,2}[\.\-/]\d{1,2}[\.\-/]\d{2,4}'
+        r'|\d{4}[\.\-/]\d{1,2}[\.\-/]\d{1,2}'
+        r'))?'
+        r'\s*\)',
+        '', name
+    )
+    name = re.sub(r'\d{2}-[A-Za-z]{3}-\d{4}', '', name)
+    name = re.sub(r'\d{4}-\d{2}-\d{2}', '', name)
+    name = re.sub(r'\d{2}\.\d{2}\.\d{4}', '', name)
+    name = re.sub(r'LV\d{2}[A-Z]{4}\d{13,}', '', name)
+    name = re.sub(r'[_\-]', ' ', name)
+    name = re.sub(r'\.+', ' ', name)
+    name = re.sub(r'\s+', ' ', name)
+    name = re.sub(r' \(2\)$', '', name)
+    return name.strip() if name else 'Неизвестный счет'
+
+
+def parse_date(date_str) -> str:
+    if date_str is None or pd.isna(date_str):
+        return ''
+    s = str(date_str).strip()
+    if not s or s in ['nan', '-', 'None', 'null', 'NaT']:
+        return ''
+    if ' ' in s:
+        s = s.split(' ')[0]
+    if 'T' in s:
+        s = s.split('T')[0]
+    if s.endswith('.0'):
+        s = s[:-2]
+    if s.isdigit() and len(s) == 8:
+        return f"{s[6:8]}-{s[4:6]}-{s[:4]}"
+    if s.isdigit() and len(s) == 5 and 40000 <= int(s) <= 50000:
+        try:
+            from datetime import timedelta
+            base = datetime(1899, 12, 30)
+            d = base + timedelta(days=int(s))
+            return d.strftime("%d-%m-%Y")
+        except Exception:
+            pass
+    m = re.match(r'^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$', s)
+    if m:
+        d, mo, y = m.groups()
+        if len(y) == 2:
+            y = f"20{y}"
+        return f"{d.zfill(2)}-{mo.zfill(2)}-{y}"
+    m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2,4})$', s)
+    if m:
+        d, mo, y = m.groups()
+        if len(y) == 2:
+            y = f"20{y}"
+        return f"{d.zfill(2)}-{mo.zfill(2)}-{y}"
+    m = re.match(r'^(\d{4})-(\d{2})-(\d{2})', s)
+    if m:
+        y, mo, d = m.groups()
+        return f"{d}-{mo}-{y}"
+    m = re.match(r'^(\d{4})(\d{2})(\d{2})', s)
+    if m:
+        y, mo, d = m.groups()
+        return f"{d}-{mo}-{y}"
+    m = re.match(r'^(\d{1,2})-(\d{1,2})-(\d{4})$', s)
+    if m:
+        d, mo, y = m.groups()
+        return f"{d.zfill(2)}-{mo.zfill(2)}-{y}"
+    for fmt in ["%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d-%b-%y"]:
+        try:
+            return datetime.strptime(s, fmt).strftime("%d-%m-%Y")
+        except Exception:
+            continue
+    for fmt in ["%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%Y.%m.%d", "%d-%m-%Y",
+                "%Y%m%d", "%d.%m.%y", "%d/%m/%y"]:
+        try:
+            return datetime.strptime(s, fmt).strftime("%d-%m-%Y")
+        except Exception:
+            continue
+    return s
+
+
+def parse_amount(amount_str) -> float:
+    if amount_str is None or pd.isna(amount_str):
+        return 0.0
+    s = str(amount_str).strip()
+    if s in ['', 'nan', '-', 'None', 'null', 'NaN', 'N/A', 'n/a']:
+        return 0.0
+    is_negative = False
+    if s.startswith('-'):
+        is_negative = True
+        s = s[1:]
+    elif s.startswith('+'):
+        s = s[1:]
+    elif s.startswith('(') and s.endswith(')'):
+        is_negative = True
+        s = s[1:-1]
+    s = re.sub(r'^[€$£¥]\s*', '', s)
+    s = re.sub(r'\s*[€$£¥]\s*$', '', s)
+    s = re.sub(r'\s*[A-Z]{3}\s*$', '', s)
+    s = s.replace(' ', '').replace('\xa0', '').replace('\u202f', '')
+    if ',' in s and '.' in s:
+        if s.rfind('.') < s.rfind(','):
+            s = s.replace('.', '').replace(',', '.')
+        else:
+            s = s.replace(',', '')
+    elif ',' in s:
+        parts = s.split(',')
+        if len(parts) == 2 and len(parts[1]) <= 2:
+            s = s.replace(',', '.')
+        else:
+            s = s.replace(',', '')
+    s = re.sub(r'[^\d.\-]', '', s)
+    if not s or s == '.':
+        return 0.0
+    try:
+        v = float(s)
+        return -abs(v) if is_negative else abs(v)
+    except Exception:
+        return 0.0
+
+
+def format_amount(amount: float) -> str:
+    if amount is None:
+        return "0,00"
+    try:
+        if pd.isna(amount):
+            return "0,00"
+    except Exception:
+        pass
+    try:
+        v = float(amount)
+    except Exception:
+        return "0,00"
+    sign = "-" if v < 0 else ""
+    formatted = f"{abs(v):.2f}".replace('.', ',')
+    if ',' in formatted:
+        ip, dp = formatted.split(',')
+        ip = re.sub(r'(?<=\d)(?=(\d{3})+(?!\d))', ' ', ip)
+        return f"{sign}{ip},{dp}"
+    return f"{sign}{formatted}"
+
+
+def to_float_amount(v) -> float:
+    if v is None:
+        return 0.0
+    if isinstance(v, (int, float)):
+        try:
+            if pd.isna(v):
+                return 0.0
+        except Exception:
+            pass
+        return float(v)
+    s = str(v).strip()
+    if not s or s.lower() in ('nan', 'none', 'null'):
+        return 0.0
+    s = s.replace('\xa0', '').replace('\u202f', '').replace(' ', '')
+    if ',' in s and '.' in s:
+        if s.rfind('.') < s.rfind(','):
+            s = s.replace('.', '').replace(',', '.')
+        else:
+            s = s.replace(',', '')
+    elif ',' in s:
+        s = s.replace(',', '.')
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+def safe_str(v) -> str:
+    if v is None or pd.isna(v):
+        return ''
+    return str(v).strip()
+
+
+# ==================== [FIX-TRANSLATE-FULL] ПЕРЕВОД ОПИСАНИЙ ====================
 #
-# Расширенный словарь (~600 ключей). Поддерживает:
-#   • многословные фразы (2-5 слов),
-#   • морфологию (падежи, окончания) — через regex с опциональным хвостом,
-#   • постобработку (Nr. → №, N → №, схлопывание пробелов).
+# Два слоя:
+#   1) _PHRASE_DICT — многословные фразы, заменяются целиком (регистронезависимо,
+#      без границ слов). Это ключевой фикс: "Value Added Tax - Output",
+#      "Corr.Bank.Charges", "Inward Remittance FUND TRANSFER" и т.д.
+#   2) _TRANSLATION_DICT — одиночные слова для fallback.
 #
-# Ключи хранятся в НИЖНЕМ регистре. Поиск — регистронезависимый.
+# Замены многословных фраз применяются ПЕРВЫМИ, и уже переведённые фрагменты
+# не трогаются одиночными заменами (защита через плейсхолдеры).
 
-_TRANSLATION_DICT: Dict[str, str] = {
-    # ================= ENGLISH =================
-    # --- Фразы ---
+_PHRASE_DICT: Dict[str, str] = {
+    # ---------- English (многословные) ----------
+    "value added tax - output": "НДС к уплате",
+    "value added tax - input": "НДС к возмещению",
+    "value added tax": "НДС",
+    "corr.bank.charges": "комиссии банка-корреспондента",
+    "corr. bank charges": "комиссии банка-корреспондента",
+    "inward remittance fund transfer": "входящий перевод средств",
+    "inward remittance": "входящий перевод",
+    "outward clearing cheque": "исходящий клиринговый чек",
+    "outward clearing": "исходящий клиринг",
+    "online international money transfer": "международный онлайн-перевод",
+    "funds transfer charges": "комиссии за перевод средств",
+    "acc. maintenance, statements and trans.": "обслуживание счёта, выписки и операции",
+    "acc. maintenance, statements and transactions": "обслуживание счёта, выписки и операции",
+    "account maintenance charges. for": "комиссия за обслуживание счёта. За",
+    "account maintenance charges": "комиссия за обслуживание счёта",
+    "banking charges": "банковские комиссии",
+    "bank charges": "банковские комиссии",
+    "subscription fee for": "абонентская плата за",
+    "subscription fee": "абонентская плата",
+    "foreign exchange transaction fee": "комиссия за конвертацию валюты",
+    "foreign exchange transaction": "операция обмена валюты",
+    "transfer own funds": "перевод собственных средств",
+    "salary and other payments": "зарплата и прочие выплаты",
+    "salary amount transfer": "перевод заработной платы",
+    "outgoing xohks payment": "исходящий платёж XOHKS",
+    "incoming swift payment": "входящий SWIFT-платёж",
+    "internal payment": "внутренний платёж",
+    "currency exchange (spot)": "обмен валюты (спот)",
+    "currency exchange": "обмен валюты",
     "money added from": "пополнение от",
-    "money sent to": "перевод в адрес",
     "money received from": "поступление от",
+    "money sent to": "перевод в адрес",
     "money added": "пополнение",
     "money received": "поступление",
     "money sent": "отправлено",
     "card payment": "оплата картой",
     "atm withdrawal": "снятие в банкомате",
+    "cash withdrawal": "снятие наличных",
+    "cash deposit": "внесение наличных",
     "exchange in": "обмен валюты (поступление)",
     "exchange out": "обмен валюты (списание)",
-    "value added tax": "налог на добавленную стоимость",
-    "value added tax - output": "НДС к уплате",
-    "foreign exchange transaction fee": "комиссия за конвертацию валюты",
-    "account maintenance charges": "комиссия за обслуживание счёта",
-    "account maintenance": "обслуживание счёта",
-    "banking charges": "банковские комиссии",
-    "bank charges": "банковские комиссии",
-    "acc. maintenance": "обслуживание счёта",
-    "statements and trans": "выписки и операции",
-    "statements and transactions": "выписки и операции",
-    "inward remittance": "входящий перевод",
-    "outward clearing cheque": "исходящий клиринговый чек",
-    "outward clearing": "исходящий клиринг",
-    "funds transfer charges": "комиссия за перевод средств",
-    "online international money transfer": "онлайн международный перевод",
-    "online international money": "онлайн международный",
-    "corr.bank.charges": "комиссии банка-корреспондента",
-    "corr. bank charges": "комиссии банка-корреспондента",
-    "subscription fee for": "абонентская плата за",
-    "subscription fee": "абонентская плата",
-    "salary and other payments": "зарплата и прочие выплаты",
-    "salary amount transfer": "перевод заработной платы",
-    "salary transfer": "перевод заработной платы",
-    "transfer own funds": "перевод собственных средств",
-    "own funds": "собственные средства",
-    "charge for": "комиссия за",
-    "internal payment": "внутренний платёж",
-    "external payment": "внешний платёж",
-    "outgoing payment": "исходящий платёж",
-    "incoming payment": "входящий платёж",
-    "outgoing xohks payment": "исходящий платёж XOHKS",
-    "incoming swift payment": "входящий SWIFT-платёж",
-    "internal transfer": "внутренний перевод",
-    "external transfer": "внешний перевод",
-    "noncash transfer": "безналичный перевод",
-    "noncash": "безналичный",
-    "inter company transfer": "внутрикорпоративный перевод",
-    "inter company": "внутрикорпоративный",
-    "agency commissions": "агентские комиссии",
-    "partner sales performance": "эффективность партнёрских продаж",
-    "commission for partnership sale": "комиссия за партнёрскую продажу",
-    "commission referal": "реферальная комиссия",
-    "commission referral": "реферальная комиссия",
-    "commission for client": "комиссия за клиента",
-    "referal commission": "реферальная комиссия",
-    "referral commission": "реферальная комиссия",
-    "for client": "за клиента",
-    "netbankár havi díj": "месячная плата NetBankár",
-    "netbankar havi dij": "месячная плата NetBankár",
-    "havi díj": "месячная плата",
-    "havi dij": "месячная плата",
-    "tranzakciós díjrész": "часть комиссии за транзакцию",
-    "tranzakcios dijresz": "часть комиссии за транзакцию",
-    "tranzakciós díj": "комиссия за транзакцию",
-    "tranzakcios dij": "комиссия за транзакцию",
-    "giro átutalás jutaléka": "комиссия за GIRO-перевод",
-    "giro atutalas jutaleka": "комиссия за GIRO-перевод",
-    "giro átutalás terhelése": "списание по GIRO-переводу",
-    "giro atutalas terhelese": "списание по GIRO-переводу",
-    "bankon belüli átutalás jóváírása": "зачисление по внутреннему переводу",
-    "bankon beluli atutalas jovairasa": "зачисление по внутреннему переводу",
-    "bankon belüli átutalás": "внутренний перевод",
-    "bankon beluli atutalas": "внутренний перевод",
-    "napközbeni forint átvezetés": "внутридневной перевод форинтов",
-    "napkozbeni forint atvezetes": "внутридневной перевод форинтов",
-    "sepa átutalás jóváírása": "зачисление по SEPA-переводу",
-    "sepa atutalas jovairasa": "зачисление по SEPA-переводу",
-    "sepa átutalás": "SEPA-перевод",
-    "sepa atutalas": "SEPA-перевод",
-    "currency exchange": "обмен валюты",
-    "current exchange": "обмен валюты",
-    "spot exchange": "обмен валюты (спот)",
-    "hesabin mohkemlendirilmasi": "зачисление на счёт",
-    "hesaba mədaxil": "зачисление на счёт",
-    "hesaba medaxil": "зачисление на счёт",
-    "korpon terminalindan medaxil": "зачисление через терминал",
-    "dövrün sonuna balans": "остаток на конец периода",
-    "dovrun sonuna balans": "остаток на конец периода",
-    "balance at end of period": "остаток на конец периода",
-    "mövcud balans": "текущий остаток",
-    "movcud balans": "текущий остаток",
-    "netbankár havi": "NetBankár месячная",
-    "kart hesabi": "карточный счёт",
-    "icare haqqi odenisi": "оплата арендной платы",
-    "icare haqqi": "арендная плата",
-    "odenisi": "оплата",
-    "i̇yul": "июль",
-    "iyul": "июль",
-    "avgust": "август",
-    "sentyabr": "сентябрь",
-    "oktyabr": "октябрь",
-    "noyabr": "ноябрь",
-    "dekabr": "декабрь",
-    "yanvar": "январь",
-    "fevral": "февраль",
-    "mart": "март",
-    "aprel": "апрель",
-    "may": "май",
-    "iyun": "июнь",
-    "tarixli faktura": "счёт от",
-    "tarixli": "от",
-    "faktura": "счёт",
-    "dovlet vergi xidmeti": "государственная налоговая служба",
-    "dövlət vergi xidməti": "государственная налоговая служба",
-    "omv": "OMV",
-    "azərtelecom": "Azercell",
-    "azercell": "Azercell",
-    "azartelecom": "Azercell",
-    "bankon": "внутрибанковский",
-    "belüli": "внутренний",
-    "beluli": "внутренний",
-    "jóváírása": "зачисление",
-    "jovairasa": "зачисление",
-    "terhelése": "списание",
-    "terhelese": "списание",
-    "jutaléka": "комиссия",
-    "jutaleka": "комиссия",
-    "átutalás": "перевод",
-    "atutalas": "перевод",
-
-    # --- Отдельные слова (EN) ---
     "opening balance": "начальный остаток",
     "closing balance": "конечный остаток",
     "starting balance": "начальный остаток",
     "ending balance": "конечный остаток",
-    "inward": "входящий",
-    "outward": "исходящий",
-    "clearing": "клиринг",
-    "cheque": "чек",
-    "check": "чек",
-    "remittance": "перевод",
-    "funds": "средства",
-    "fund": "фонд",
-    "transfer": "перевод",
-    "transfers": "переводы",
-    "payment": "платёж",
-    "payments": "платежи",
-    "paid": "оплачено",
-    "pay": "оплата",
-    "charged": "списано",
-    "charge": "комиссия",
-    "charges": "комиссии",
+    "noncash transfer eb": "безналичный перевод EB",
+    "noncash transfer": "безналичный перевод",
+    "outgoing payment": "исходящий платёж",
+    "incoming payment": "входящий платёж",
+    "online transfer": "онлайн-перевод",
+    "account maintenance": "обслуживание счёта",
+    "sms service fee": "комиссия за SMS-сервис",
+    "sms service": "SMS-сервис",
+    "metal membership": "подписка Metal",
+    "charge accounting": "комиссия за учёт",
+    "charge for": "комиссия за",
+    "message": "сообщение",
+    "notprovided": "не указано",
+    "comission": "комиссия",
+    "commission": "комиссия",
+    "tiktok ads": "реклама TikTok",
+    "tiktok": "TikTok",
+    "google *ads": "GOOGLE *ADS",
+    "google": "Google",
+    "facebk": "FACEBOOK",
+    "debcard": "DebCard",
+    "careem": "Careem",
+    "flydubai": "Flydubai",
+    "union coop": "Union Coop",
+    "dubai metro": "Дубайское метро",
+    "dubai taxi": "такси Дубай",
+    "pizza hut": "Pizza Hut",
+    "pinkberry": "Pinkberry",
+    "seven": "Seven",
+    "regent palace hotel": "Regent Palace Hotel",
+    "albato": "Albato",
+    "to host arabia": "To Host Arabia",
+    "i r m g mena restauran": "ресторан I R M G Mena",
+    "day to day": "Day To Day",
+    "butter bread bakery": "Butter Bread Bakery",
+    "voltup electric vehicl": "электромобиль Voltup",
+    "shabik electric vehicl": "электромобиль Shabik",
+    "dar al fahidi car park": "парковка Dar Al Fahidi",
+    "spices by nature rest": "ресторан Spices by Nature",
+    "corner spmrkt llc": "Corner Supermarket LLC",
+    "tamdeed projects llc": "Tamdeed Projects LLC",
+    "real mini mart llc": "Real Mini Mart LLC",
+    "q general cleaning ser": "клининг Q General",
+    "al beiruti cafe offici": "кафе Al Beiruti",
+    "ksds praha": "Ksds Praha",
+    "praha 1": "Прага 1",
+    "latvija.lv": "Latvija.lv",
+    "sixt": "Sixt",
+    "vueling airlines": "Vueling Airlines",
+    "smartwings.com": "Smartwings.com",
+    "hotel at booking.com": "Hotel at Booking.com",
+    "booking.com": "Booking.com",
+    "openai *chatgpt subscr": "OpenAI *ChatGPT Subscription",
+    "openai chatgpt subscr": "OpenAI ChatGPT Subscription",
+    "anthropic* claude sub": "Anthropic Claude Subscription",
+    "claude sub": "Claude Subscription",
+    "adobe systems software": "Adobe Systems Software",
+    "google one": "Google One",
+    "postsignum": "PostSignum",
+    "revolut": "Revolut",
+    "paysera": "Paysera",
+    "wise": "Wise",
+    "tinkoff": "Тинькофф",
+    "sberbank": "Сбербанк",
+
+    # ---------- Czech (CS) ----------
+    "trvalý příkaz": "постоянное поручение",
+    "vklad hotovosti": "внесение наличных",
+    "výběr hotovosti": "снятие наличных",
+    "platba kartou": "оплата картой",
+    "počáteční zůstatek": "начальный остаток",
+    "konečný zůstatek": "конечный остаток",
+    "přehled pohybů": "обзор операций",
+    "shrnutí pohybů": "сводка операций",
+    "obraty za období": "обороты за период",
+    "obraty od začátku": "обороты с начала",
+    "počet položek": "количество позиций",
+    "číslo protiúčtu": "номер корсчёта",
+    "celkem připsáno": "всего зачислено",
+    "celkem odepsáno": "всего списано",
+    "celkem přišlo": "всего поступило",
+    "celkem odešlo": "всего отправлено",
+    "disponibilní zůstatek": "доступный остаток",
+    "příchozí platba": "входящий платёж",
+    "odchozí platba": "исходящий платёж",
+    "připsáno na účet": "зачислено на счёт",
+    "odepsáno z účtu": "списано со счёта",
+    "místo:": "место:",
+    "částka:": "сумма:",
+    "poplatek": "комиссия",
+    "úrok do": "проценты до",
+    "převod": "перевод",
+    "vklad": "внесение",
+    "výběr": "снятие",
+    "platba": "платёж",
+    "faktura": "счёт",
+    "nájem": "аренда",
+    "mzda": "зарплата",
+    "daň": "налог",
+    "pojištění": "страхование",
+    "půjčka": "кредит",
+    "splátka": "платёж по кредиту",
+    "odměna": "вознаграждение",
+    "vratka": "возврат",
+    "inkaso": "инкассо",
+    "celkem": "всего",
+    "zůstatek": "остаток",
+    "pohyby": "операции",
+
+    # ---------- Latvian (LV) ----------
+    "skaidras naudas iemaksa": "внесение наличных",
+    "skaidras naudas izņemšana": "снятие наличных",
+    "maksājums ar karti": "оплата картой",
+    "komisijas maksa": "комиссионный сбор",
+    "maksājuma mērķis": "назначение платежа",
+    "sākuma atlikums": "начальный остаток",
+    "beigu atlikums": "конечный остаток",
+    "ienākošais maksājums": "входящий платёж",
+    "izejošais maksājums": "исходящий платёж",
+    "apmaksa par rēķinu": "оплата по счёту",
+    "apmaksa par rekinu": "оплата по счёту",
+    "bankas komisija par holdinga izveidi internetbankā": "банковская комиссия за создание холдинга в интернет-банке",
+    "bankas komisija par izmaiņām klientu lietā": "банковская комиссия за изменения в деле клиента",
+    "bankas komisija": "банковская комиссия",
+    "par rekinu": "по счёту",
+    "par rēķinu": "по счёту",
+    "rek. inv": "счёт INV",
+    "maksājums": "платёж",
+    "pārskaitījums": "перевод",
+    "ienākošais": "входящий",
+    "izejošais": "исходящий",
+    "komisija": "комиссия",
+    "izņemšana": "снятие",
+    "iemaksa": "взнос",
+    "procenti": "проценты",
+    "alga": "зарплата",
+    "īre": "аренда",
+    "rēķins": "счёт",
+    "nodoklis": "налог",
+    "apdrošināšana": "страхование",
+    "aizdevums": "кредит",
+    "atmaksa": "возврат",
+    "atlīdzība": "вознаграждение",
+    "prēmija": "премия",
+    "kompensācija": "компенсация",
+    "atlikums": "остаток",
+    "kopsumma": "итого",
+    "ienākumi": "доходы",
+    "izdevumi": "расходы",
+    "saņēmējs": "получатель",
+    "maksātājs": "плательщик",
+    "mērķis": "назначение",
+    "datums": "дата",
+    "summa": "сумма",
+    "veids": "тип",
+    "konts": "счёт",
+
+    # ---------- Hungarian (HU) ----------
+    "készpénzfelvétel": "снятие наличных",
+    "készpénzbefizetés": "внесение наличных",
+    "kártyás fizetés": "оплата картой",
+    "nyitó egyenleg": "начальный баланс",
+    "záró egyenleg": "конечный баланс",
+    "tranzakció típusa": "тип транзакции",
+    "giro átutalás jutaléka": "комиссия за GIRO-перевод",
+    "giro átutalás terhelése": "списание по GIRO-переводу",
+    "giro átutalás": "GIRO-перевод",
+    "bankon belüli átutalás jóváírása": "зачисление по внутреннему переводу",
+    "bankon belüli átutalás": "внутренний перевод",
+    "bankon belüli": "внутренний",
+    "napközbeni forint átvezetés": "внутридневной перевод форинтов",
+    "napközbeni forint": "внутридневной перевод форинтов",
+    "netbankár havi díj": "месячная плата NetBankár",
+    "netbankár": "NetBankár",
+    "tranzakciós díjrész": "часть комиссии за транзакцию",
+    "tranzakciós díj": "комиссия за транзакцию",
+    "havi díj": "месячная плата",
+    "számlavezetési díj": "плата за ведение счёта",
+    "sepa átutalás jóváírása": "зачисление SEPA-перевода",
+    "sepa átutalás": "SEPA-перевод",
+    "fizetés": "платёж",
+    "átutalás": "перевод",
+    "bejövő": "входящий",
+    "kimenő": "исходящий",
+    "díj": "сбор",
+    "jutalék": "комиссия",
+    "vásárlás": "покупка",
+    "kamat": "проценты",
+    "bér": "зарплата",
+    "bérleti díj": "арендная плата",
+    "számla": "счёт",
+    "adó": "налог",
+    "biztosítás": "страхование",
+    "kölcsön": "кредит",
+    "törlesztés": "погашение",
+    "visszatérítés": "возврат",
+    "jóváírás": "зачисление",
+    "terhelés": "списание",
+    "egyenleg": "баланс",
+    "összeg": "сумма",
+    "közlemény": "сообщение",
+    "kedvezményezett neve": "имя получателя",
+    "kedvezményezett": "получатель",
+    "értéknap": "дата валютирования",
+    "sorszám": "номер",
+    "típus": "тип",
+    "dátum": "дата",
+    "tranzakció": "транзакция",
+    "megbízás": "поручение",
+    "befizetés": "внесение",
+    "kifizetés": "выплата",
+
+    # ---------- Azeri (AZ) ----------
+    "hesaba mədaxil": "зачисление на счёт",
+    "hesaba medaxil": "зачисление на счёт",
+    "dövrün sonuna balans": "остаток на конец периода",
+    "dovrun sonuna balans": "остаток на конец периода",
+    "icra tarixi": "дата исполнения",
+    "əməliyyat tarixi": "дата операции",
+    "mədaxil": "приход",
+    "məxaric": "расход",
+    "təyinat": "назначение",
+    "ödəyən": "плательщик",
+    "benefisiar": "получатель",
+    "balans": "баланс",
+    "kart hesabi": "карточный счёт",
+    "icare haqqi odenisi": "оплата аренды",
+    "dovlet vergi xidmeti": "государственная налоговая служба",
+}
+
+_TRANSLATION_DICT: Dict[str, str] = {
+    # ---------- English (одиночные слова) ----------
     "fee": "комиссия",
     "fees": "комиссии",
-    "commission": "комиссия",
-    "commissions": "комиссии",
+    "payment": "платёж",
+    "payments": "платежи",
+    "transfer": "перевод",
+    "transfers": "переводы",
     "salary": "заработная плата",
-    "wage": "зарплата",
-    "wages": "зарплата",
     "refund": "возврат",
     "invoice": "счёт",
     "rent": "аренда",
     "utilities": "коммунальные услуги",
+    "commission": "комиссия",
     "dividend": "дивиденды",
     "interest": "проценты",
     "purchase": "покупка",
-    "purchases": "покупки",
     "withdrawal": "снятие",
     "deposit": "внесение",
     "groceries": "продукты",
@@ -419,839 +1097,114 @@ _TRANSLATION_DICT: Dict[str, str] = {
     "beneficiary": "получатель",
     "payer": "плательщик",
     "amount": "сумма",
-    "amounts": "суммы",
     "balance": "баланс",
     "statement": "выписка",
-    "statements": "выписки",
-    "maintenance": "обслуживание",
-    "account": "счёт",
-    "accounts": "счета",
-    "transaction": "транзакция",
-    "transactions": "транзакции",
-    "trans": "операции",
-    "subscription": "подписка",
-    "subscriptions": "подписки",
-    "monthly": "ежемесячный",
-    "daily": "ежедневный",
-    "annual": "ежегодный",
-    "yearly": "ежегодный",
-    "weekly": "еженедельный",
-    "partner": "партнёр",
-    "partnership": "партнёрство",
-    "sale": "продажа",
-    "sales": "продажи",
-    "supplier": "поставщик",
-    "instruct": "инструкция",
-    "curr": "валюта",
-    "amt": "сумма",
-    "curr/amt": "валюта/сумма",
-    "output": "исходящий",
-    "input": "входящий",
-    "vat": "НДС",
-    "noncash": "безналичный",
-    "cash": "наличные",
-    "corr": "корреспондентский",
-    "bank": "банк",
-    "banks": "банки",
-    "corr.bank": "банк-корреспондент",
-    "international": "международный",
-    "national": "национальный",
-    "domestic": "внутренний",
-    "internal": "внутренний",
-    "external": "внешний",
-    "online": "онлайн",
-    "offline": "офлайн",
-    "mobile": "мобильный",
-    "internet": "интернет",
-    "agency": "агентство",
-    "agent": "агент",
-    "client": "клиент",
-    "clients": "клиенты",
-    "customer": "клиент",
-    "supplier": "поставщик",
-    "vendor": "поставщик",
-    "merchant": "мерчант",
-    "to": "в",
+    "to": "к",
     "from": "от",
     "for": "за",
-    "of": "от",
-    "the": "",
-    "and": "и",
-    "or": "или",
-    "with": "с",
-    "without": "без",
-    "by": "от",
-    "on": "на",
-    "in": "в",
-    "at": "в",
-    "no.": "№",
-    "no": "№",
-    "n": "№",
-    "nr.": "№",
-    "nr": "№",
-    "num": "№",
-    "number": "номер",
-    "doc.": "док.",
-    "doc": "док.",
-    "document": "документ",
-    "place": "место",
-    "date": "дата",
-    "time": "время",
-    "type": "тип",
-    "note": "примечание",
-    "notes": "примечания",
-    "comment": "комментарий",
-    "comments": "комментарии",
-    "message": "сообщение",
-    "messages": "сообщения",
-    "error": "ошибка",
-    "warning": "предупреждение",
-    "info": "информация",
+    "internal": "внутренний",
+    "external": "внешний",
     "card": "карта",
-    "cards": "карты",
-    "credit": "кредит",
-    "debit": "дебет",
-    "debt": "долг",
-    "creditor": "кредитор",
-    "debtor": "должник",
-    "recipient": "получатель",
-    "sender": "отправитель",
-    "receiver": "получатель",
-    "name": "имя",
-    "address": "адрес",
-    "city": "город",
-    "country": "страна",
-    "street": "улица",
-    "phone": "телефон",
-    "email": "email",
-    "iban": "IBAN",
-    "bic": "BIC",
-    "swift": "SWIFT",
-    "sepa": "SEPA",
-    "ach": "ACH",
-    "wire": "wire",
-    "wire transfer": "банковский перевод",
-    "domestic transfer": "внутренний перевод",
-    "international transfer": "международный перевод",
-    "urgent": "срочный",
-    "express": "экспресс",
-    "standard": "стандартный",
-    "priority": "приоритетный",
-    "regular": "обычный",
-    "recurring": "регулярный",
-    "one-time": "разовый",
-    "one time": "разовый",
-    "instant": "мгновенный",
-    "immediate": "немедленный",
-    "scheduled": "запланированный",
-    "pending": "в ожидании",
-    "completed": "завершён",
-    "failed": "не удался",
-    "cancelled": "отменён",
-    "canceled": "отменён",
-    "rejected": "отклонён",
-    "returned": "возвращён",
-    "refunded": "возмещён",
-    "reversed": "отменён",
-    "reversal": "отмена",
-    "correction": "корректировка",
-    "adjustment": "корректировка",
-    "compensation": "компенсация",
-    "penalty": "штраф",
-    "fine": "штраф",
-    "tax": "налог",
-    "taxes": "налоги",
-    "vat": "НДС",
-    "income tax": "подоходный налог",
-    "property tax": "налог на имущество",
-    "social tax": "социальный налог",
-    "social security": "социальное страхование",
-    "pension": "пенсия",
-    "pension fund": "пенсионный фонд",
-    "health insurance": "медицинское страхование",
-    "life insurance": "страхование жизни",
-    "property insurance": "страхование имущества",
-    "car insurance": "автострахование",
-    "travel insurance": "страхование путешествий",
-    "loan payment": "платёж по кредиту",
-    "loan repayment": "погашение кредита",
-    "mortgage": "ипотека",
-    "mortgage payment": "платёж по ипотеке",
-    "lease": "лизинг",
-    "leasing": "лизинг",
-    "rent payment": "арендный платёж",
-    "rental": "аренда",
-    "utilities payment": "оплата коммунальных услуг",
-    "utility": "коммунальная услуга",
-    "utility bill": "счёт за коммунальные услуги",
-    "electricity": "электроэнергия",
-    "gas": "газ",
-    "water": "вода",
-    "heating": "отопление",
-    "internet": "интернет",
-    "telephone": "телефон",
-    "mobile phone": "мобильный телефон",
-    "tv": "ТВ",
-    "cable": "кабельное",
-    "subscription": "подписка",
-    "membership": "членство",
-    "membership fee": "членский взнос",
-    "annual fee": "годовая плата",
-    "monthly fee": "месячная плата",
-    "daily fee": "ежедневная плата",
-    "late fee": "плата за просрочку",
-    "overdraft fee": "комиссия за овердрафт",
-    "overdraft": "овердрафт",
-    "overdraft interest": "проценты по овердрафту",
-    "interest payment": "процентный платёж",
-    "interest income": "процентный доход",
-    "interest expense": "процентный расход",
-    "dividend payment": "выплата дивидендов",
-    "dividend income": "дивидендный доход",
-    "capital gain": "прирост капитала",
-    "capital loss": "убыток от капитала",
-    "profit": "прибыль",
-    "loss": "убыток",
-    "revenue": "выручка",
-    "expense": "расход",
-    "expenses": "расходы",
-    "income": "доход",
-    "incomes": "доходы",
-    "earning": "заработок",
-    "earnings": "заработки",
-    "payment order": "платёжное поручение",
-    "payment order": "платёжное поручение",
-    "standing order": "постоянное поручение",
-    "direct debit": "прямое дебетование",
-    "direct deposit": "прямое зачисление",
-    "wire transfer": "банковский перевод",
-    "bank transfer": "банковский перевод",
-    "bank fee": "банковская комиссия",
-    "bank charges": "банковские комиссии",
-    "banking": "банковский",
-    "banking charges": "банковские комиссии",
-    "account fee": "комиссия за счёт",
-    "account maintenance": "обслуживание счёта",
-    "account maintenance fee": "комиссия за обслуживание счёта",
-    "account statement": "выписка по счёту",
-    "account balance": "баланс счёта",
-    "available balance": "доступный остаток",
-    "current balance": "текущий баланс",
-    "opening balance": "начальный остаток",
-    "closing balance": "конечный остаток",
-    "minimum balance": "минимальный остаток",
-    "maximum balance": "максимальный остаток",
-    "average balance": "средний остаток",
-    "credit limit": "кредитный лимит",
-    "debit limit": "дебетовый лимит",
-    "daily limit": "дневной лимит",
-    "monthly limit": "месячный лимит",
-    "transaction limit": "лимит транзакции",
-    "limit": "лимит",
-    "limits": "лимиты",
-    "currency": "валюта",
-    "currencies": "валюты",
-    "exchange rate": "курс обмена",
-    "rate": "ставка",
-    "rates": "ставки",
-    "exchange": "обмен",
-    "conversion": "конвертация",
-    "converted": "сконвертировано",
-    "conversion fee": "комиссия за конвертацию",
-    "cross-border": "трансграничный",
-    "cross border": "трансграничный",
-    "border": "граница",
-    "abroad": "за границей",
-    "overseas": "зарубежный",
-    "foreign": "иностранный",
-    "local": "местный",
-    "national": "национальный",
-    "regional": "региональный",
-    "global": "глобальный",
-    "worldwide": "по всему миру",
-    "merchant": "мерчант",
-    "point of sale": "точка продажи",
-    "pos": "POS",
-    "terminal": "терминал",
-    "atm": "банкомат",
-    "cash machine": "банкомат",
-    "cash withdrawal": "снятие наличных",
-    "cash deposit": "внесение наличных",
-    "cash advance": "получение наличных",
-    "cashback": "кэшбэк",
-    "cash back": "кэшбэк",
-    "reward": "вознаграждение",
-    "rewards": "вознаграждения",
-    "points": "баллы",
-    "loyalty": "лояльность",
-    "loyalty program": "программа лояльности",
-    "bonus": "бонус",
-    "bonuses": "бонусы",
-    "discount": "скидка",
-    "discounts": "скидки",
-    "promo": "промо",
-    "promotion": "промоакция",
-    "coupon": "купон",
-    "voucher": "ваучер",
-    "gift": "подарок",
-    "donation": "пожертвование",
-    "charity": "благотворительность",
-    "tip": "чаевые",
-    "tips": "чаевые",
-    "service": "услуга",
-    "services": "услуги",
-    "product": "продукт",
-    "products": "продукты",
-    "goods": "товары",
-    "items": "позиции",
-    "order": "заказ",
-    "orders": "заказы",
-    "delivery": "доставка",
-    "shipping": "доставка",
-    "logistics": "логистика",
-    "transport": "транспорт",
-    "transportation": "транспортировка",
-    "travel": "путешествие",
-    "trip": "поездка",
-    "hotel": "отель",
-    "booking": "бронирование",
-    "flight": "рейс",
-    "flights": "рейсы",
-    "airline": "авиакомпания",
-    "airlines": "авиакомпании",
-    "ticket": "билет",
-    "tickets": "билеты",
-    "train": "поезд",
-    "bus": "автобус",
-    "car rental": "аренда автомобиля",
-    "rental car": "аренда автомобиля",
-    "fuel": "топливо",
-    "gas station": "АЗС",
-    "petrol": "бензин",
-    "diesel": "дизель",
-    "parking": "парковка",
-    "toll": "плата за проезд",
-    "taxi": "такси",
-    "uber": "Uber",
-    "bolt": "Bolt",
-    "lyft": "Lyft",
-    "food": "еда",
-    "restaurant": "ресторан",
-    "cafe": "кафе",
-    "coffee": "кофе",
-    "bar": "бар",
-    "pub": "паб",
-    "grocery": "продукты",
-    "groceries": "продукты",
-    "supermarket": "супермаркет",
-    "market": "рынок",
-    "shop": "магазин",
-    "shopping": "покупки",
-    "store": "магазин",
-    "retail": "розница",
-    "wholesale": "опт",
-    "online shopping": "онлайн-покупки",
-    "e-commerce": "электронная коммерция",
-    "ecommerce": "электронная коммерция",
-    "marketplace": "маркетплейс",
-    "amazon": "Amazon",
-    "ebay": "eBay",
-    "alibaba": "Alibaba",
-    "aliexpress": "AliExpress",
-    "google": "Google",
-    "apple": "Apple",
-    "microsoft": "Microsoft",
-    "facebook": "Facebook",
-    "meta": "Meta",
-    "instagram": "Instagram",
-    "twitter": "Twitter",
-    "tiktok": "TikTok",
-    "youtube": "YouTube",
-    "netflix": "Netflix",
-    "spotify": "Spotify",
-    "adobe": "Adobe",
-    "dropbox": "Dropbox",
-    "openai": "OpenAI",
-    "anthropic": "Anthropic",
-    "claude": "Claude",
-    "chatgpt": "ChatGPT",
-    "booking.com": "Booking.com",
-    "airbnb": "Airbnb",
-    "uber eats": "Uber Eats",
-    "paypal": "PayPal",
-    "stripe": "Stripe",
-    "wise": "Wise",
-    "revolut": "Revolut",
-    "n26": "N26",
-    "monzo": "Monzo",
-    "starling": "Starling",
-    "chase": "Chase",
-    "hsbc": "HSBC",
-    "barclays": "Barclays",
-    "santander": "Santander",
-    "deutsche bank": "Deutsche Bank",
-    "commerzbank": "Commerzbank",
-    "unicredit": "UniCredit",
-    "intesa": "Intesa",
-    "bnp": "BNP",
-    "societe generale": "Société Générale",
-    "credit agricole": "Crédit Agricole",
-    "raiffeisen": "Raiffeisen",
-    "erste": "Erste",
-    "csob": "ČSOB",
-    "kb": "KB",
-    "moneta": "Moneta",
-    "fio": "FIO",
-    "airbank": "AirBank",
-    "mbank": "mBank",
-    "ing": "ING",
-    "seb": "SEB",
-    "swedbank": "Swedbank",
-    "luminor": "Luminor",
-    "citadele": "Citadele",
-    "bluor": "BluOr",
-    "industra": "Industra",
-    "paysera": "Paysera",
-    "pasha": "Pasha",
-    "kapital": "Kapital",
-    "mashreq": "Mashreq",
-    "tinkoff": "Тинькофф",
-    "sber": "Сбер",
-    "vtb": "ВТБ",
-    "alfa": "Альфа",
-    "gazprombank": "Газпромбанк",
-    "otkritie": "Открытие",
-    "rosbank": "Росбанк",
-    "mkb": "МКБ",
-    "otp": "OTP",
-    "kh": "K&H",
-    "erste bank": "Erste Bank",
-    "cib": "CIB",
-    "unicredit bank": "UniCredit Bank",
+    "outgoing": "исходящий",
+    "incoming": "входящий",
 
-    # ================= CZECH (CS) =================
-    "vklad hotovosti": "внесение наличных",
-    "výběr hotovosti": "снятие наличных",
-    "vyber hotovosti": "снятие наличных",
-    "platba kartou": "оплата картой",
-    "trvalý příkaz": "постоянное поручение",
-    "trvaly prikaz": "постоянное поручение",
-    "počáteční zůstatek": "начальный остаток",
-    "pocatecni zustatek": "начальный остаток",
-    "konečný zůstatek": "конечный остаток",
-    "konecny zustatek": "конечный остаток",
-    "přehled pohybů": "обзор операций",
-    "prehled pohybu": "обзор операций",
-    "shrnutí pohybů": "сводка операций",
-    "shrnuti pohybu": "сводка операций",
-    "obraty za období": "обороты за период",
-    "obraty za obdobi": "обороты за период",
-    "obraty od začátku": "обороты с начала",
-    "obraty od zacatku": "обороты с начала",
-    "počet položek": "количество позиций",
-    "pocet polozek": "количество позиций",
-    "číslo protiúčtu": "номер корсчёта",
-    "cislo protiuctu": "номер корсчёта",
-    "celkem připsáno": "всего зачислено",
-    "celkem pripsano": "всего зачислено",
-    "celkem odepsáno": "всего списано",
-    "celkem odepsano": "всего списано",
-    "celkem přišlo": "всего поступило",
-    "celkem prislo": "всего поступило",
-    "celkem odešlo": "всего отправлено",
-    "celkem odeslo": "всего отправлено",
-    "disponibilní zůstatek": "доступный остаток",
-    "disponibilni zustatek": "доступный остаток",
-    "zůstatek": "остаток",
-    "zustatek": "остаток",
-    "pohyby": "операции",
-    "připsáno": "зачислено",
-    "pripsano": "зачислено",
-    "odepsáno": "списано",
-    "odepsano": "списано",
-    "zaúčtováno": "проведено",
-    "zauctovano": "проведено",
-    "provedeno": "выполнено",
-    "popis": "описание",
-    "protiúčet": "корсчёт",
-    "protiucet": "корсчёт",
-    "platba": "платёж",
-    "převod": "перевод",
-    "prevod": "перевод",
-    "příchozí": "входящий",
-    "prichozi": "входящий",
-    "odchozí": "исходящий",
-    "odchozi": "исходящий",
+    # ---------- Czech (одиночные) ----------
     "poplatek": "комиссия",
-    "poplatky": "комиссии",
-    "výběr": "снятие",
-    "vyber": "снятие",
-    "vklad": "внесение",
     "úrok": "проценты",
-    "urok": "проценты",
-    "mzda": "зарплата",
-    "mzdy": "зарплаты",
-    "nájem": "аренда",
-    "najem": "аренда",
+    "převod": "перевод",
+    "vklad": "внесение",
+    "výběr": "снятие",
+    "platba": "платёж",
     "faktura": "счёт",
-    "faktury": "счета",
+    "nájem": "аренда",
+    "mzda": "зарплата",
     "daň": "налог",
-    "dan": "налог",
-    "daně": "налоги",
-    "dane": "налоги",
     "pojištění": "страхование",
-    "pojisteni": "страхование",
     "půjčka": "кредит",
-    "pujcka": "кредит",
     "splátka": "платёж по кредиту",
-    "splatka": "платёж по кредиту",
     "odměna": "вознаграждение",
-    "odmena": "вознаграждение",
     "vratka": "возврат",
     "inkaso": "инкассо",
     "celkem": "всего",
-    "příchozí platba": "входящий платёж",
-    "prichozi platba": "входящий платёж",
-    "odchozí platba": "исходящий платёж",
-    "odchozi platba": "исходящий платёж",
-    "místo": "место",
-    "misto": "место",
-    "částka": "сумма",
-    "castka": "сумма",
-    "vedení": "ведение",
-    "vedeni": "ведение",
-    "služeb": "услуг",
-    "sluzeb": "услуг",
-    "balíček": "пакет",
-    "balicek": "пакет",
-    "výpis": "выписка",
-    "vypis": "выписка",
-    "poštovné": "почтовый сбор",
-    "postovne": "почтовый сбор",
-    "žádost": "запрос",
-    "zadost": "запрос",
-    "vyrovnání": "расчёт",
-    "vyrovnani": "расчёт",
-    "debetní": "дебетовый",
-    "debetni": "дебетовый",
-    "nekasový": "безналичный",
-    "nekasovy": "безналичный",
-    "převod": "перевод",
-    "prevod": "перевод",
-    "na príkope": "на Прикопе",
-    "na prikope": "на Прикопе",
-    "hvězdova": "Гвездова",
-    "hvezdova": "Гвездова",
-    "radlická": "Радлицка",
-    "radlicka": "Радлицка",
-    "želetavská": "Желетавска",
-    "zeletavska": "Желетавска",
-    "hráského": "Граского",
-    "hraskeho": "Граского",
-    "komerční banka": "Коммерческий банк",
-    "komercni banka": "Коммерческий банк",
-    "československá obchodní banka": "Чехословацкий торговый банк",
-    "ceskoslovenska obchodni banka": "Чехословацкий торговый банк",
-    "raiffeisenbank": "Райффайзенбанк",
-    "moneta money bank": "Moneta Money Bank",
-    "air bank": "Air Bank",
-    "fio banka": "Fio Banka",
-    "mbank": "mBank",
-    "equa bank": "Equa Bank",
-    "hello bank": "Hello Bank",
-    "unicredit bank": "UniCredit Bank",
-    "poštovní spořitelna": "Почтовая сберегательная",
-    "postovni sporitelna": "Почтовая сберегательная",
-    "modrá pyramida": "Modrá Pyramida",
-    "modra pyramida": "Modrá Pyramida",
-    "stavební spořitelna": "Строительная сберегательная",
-    "stavebni sporitelna": "Строительная сберегательная",
-    "hypoteční banka": "Ипотечный банк",
-    "hypotecni banka": "Ипотечный банк",
-    "čsob": "ČSOB",
-    "csob": "ČSOB",
-    "kb": "KB",
-    "ge money": "GE Money",
-    "wüstenrot": "Wüstenrot",
-    "wustenrot": "Wüstenrot",
+    "zůstatek": "остаток",
+    "pohyby": "операции",
+    "připsáno": "зачислено",
+    "odepsáno": "списано",
+    "zaúčtováno": "проведено",
+    "provedeno": "выполнено",
+    "popis": "описание",
+    "protiúčet": "корсчёт",
+    "příchozí": "входящий",
+    "odchozí": "исходящий",
 
-    # ================= LATVIAN (LV) =================
-    "skaidras naudas iemaksa": "внесение наличных",
-    "skaidras naudas izņemšana": "снятие наличных",
-    "skaidras naudas iznemsana": "снятие наличных",
-    "maksājums ar karti": "оплата картой",
-    "maksajums ar karti": "оплата картой",
-    "komisijas maksa": "комиссионный сбор",
-    "maksājuma mērķis": "назначение платежа",
-    "maksajuma merķis": "назначение платежа",
-    "sākuma atlikums": "начальный остаток",
-    "sakuma atlikums": "начальный остаток",
-    "beigu atlikums": "конечный остаток",
-    "ienākošais maksājums": "входящий платёж",
-    "ienakosais maksajums": "входящий платёж",
-    "izejošais maksājums": "исходящий платёж",
-    "izejosais maksajums": "исходящий платёж",
+    # ---------- Latvian (одиночные) ----------
     "maksājums": "платёж",
-    "maksajums": "платёж",
     "pārskaitījums": "перевод",
-    "parskaitijums": "перевод",
     "ienākošais": "входящий",
-    "ienakosais": "входящий",
     "izejošais": "исходящий",
-    "izejosais": "исходящий",
     "komisija": "комиссия",
     "izņemšana": "снятие",
-    "iznemsana": "снятие",
     "iemaksa": "взнос",
     "procenti": "проценты",
     "alga": "зарплата",
-    "algas": "зарплаты",
     "īre": "аренда",
-    "ire": "аренда",
     "rēķins": "счёт",
-    "rekins": "счёт",
-    "rēķinu": "счёт",
-    "rekinu": "счёт",
-    "rēķina": "счёта",
-    "rekina": "счёта",
     "nodoklis": "налог",
-    "nodokļi": "налоги",
-    "nodokli": "налоги",
     "apdrošināšana": "страхование",
-    "apdrosinasana": "страхование",
     "aizdevums": "кредит",
     "atmaksa": "возврат",
     "atlīdzība": "вознаграждение",
-    "atlidziba": "вознаграждение",
     "prēmija": "премия",
-    "premija": "премия",
     "kompensācija": "компенсация",
-    "kompensacija": "компенсация",
     "atlikums": "остаток",
     "kopsumma": "итого",
     "ienākumi": "доходы",
-    "ienakumi": "доходы",
     "izdevumi": "расходы",
     "saņēmējs": "получатель",
-    "sanemejs": "получатель",
     "maksātājs": "плательщик",
-    "maksatajs": "плательщик",
     "mērķis": "назначение",
-    "merķis": "назначение",
     "datums": "дата",
     "summa": "сумма",
-    "summas": "суммы",
     "veids": "тип",
     "konts": "счёт",
-    "konti": "счета",
-    "bankas komisija": "банковская комиссия",
-    "naudas līdzekļu pārskaitījums": "перевод денежных средств",
-    "naudas lidzeklu parskaitijums": "перевод денежных средств",
-    "apmaksa": "оплата",
-    "apmaksa par": "оплата за",
-    "par rekinu": "по счёту",
-    "par rēķinu": "по счёту",
-    "rek.": "счёт",
-    "reķ.": "счёт",
-    "bankas": "банковская",
-    "izmaiņām": "изменениям",
-    "izmainam": "изменениям",
-    "klientu": "клиентов",
-    "lietā": "в деле",
-    "lieta": "дело",
-    "pilnvara": "доверенность",
-    "holdinga": "холдинга",
-    "izveidi": "создание",
-    "internetbankā": "в интернет-банке",
-    "internetbanka": "интернет-банк",
-    "maksājumu": "платёж",
-    "maksajumu": "платёж",
-    "mērķa": "назначения",
-    "merķa": "назначения",
-    "veikts": "совершён",
-    "saņemts": "получен",
-    "sanemts": "получен",
-    "pārskaitīts": "переведён",
-    "parskaitits": "переведён",
-    "iemaksāts": "внесён",
-    "iemaksats": "внесён",
-    "izņemts": "снят",
-    "iznemts": "снят",
 
-    # ================= HUNGARIAN (HU) =================
-    "készpénzfelvétel": "снятие наличных",
-    "keszpenzfelvetel": "снятие наличных",
-    "készpénzbefizetés": "внесение наличных",
-    "keszpenzbefizetes": "внесение наличных",
-    "kártyás fizetés": "оплата картой",
-    "kartyas fizetes": "оплата картой",
-    "nyitó egyenleg": "начальный баланс",
-    "nyito egyenleg": "начальный баланс",
-    "záró egyenleg": "конечный баланс",
-    "zaro egyenleg": "конечный баланс",
-    "tranzakció típusa": "тип транзакции",
-    "tranzakcio tipusa": "тип транзакции",
+    # ---------- Hungarian (одиночные) ----------
     "fizetés": "платёж",
-    "fizetes": "платёж",
     "átutalás": "перевод",
-    "atutalas": "перевод",
     "bejövő": "входящий",
-    "bejovo": "входящий",
     "kimenő": "исходящий",
-    "kimeno": "исходящий",
     "díj": "сбор",
-    "dij": "сбор",
     "jutalék": "комиссия",
-    "jutalek": "комиссия",
-    "jutaléka": "комиссия",
-    "jutaleka": "комиссия",
     "vásárlás": "покупка",
-    "vasarlas": "покупка",
     "kamat": "проценты",
-    "kamatok": "проценты",
     "bér": "зарплата",
-    "ber": "зарплата",
-    "bérleti díj": "арендная плата",
-    "berleti dij": "арендная плата",
     "számla": "счёт",
-    "szamla": "счёт",
     "adó": "налог",
-    "ado": "налог",
     "biztosítás": "страхование",
-    "biztositas": "страхование",
     "kölcsön": "кредит",
-    "kolcson": "кредит",
     "törlesztés": "погашение",
-    "torlesztes": "погашение",
     "visszatérítés": "возврат",
-    "visszaterites": "возврат",
     "jóváírás": "зачисление",
-    "jovairas": "зачисление",
-    "jóváírása": "зачисление",
-    "jovairasa": "зачисление",
     "terhelés": "списание",
-    "terheles": "списание",
-    "terhelése": "списание",
-    "terhelese": "списание",
     "egyenleg": "баланс",
     "összeg": "сумма",
-    "osszeg": "сумма",
     "közlemény": "сообщение",
-    "kozlemeny": "сообщение",
     "kedvezményezett": "получатель",
-    "kedvezmenyezett": "получатель",
-    "kedvezményezett neve": "имя получателя",
-    "kedvezmenyezett neve": "имя получателя",
     "értéknap": "дата валютирования",
-    "erteknap": "дата валютирования",
     "sorszám": "номер",
-    "sorszam": "номер",
     "típus": "тип",
-    "tipus": "тип",
     "dátum": "дата",
-    "datum": "дата",
     "tranzakció": "транзакция",
-    "tranzakcio": "транзакция",
     "megbízás": "поручение",
-    "megbizas": "поручение",
     "befizetés": "внесение",
-    "befizetes": "внесение",
     "kifizetés": "выплата",
-    "kifizetes": "выплата",
-    "havi díj": "месячный сбор",
-    "havi dij": "месячный сбор",
-    "számlavezetési díj": "сбор за ведение счёта",
-    "szamlavzetesi dij": "сбор за ведение счёта",
-    "havi": "месячный",
-    "napi": "дневной",
-    "éves": "годовой",
-    "eves": "годовой",
-    "heti": "недельный",
-    "negyedéves": "квартальный",
-    "negyedeves": "квартальный",
-    "bankon belüli": "внутрибанковский",
-    "bankon beluli": "внутрибанковский",
-    "átutalás jóváírása": "зачисление по переводу",
-    "atutalas jovairasa": "зачисление по переводу",
-    "átutalás terhelése": "списание по переводу",
-    "atutalas terhelese": "списание по переводу",
-    "giro átutalás": "GIRO-перевод",
-    "giro atutalas": "GIRO-перевод",
-    "sepa átutalás": "SEPA-перевод",
-    "sepa atutalas": "SEPA-перевод",
-    "azonnali átutalás": "мгновенный перевод",
-    "azonnali atutalas": "мгновенный перевод",
-    "csoportos beszedés": "групповое списание",
-    "csoportos beszedes": "групповое списание",
-    "rendszeres átutalás": "регулярный перевод",
-    "rendszeres atutalas": "регулярный перевод",
-    "netbankár": "NetBankár",
-    "netbankar": "NetBankár",
-    "havi díj": "месячная плата",
-    "havi dij": "месячная плата",
-    "számlavezetési": "ведение счёта",
-    "szamlavzetesi": "ведение счёта",
-    "kártyadíj": "плата за карту",
-    "kartyadij": "плата за карту",
-    "készpénzfelvételi díj": "плата за снятие наличных",
-    "keszpenzfelveteli dij": "плата за снятие наличных",
-    "utalási díj": "плата за перевод",
-    "utalasi dij": "плата за перевод",
-    "tranzakciós díj": "комиссия за транзакцию",
-    "tranzakcios dij": "комиссия за транзакцию",
-    "tranzakciós díjrész": "часть комиссии за транзакцию",
-    "tranzakcios dijresz": "часть комиссии за транзакцию",
-    "értesítési díj": "плата за уведомления",
-    "ertesitesi dij": "плата за уведомления",
-    "sms díj": "плата за SMS",
-    "sms dij": "плата за SMS",
-    "postai díj": "почтовый сбор",
-    "postai dij": "почтовый сбор",
-    "kezelési díj": "плата за обслуживание",
-    "kezelesi dij": "плата за обслуживание",
-    "számlanyitási díj": "плата за открытие счёта",
-    "szamlavnyitasi dij": "плата за открытие счёта",
-    "számlazárási díj": "плата за закрытие счёта",
-    "szamlazarsi dij": "плата за закрытие счёта",
-    "bankkártya": "банковская карта",
-    "bankkartya": "банковская карта",
-    "hitelkártya": "кредитная карта",
-    "hitelkartya": "кредитная карта",
-    "betéti kártya": "дебетовая карта",
-    "beteti karty": "дебетовая карта",
-    "folyószámla": "текущий счёт",
-    "folyoszamla": "текущий счёт",
-    "megtakarítási számla": "сберегательный счёт",
-    "megtakaritasi szamla": "сберегательный счёт",
-    "devizaszámla": "валютный счёт",
-    "devizaszamla": "валютный счёт",
-    "forint": "форинт",
-    "euró": "евро",
-    "euro": "евро",
-    "dollár": "доллар",
-    "dollar": "доллар",
-    "font": "фунт",
-    "pound": "фунт",
-    "svájci frank": "швейцарский франк",
-    "svajci frank": "швейцарский франк",
-    "cseh korona": "чешская крона",
-    "cseh korona": "чешская крона",
-    "lengyel zloty": "польский злотый",
-    "lengyel zloty": "польский злотый",
-    "magyar forint": "венгерский форинт",
-    "magyar forint": "венгерский форинт",
-    "amerikai dollár": "американский доллар",
-    "amerikai dollar": "американский доллар",
-    "angol font": "английский фунт",
-    "angol font": "английский фунт",
 }
 
+# Список многословных ключей, отсортированный по длине (длинные — первыми),
+# чтобы "account maintenance charges. for" заменялось раньше "account maintenance".
+_PHRASE_KEYS_SORTED = sorted(_PHRASE_DICT.keys(), key=len, reverse=True)
 
-# --- Сортировка ключей по длине (длинные фразы — раньше) ---
 _TRANSLATE_KEYS_SORTED = sorted(_TRANSLATION_DICT.keys(), key=len, reverse=True)
-
-# --- Паттерн: ищем ключ как отдельное слово с возможным окончанием ---
-# Используем lookbehind/lookahead, чтобы не зацепить часть другого слова.
 _TRANSLATE_PATTERN = re.compile(
     r'(?<![A-Za-zÀ-ÖØ-öø-ÿĀ-žА-Яа-я])'
     r'(' + '|'.join(re.escape(k) for k in _TRANSLATE_KEYS_SORTED) + r')'
@@ -1262,56 +1215,40 @@ _TRANSLATE_PATTERN = re.compile(
 
 def _translate_repl(m: re.Match) -> str:
     key = m.group(1).lower()
-    # 1) точное совпадение
-    if key in _TRANSLATION_DICT:
-        return _TRANSLATION_DICT[key]
-    # 2) по основе (обрезаем до 3 символов с конца)
-    for cut in range(1, 4):
-        base = key[:-cut] if len(key) > cut else key
-        if base in _TRANSLATION_DICT:
-            return _TRANSLATION_DICT[base]
-    # 3) не нашли — оставляем как есть
-    return m.group(0)
-
-
-def _postprocess_translation(s: str) -> str:
-    """Постобработка перевода: №, пробелы, дубли."""
-    if not s:
-        return s
-    # Nr. → №, N → №, No → №
-    s = re.sub(r'\bNr\.?\s*', '№ ', s, flags=re.IGNORECASE)
-    s = re.sub(r'\bNo\.?\s*', '№ ', s, flags=re.IGNORECASE)
-    s = re.sub(r'\bN\s+', '№ ', s)
-    # Схлопываем пробелы
-    s = re.sub(r'\s+', ' ', s).strip()
-    # Убираем "№" без номера
-    s = re.sub(r'№\s*$', '', s).strip()
-    # Убираем дубли слов
-    words = s.split()
-    out = []
-    prev = None
-    for w in words:
-        if w == prev:
-            continue
-        out.append(w)
-        prev = w
-    return ' '.join(out)
+    return _TRANSLATION_DICT.get(key, m.group(0))
 
 
 def translate_to_russian(text: str) -> str:
+    """Переводит описание: сначала многословные фразы целиком, потом слова."""
     if not text:
         return text
     s = str(text)
+
+    # 1) Многословные фразы — заменяем на плейсхолдеры, чтобы одиночные
+    #    замены не трогали уже переведённые фрагменты.
+    placeholders: List[Tuple[str, str]] = []
+    for i, key in enumerate(_PHRASE_KEYS_SORTED):
+        pattern = re.compile(re.escape(key), re.IGNORECASE)
+        def repl(m, _i=i, _key=key):
+            translated = _PHRASE_DICT.get(_key, m.group(0))
+            ph = f"\x00PH{_i}\x00"
+            placeholders.append((ph, translated))
+            return ph
+        s = pattern.sub(repl, s)
+
+    # 2) Одиночные слова — по границам слов.
     s = _TRANSLATE_PATTERN.sub(_translate_repl, s)
-    s = _postprocess_translation(s)
+
+    # 3) Возвращаем многословные переводы.
+    for ph, translated in placeholders:
+        s = s.replace(ph, translated)
+
+    s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 
 def translate_description_inline(original: str) -> str:
-    """
-    [NEW-TRANSLATE-INLINE] "оригинал (перевод)" — если перевод есть;
-    иначе — оригинал без изменений.
-    """
+    """Возвращает 'оригинал (перевод)' если перевод есть, иначе — оригинал."""
     if original is None:
         return ""
     orig = str(original).strip()
@@ -1368,14 +1305,15 @@ def _is_service_description(desc: str) -> bool:
     return False
 
 
+# [FIX-COUNTERPARTY-2] Более агрессивная чистка мусора.
 _JUNK_PATTERNS = [
-    r'\b[A-Z]{2}\d{2}[A-Z0-9]{10,}\b',
-    r'\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2,5}\b',
+    r'\b[A-Z]{2}\d{2}[A-Z0-9]{10,}\b',               # IBAN
+    r'\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2,5}\b',            # SWIFT/BIC
     r'\bREF\b[^\s]*', r'\bSRN\b[^\s]*', r'\bREC\b[^\s]*',
     r'\bROC\b[^\s]*', r'\bMCC\d+\b', r'\bTOC-[A-Z0-9\-]+\b',
     r'\bT_[A-F0-9]{10,}\b',
-    r'\b\d{10,}\b',
-    r'\+\d[\d\s\(\)\-]{6,}',
+    r'\b\d{10,}\b',                                   # длинные числа
+    r'\+\d[\d\s\(\)\-]{6,}',                          # телефоны
     r'\b[A-Z]{2}\d{2}[A-Z]{4}\d{10,}\b',
     r'\bLV\d{2}[A-Z]{4}\d{10,}\b',
     r'\bLT\d{2}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b',
@@ -1384,7 +1322,13 @@ _JUNK_PATTERNS = [
     r'\bAE\d{2}\s?\d{3,}\b',
     r'\b[A-Z]{2}\d{2}\s?[A-Z0-9 ]{10,}\b',
     r'_x000D_', r'\r', r'\n',
-    r'\b[A-Z0-9]{4,}\*[A-Z0-9]+\b',
+    r'\b[A-Z0-9]{4,}\*[A-Z0-9]+\b',                   # FACEBK *XXXX
+    r'\\[a-zA-Z]{2,}\b',                              # \ru, \RU — хвосты
+    r'\b[A-Z]-\d+[A-Z0-9]*\b',                        # M-Y5LIVJQ422MO7
+    r'\b[A-Z]-\d+[A-Z0-9]*/[A-Z0-9]*\b',              # M-Y5LIVJQ422MO7 /ROC/...
+    r'/[A-Z]/?',                                      # одиночные /
+    r'\\',                                            # оставшиеся слэши
+    r'\b\d{5,}(?:[A-Z0-9]*)\b',                       # длинные номера с буквами
 ]
 
 
@@ -1396,7 +1340,7 @@ def _strip_junk(s: str) -> str:
         out = re.sub(pat, ' ', out, flags=re.IGNORECASE)
     out = re.sub(r'[\*\|<>]+', ' ', out)
     out = re.sub(r'[,;:]+', ' ', out)
-    out = re.sub(r'\s+', ' ', out).strip(' .,;:-–—')
+    out = re.sub(r'\s+', ' ', out).strip(' .,;:-–—/\\')
     return out
 
 
@@ -1416,10 +1360,10 @@ def _clean_counterparty_name(name: str) -> str:
                 s = parts[0]
             break
     s = re.sub(r'\s*\([^)]*\)\s*$', '', s).strip()
-    s = s.strip(' .,;:-–—')
+    s = s.strip(' .,;:-–—/\\')
     if len(s) < 2:
         return ''
-    if re.fullmatch(r'[\d\s.,\-]+', s):
+    if re.fullmatch(r'[\d\s.,\-/\\]+', s):
         return ''
     return s
 
@@ -1449,6 +1393,7 @@ _NAME_PATTERNS = [
     (r'\b(?:payment|transfer|paid|sent)\s+to\s+(.+)$', 1),
     (r'\bFrom:\s*(.+)$', 1),
     (r'\bTo:\s*(.+)$', 1),
+    (r'\bсписана\s+(?:у\s+)?(.+)$', 1),
 ]
 
 
@@ -1477,7 +1422,8 @@ def _extract_wio_name(desc: str) -> str:
         name = m.group(1).strip()
         if name:
             return _clean_counterparty_name(name)
-    m = re.match(r'^(GOOGLE|FACEBOOK|FACEBK|APPLE|AMAZON|MICROSOFT|TIKTOK|META|DEBCARD|VISA|MASTERCARD)\b', s, re.IGNORECASE)
+    m = re.match(r'^(GOOGLE|FACEBOOK|FACEBK|APPLE|AMAZON|MICROSOFT|TIKTOK|META|DEBCARD|VISA|MASTERCARD)\b',
+                 s, re.IGNORECASE)
     if m:
         return m.group(1).upper()
     s = _strip_junk(s)
@@ -1486,7 +1432,7 @@ def _extract_wio_name(desc: str) -> str:
     words = s.split()
     out = []
     for w in words:
-        if re.fullmatch(r'[\d.,\-]+', w):
+        if re.fullmatch(r'[\d.,\-/\\]+', w):
             continue
         if w.lower() in ('for', 'internationalcardspend', 'and', 'the', 'of'):
             break
@@ -1559,10 +1505,11 @@ def _extract_regina_alfa_name(desc: str) -> str:
     m = re.match(r'^(CRD_[A-Z0-9]+)', s)
     if m:
         mcc = re.search(r'MCC(\d{4})', s)
-        place = re.search(r'место совершения операции:\s*([^,]+?)(?:,|$)', s)
+        place = re.search(r'место совершения операции:\s*(.+?)(?:MCC|$)', s)
         if place:
             place_s = place.group(1).strip()
-            place_s = re.sub(r'^\d+\\?[A-Z]*\\?', '', place_s)
+            # Убираем ведущий код "25485396\RU\" или "0Y013363\RU\"
+            place_s = re.sub(r'^[0-9A-Z]{4,}\\[A-Z]{2}\\', '', place_s)
             place_s = _clean_counterparty_name(place_s)
             if place_s:
                 return place_s
@@ -1610,6 +1557,10 @@ def _extract_csob_name(desc: str) -> str:
         return 'ČSOB'
     if 'charge' in low and len(desc) < 40:
         return 'ČSOB'
+    if 'outgoing payment' in low:
+        return 'Outgoing payment'
+    if 'noncash transfer' in low:
+        return 'Noncash transfer'
     return ''
 
 
@@ -1671,10 +1622,6 @@ def _extract_tinkoff_name(desc: str) -> str:
     return ''
 
 
-def _extract_paysera_name(desc: str) -> str:
-    return ''
-
-
 def _extract_industra_name(desc: str) -> str:
     if not desc:
         return ''
@@ -1699,9 +1646,18 @@ def extract_counterparty_smart(description: str,
                                 account_name: str = '',
                                 payer: str = '',
                                 beneficiary: str = '') -> Tuple[str, str]:
+    """
+    Возвращает (контрагент, описание_оригинал).
+    Приоритет:
+      1) Явные колонки payer/beneficiary (если не банк).
+      2) Специализированные правила по банку из account_name.
+      3) Универсальные паттерны.
+      4) Первое «осмысленное» имя из описания.
+    """
     desc = (description or '').strip()
     acc_low = (account_name or '').lower()
 
+    # --- 1. Явные колонки ---
     if beneficiary:
         b = beneficiary.strip()
         if b and b.lower() not in ('nan', 'none', 'n/a', '-') and not _looks_like_bank_name(b):
@@ -1716,10 +1672,11 @@ def extract_counterparty_smart(description: str,
 
     cp = ''
 
+    # --- 2. Специализированные правила по банку ---
     if 'wise' in acc_low or 'saida wise' in acc_low:
         cp = _extract_wise_name(desc)
 
-    if not cp and ('wio' in acc_low):
+    if not cp and 'wio' in acc_low:
         cp = _extract_wio_name(desc)
 
     if not cp and ('pasha' in acc_low or 'bunda' in acc_low):
@@ -1757,9 +1714,11 @@ def extract_counterparty_smart(description: str,
     if not cp and 'kapital' in acc_low:
         cp = _extract_kapital_name(desc)
 
+    # --- 3. Универсальные паттерны ---
     if not cp:
         cp = _extract_name_by_patterns(desc)
 
+    # --- 4. Последняя попытка: первое осмысленное имя из описания ---
     if not cp:
         parts = re.split(r'[|•;]', desc)
         for p in parts:
@@ -1770,14 +1729,17 @@ def extract_counterparty_smart(description: str,
                 continue
             if _looks_like_bank_name(p_clean):
                 continue
-            if re.search(r'[A-Za-zА-Яа-я]{3,}', p_clean) and not re.fullmatch(r'[\d\s.,\-]+', p_clean):
+            if re.search(r'[A-Za-zА-Яа-я]{3,}', p_clean) and not re.fullmatch(r'[\d\s.,\-/\\]+', p_clean):
                 cp = _clean_counterparty_name(p_clean)
                 if cp:
                     break
 
+    # --- 5. Если совсем ничего — имя банка по account_name ---
     if not cp:
-        m = re.search(r'\b(CSOB|UniCredit|Revolut|Tinkoff|Paysera|Wise|BluOr|Industra|Pasha|Mashreq|WIO|N26|MKB|FIO|Kapital|RAK|ČSOB)\b',
-                      account_name, re.IGNORECASE)
+        m = re.search(
+            r'\b(CSOB|UniCredit|Revolut|Tinkoff|Paysera|Wise|BluOr|Industra|Pasha|Mashreq|WIO|N26|MKB|FIO|Kapital|RAK|ČSOB)\b',
+            account_name, re.IGNORECASE
+        )
         if m:
             cp = m.group(1)
         else:
@@ -2526,7 +2488,6 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
                     if v and v != 'nan' and not re.match(r'^\d{2}\.\d{2}\.\d{4}$', v):
                         desc = v
                         break
-            low = desc.lower()
             if ttype == 'D':
                 amount = -abs(amount)
             elif ttype == 'C':
@@ -3375,6 +3336,7 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
 
 
 # ==================== MASHREQ ====================
+# [FIX-SYNTAX-MASHREQ] Здесь была слипшаяся строка "amount = credit  elif ...".
 
 def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -3460,6 +3422,7 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """[FIX-SYNTAX-MASHREQ] Исправлена слипшаяся строка."""
     result = []
     tables = pdf_all_tables(file_content)
     for table in tables:
@@ -3475,7 +3438,8 @@ def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 debit = parse_amount(row[5]) if len(row) > 5 else 0.0
                 amount = 0.0
                 if credit != 0.0:
-                    amount = credit                elif debit != 0.0:
+                    amount = credit
+                elif debit != 0.0:
                     amount = -abs(debit)
                 else:
                     continue
@@ -3865,7 +3829,7 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== Paysera ====================
+# ==================== Paysera (XLSX/DOCX) ====================
 
 def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -4086,6 +4050,8 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
+
+# ==================== Paysera PDF ====================
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -5742,7 +5708,7 @@ def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[T
         other_exts.append('.docx')
     for oe in other_exts:
         op, ok = get_parser_by_ext(account_name, oe)
-        _add(op, ok or f'{oe[1:]}_other')
+        _add(op, ok or f'{oe[1:]} _other')
 
     up, uk = _get_universal_for_type(real_type)
     _add(up, uk or f'{real_type}_universal')
@@ -6252,38 +6218,6 @@ def main():
         st.session_state['files_signature'] = None
     if 'uploader_key' not in st.session_state:
         st.session_state['uploader_key'] = 0
-
-    # [NEW-GORODETS-BG] Вставляем фон отдельным элементом + CSS
-    st.markdown(
-        f"""
-        <style>
-        /* [NEW-GORODETS-BG] Фон через base64 SVG + CSS-градиенты */
-        html, body, .stApp {{
-            background-color: #FFF6DE !important;
-            background-image:
-                url("{_GORODETS_DATA_URL}"),
-                linear-gradient(180deg, #FFFDF2 0%, #FFF6DE 50%, #FDEBC8 100%) !important;
-            background-repeat: repeat, no-repeat !important;
-            background-size: 480px 420px, cover !important;
-            background-attachment: fixed, fixed !important;
-            background-position: 0 0, 0 0 !important;
-        }}
-        .main {{
-            background: transparent !important;
-        }}
-        [data-testid="stAppViewContainer"] {{
-            background: transparent !important;
-        }}
-        [data-testid="stHeader"] {{
-            background: transparent !important;
-        }}
-        [data-testid="stToolbar"] {{
-            background: transparent !important;
-        }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
 
     st.markdown("### 📥 Загрузка файлов")
     st.markdown("Перетащите выписки в окно ниже или нажмите **Browse files**.")
