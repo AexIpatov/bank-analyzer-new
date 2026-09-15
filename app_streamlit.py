@@ -21,8 +21,10 @@ FIX-пакет:
   [FIX-2026-JEN-DOCX]    — JenHor Unelma DOCX: ужесточён фильтр служебных строк.
   [FIX-2026-PASHA]       — Pasha Bank XLSX: усилен фильтр итоговых строк.
   [FIX-2026-BLUOR-EMPTY] — BluOr CSV: информативное сообщение для файлов без операций.
-  [FIX-2026-XLS-NUMBER]  — Экспорт в Excel: суммы пишутся числами с числовым форматом '# ##0,00'.
-  [FIX-2026-XLRD-SYNTAX] — Исправлена случайная склейка строк в _read_xls_with_xlrd.
+
+  [NEW-TRANSLATE]        — Оффлайн-переводчик описаний: EN / CS / LV / HU → RU.
+  [NEW-AMOUNT-FORMAT]    — Все суммы — строго в формате 0,00 (запятая, пробел-разделитель разрядов).
+  [NEW-LACE-BG]          — Фон в стиле мезенской/городецкой росписи (полупрозрачное кружево).
 """
 
 import streamlit as st
@@ -49,6 +51,45 @@ st.set_page_config(
 
 
 # ==================== CSS СТИЛИ ====================
+#
+# [NEW-LACE-BG] Фон — мезенская/городецкая роспись (кружево).
+# Паттерн — inline SVG (data URI), полупрозрачный, зелёные штрихи на
+# светлом градиенте. Не отвлекает, элементы управления остаются читаемыми.
+#
+# SVG-паттерн содержит: стилизованного коня (мезенский мотив), птицу,
+# ромбы, спираль и волнообразные линии по краям тайла 280x220.
+
+_LACE_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' width='280' height='220'>"
+    "<defs><pattern id='lace' x='0' y='0' width='280' height='220' "
+    "patternUnits='userSpaceOnUse'>"
+    "<g fill='none' stroke='%231B5E20' stroke-width='1.1' "
+    "stroke-linecap='round' stroke-linejoin='round' opacity='0.14'>"
+    # Стилизованный конь (мезенский мотив)
+    "<path d='M20 100 Q30 78 50 78 L64 78 Q70 66 84 66 "
+    "Q96 66 100 76 L100 88 L96 88 L96 82 L90 82 L90 94 L86 94 "
+    "L86 82 L68 82 L68 94 L64 94 L64 82 L52 82 L52 94 L48 94 "
+    "L48 82 L40 82 Q30 82 26 92 L22 100 Z'/>"
+    # Птица
+    "<path d='M150 50 Q158 42 168 48 Q176 52 182 46 Q188 40 196 48 "
+    "M156 52 Q166 56 174 52 M172 56 L172 66 M180 54 L180 64'/>"
+    # Двойной ромб
+    "<path d='M240 140 L252 152 L240 164 L228 152 Z "
+    "M240 146 L246 152 L240 158 L234 152 Z'/>"
+    # Спираль (солнце)
+    "<path d='M110 40 Q120 30 130 40 Q140 50 130 60 Q120 70 110 60 "
+    "Q104 54 110 48 Q114 44 118 48'/>"
+    # Верхняя волна
+    "<path d='M0 12 Q14 6 28 12 Q42 18 56 12 Q70 6 84 12 Q98 18 112 12 "
+    "Q126 6 140 12 Q154 18 168 12 Q182 6 196 12 Q210 18 224 12 "
+    "Q238 6 252 12 Q266 18 280 12'/>"
+    # Нижняя волна
+    "<path d='M0 208 Q14 202 28 208 Q42 214 56 208 Q70 202 84 208 "
+    "Q98 214 112 208 Q126 202 140 208 Q154 214 168 208 Q182 202 196 208 "
+    "Q210 214 224 208 Q238 202 252 208 Q266 214 280 208'/>"
+    "</g></pattern></defs>"
+    "<rect width='100%' height='100%' fill='url(%23lace)'/></svg>"
+)
 
 st.markdown("""
 <style>
@@ -68,7 +109,13 @@ st.markdown("""
 }
 
 .stApp {
-    background: linear-gradient(180deg, #F7FAF5 0%, #EEF6EA 50%, #E1EEDD 100%);
+    background-image:
+        url("data:image/svg+xml;utf8,__LACE_SVG__"),
+        linear-gradient(180deg, #F7FAF5 0%, #EEF6EA 50%, #E1EEDD 100%);
+    background-repeat: repeat, no-repeat;
+    background-size: 280px 220px, cover;
+    background-attachment: fixed, fixed;
+    background-position: 0 0, 0 0;
     font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
     color: var(--ink);
 }
@@ -275,7 +322,7 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 2rem 0; }
     border-bottom: none;
 }
 </style>
-""", unsafe_allow_html=True)
+""".replace("__LACE_SVG__", _LACE_SVG), unsafe_allow_html=True)
 
 
 # ==================== ШАПКА ====================
@@ -292,6 +339,7 @@ st.markdown("""
 <span class="chip">📑 XLS</span>
 <span class="chip">📝 DOCX</span>
 <span class="chip">📕 PDF</span>
+<span class="chip">🌐 Перевод описаний</span>
 </div>
 </div>
 <div class="hero-illustration">
@@ -381,6 +429,7 @@ def parse_date(date_str) -> str:
     if m:
         y, mo, d = m.groups()
         return f"{d}-{mo}-{y}"
+    # Revolut PDF: "10 Sept 2026"
     for fmt in ["%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d-%b-%y"]:
         try:
             return datetime.strptime(s, fmt).strftime("%d-%m-%Y")
@@ -436,10 +485,24 @@ def parse_amount(amount_str) -> float:
 
 
 def format_amount(amount: float) -> str:
-    if amount is None or pd.isna(amount):
+    """
+    [NEW-AMOUNT-FORMAT] Единый формат вывода сумм: '0,00'.
+    Разделитель копеек — запятая; разделитель тысяч — неразрывный пробел.
+    Отрицательные суммы — со знаком минус. Пример: '1 234,56', '-45,00', '0,00'.
+    """
+    if amount is None:
         return "0,00"
-    sign = "-" if amount < 0 else ""
-    formatted = f"{abs(amount):.2f}".replace('.', ',')
+    try:
+        if pd.isna(amount):
+            return "0,00"
+    except Exception:
+        pass
+    try:
+        v = float(amount)
+    except Exception:
+        return "0,00"
+    sign = "-" if v < 0 else ""
+    formatted = f"{abs(v):.2f}".replace('.', ',')
     if ',' in formatted:
         ip, dp = formatted.split(',')
         ip = re.sub(r'(?<=\d)(?=(\d{3})+(?!\d))', ' ', ip)
@@ -451,6 +514,262 @@ def safe_str(v) -> str:
     if v is None or pd.isna(v):
         return ''
     return str(v).strip()
+
+
+# ==================== [NEW-TRANSLATE] ПЕРЕВОД ОПИСАНИЙ НА РУССКИЙ ====================
+#
+# Оффлайн-переводчик банковских описаний для 4 языков:
+#   EN — английский
+#   CS — чешский
+#   LV — латвийский
+#   HU — венгерский
+#
+# Реализация — словарь терминов и фраз + один большой regex с alternation.
+# Работает без интернета. Покрывает наиболее частые банковские термины,
+# названия операций, служебные слова. Не переводит имена собственные,
+# номера счетов, IBAN, даты, суммы — они остаются как есть.
+#
+# Ключи словаря — в нижнем регистре. Значения — русские эквиваленты.
+# Порядок не важен: длинные фразы матчатся раньше коротких благодаря
+# сортировке по длине ключа при построении паттерна.
+
+_TRANSLATION_DICT: Dict[str, str] = {
+    # ---------- English ----------
+    "money added from": "пополнение от",
+    "money sent to": "перевод в адрес",
+    "money received from": "поступление от",
+    "money received": "поступление",
+    "money added": "пополнение",
+    "money sent": "отправлено",
+    "card payment": "оплата картой",
+    "atm withdrawal": "снятие в банкомате",
+    "exchange in": "обмен валюты (поступление)",
+    "exchange out": "обмен валюты (списание)",
+    "top up": "пополнение",
+    "topup": "пополнение",
+    "fee for": "комиссия за",
+    "fee": "комиссия",
+    "payment to": "платёж в адрес",
+    "payment from": "платёж от",
+    "payment": "платёж",
+    "transfer to": "перевод в адрес",
+    "transfer from": "перевод от",
+    "transfer": "перевод",
+    "salary": "заработная плата",
+    "refund": "возврат",
+    "invoice": "счёт",
+    "rent": "аренда",
+    "utilities": "коммунальные услуги",
+    "commission": "комиссия",
+    "dividend": "дивиденды",
+    "interest": "проценты",
+    "purchase": "покупка",
+    "withdrawal": "снятие",
+    "deposit": "внесение",
+    "groceries": "продукты",
+    "restaurant": "ресторан",
+    "taxi": "такси",
+    "fuel": "топливо",
+    "insurance": "страхование",
+    "loan": "кредит",
+    "repayment": "погашение",
+    "reward": "вознаграждение",
+    "bonus": "бонус",
+    "cashback": "кэшбэк",
+    "reference": "назначение",
+    "details": "детали",
+    "description": "описание",
+    "beneficiary": "получатель",
+    "payer": "плательщик",
+    "amount": "сумма",
+    "balance": "баланс",
+    "opening balance": "начальный остаток",
+    "closing balance": "конечный остаток",
+    "statement": "выписка",
+    "to": "к",
+    "from": "от",
+    "for": "за",
+    "internal transfer": "внутренний перевод",
+    "external transfer": "внешний перевод",
+    "card": "карта",
+
+    # ---------- Czech (CS) ----------
+    "vklad hotovosti": "внесение наличных",
+    "výběr hotovosti": "снятие наличных",
+    "platba kartou": "оплата картой",
+    "trvalý příkaz": "постоянное поручение",
+    "počáteční zůstatek": "начальный остаток",
+    "konečný zůstatek": "конечный остаток",
+    "přehled pohybů": "обзор операций",
+    "shrnutí pohybů": "сводка операций",
+    "obraty za období": "обороты за период",
+    "obraty od začátku": "обороты с начала",
+    "počet položek": "количество позиций",
+    "číslo protiúčtu": "номер корсчёта",
+    "celkem připsáno": "всего зачислено",
+    "celkem odepsáno": "всего списано",
+    "celkem přišlo": "всего поступило",
+    "celkem odešlo": "всего отправлено",
+    "disponibilní zůstatek": "доступный остаток",
+    "zůstatek": "остаток",
+    "pohyby": "операции",
+    "připsáno": "зачислено",
+    "odepsáno": "списано",
+    "zaúčtováno": "проведено",
+    "provedeno": "выполнено",
+    "popis": "описание",
+    "protiúčet": "корсчёт",
+    "platba": "платёж",
+    "převod": "перевод",
+    "příchozí": "входящий",
+    "odchozí": "исходящий",
+    "poplatek": "комиссия",
+    "výběr": "снятие",
+    "vklad": "внесение",
+    "úrok": "проценты",
+    "mzda": "зарплата",
+    "nájem": "аренда",
+    "faktura": "счёт",
+    "daň": "налог",
+    "pojištění": "страхование",
+    "půjčka": "кредит",
+    "splátka": "платёж по кредиту",
+    "odměna": "вознаграждение",
+    "vratka": "возврат",
+    "inkaso": "инкассо",
+    "celkem": "всего",
+    "příchozí platba": "входящий платёж",
+    "odchozí platba": "исходящий платёж",
+
+    # ---------- Latvian (LV) ----------
+    "skaidras naudas iemaksa": "внесение наличных",
+    "skaidras naudas izņemšana": "снятие наличных",
+    "maksājums ar karti": "оплата картой",
+    "komisijas maksa": "комиссионный сбор",
+    "maksājuma mērķis": "назначение платежа",
+    "sākuma atlikums": "начальный остаток",
+    "beigu atlikums": "конечный остаток",
+    "ienākošais maksājums": "входящий платёж",
+    "izejošais maksājums": "исходящий платёж",
+    "maksājums": "платёж",
+    "pārskaitījums": "перевод",
+    "ienākošais": "входящий",
+    "izejošais": "исходящий",
+    "komisija": "комиссия",
+    "izņemšana": "снятие",
+    "iemaksa": "взнос",
+    "procenti": "проценты",
+    "alga": "зарплата",
+    "īre": "аренда",
+    "rēķins": "счёт",
+    "nodoklis": "налог",
+    "apdrošināšana": "страхование",
+    "aizdevums": "кредит",
+    "atmaksa": "возврат",
+    "atlīdzība": "вознаграждение",
+    "prēmija": "премия",
+    "kompensācija": "компенсация",
+    "atlikums": "остаток",
+    "kopsumma": "итого",
+    "ienākumi": "доходы",
+    "izdevumi": "расходы",
+    "saņēmējs": "получатель",
+    "maksātājs": "плательщик",
+    "mērķis": "назначение",
+    "datums": "дата",
+    "summa": "сумма",
+    "veids": "тип",
+    "konts": "счёт",
+    "bankas komisija": "банковская комиссия",
+    "naudas līdzekļu pārskaitījums": "перевод денежных средств",
+
+    # ---------- Hungarian (HU) ----------
+    "készpénzfelvétel": "снятие наличных",
+    "készpénzbefizetés": "внесение наличных",
+    "kártyás fizetés": "оплата картой",
+    "nyitó egyenleg": "начальный баланс",
+    "záró egyenleg": "конечный баланс",
+    "tranzakció típusa": "тип транзакции",
+    "fizetés": "платёж",
+    "átutalás": "перевод",
+    "bejövő": "входящий",
+    "kimenő": "исходящий",
+    "díj": "сбор",
+    "jutalék": "комиссия",
+    "vásárlás": "покупка",
+    "kamat": "проценты",
+    "bér": "зарплата",
+    "bérleti díj": "арендная плата",
+    "számla": "счёт",
+    "adó": "налог",
+    "biztosítás": "страхование",
+    "kölcsön": "кредит",
+    "törlesztés": "погашение",
+    "visszatérítés": "возврат",
+    "jóváírás": "зачисление",
+    "terhelés": "списание",
+    "egyenleg": "баланс",
+    "összeg": "сумма",
+    "közlemény": "сообщение",
+    "kedvezményezett": "получатель",
+    "kedvezményezett neve": "имя получателя",
+    "értéknap": "дата валютирования",
+    "sorszám": "номер",
+    "típus": "тип",
+    "dátum": "дата",
+    "tranzakció": "транзакция",
+    "megbízás": "поручение",
+    "befizetés": "внесение",
+    "kifizetés": "выплата",
+    "havi díj": "месячный сбор",
+    "számlavezetési díj": "сбор за ведение счёта",
+}
+
+
+# Собираем единый regex из ключей словаря. Сортируем ключи по длине (убывание),
+# чтобы длинные фразы матчились первыми. Паттерн компилируется один раз.
+_TRANSLATE_KEYS_SORTED = sorted(_TRANSLATION_DICT.keys(), key=len, reverse=True)
+_TRANSLATE_PATTERN = re.compile(
+    r'(?<![A-Za-zÀ-ÖØ-öø-ÿĀ-žА-Яа-я])'
+    r'(' + '|'.join(re.escape(k) for k in _TRANSLATE_KEYS_SORTED) + r')'
+    r'(?![A-Za-zÀ-ÖØ-öø-ÿĀ-žА-Яа-я])',
+    re.IGNORECASE,
+)
+
+
+def _translate_repl(m: re.Match) -> str:
+    key = m.group(1).lower()
+    return _TRANSLATION_DICT.get(key, m.group(0))
+
+
+def translate_to_russian(text: str) -> str:
+    """
+    [NEW-TRANSLATE] Перевод банковского описания на русский.
+    Работает оффлайн, на основе словаря банковских терминов.
+    Имена собственные, IBAN, номера, даты, суммы остаются нетронутыми.
+    """
+    if not text:
+        return text
+    s = str(text)
+    # Первый проход: замена терминов.
+    s = _TRANSLATE_PATTERN.sub(_translate_repl, s)
+    # Нормализуем пробелы.
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def translate_description_field(desc: str) -> str:
+    """
+    Обёртка: при пустом описании возвращает как есть.
+    Может быть расширена дополнительной логикой (нормализация и т.п.).
+    """
+    if not desc:
+        return desc
+    try:
+        translated = translate_to_russian(desc)
+        return translated if translated else desc
+    except Exception:
+        return desc
 
 
 # ==================== ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
@@ -4721,168 +5040,27 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
 
 # ==================== ЭКСПОРТ ====================
 
-# [FIX-2026-XLS-NUMBER] Числовой формат Excel:
-#   '# ##0,00' — разряды разделяются пробелом, десятичный разделитель — запятая.
-#   Excel хранит само число (10000,05), а формат влияет только на отображение.
-EXCEL_NUM_FMT = '# ##0,00'
-EXCEL_NUM_FMT_INT = '# ##0'
-
-
-def _write_df_to_excel_with_number_format(
-    writer: pd.ExcelWriter,
-    df: pd.DataFrame,
-    sheet_name: str,
-    numeric_columns: Optional[List[str]] = None,
-    integer_columns: Optional[List[str]] = None,
-):
-    """
-    Записывает DataFrame в Excel, применяя числовой формат к указанным колонкам.
-    Колонки должны содержать настоящие числа (float/int), а не строки.
-    """
-    df.to_excel(writer, sheet_name=sheet_name, index=False)
-
-    worksheet = writer.sheets[sheet_name]
-
-    num_cols = numeric_columns or []
-    int_cols = integer_columns or []
-
-    col_positions_num = []
-    col_positions_int = []
-    for col_name in num_cols:
-        if col_name in df.columns:
-            idx = list(df.columns).index(col_name) + 1
-            col_positions_num.append(idx)
-    for col_name in int_cols:
-        if col_name in df.columns:
-            idx = list(df.columns).index(col_name) + 1
-            col_positions_int.append(idx)
-
-    max_row = len(df) + 1
-
-    for col_idx in col_positions_num:
-        for row_idx in range(2, max_row + 1):
-            cell = worksheet.cell(row=row_idx, column=col_idx)
-            cell.number_format = EXCEL_NUM_FMT
-            v = cell.value
-            if isinstance(v, str):
-                s = v.strip().replace(' ', '').replace('\xa0', '').replace(',', '.')
-                try:
-                    cell.value = float(s)
-                except Exception:
-                    pass
-
-    for col_idx in col_positions_int:
-        for row_idx in range(2, max_row + 1):
-            cell = worksheet.cell(row=row_idx, column=col_idx)
-            cell.number_format = EXCEL_NUM_FMT_INT
-            v = cell.value
-            if isinstance(v, str):
-                s = v.strip().replace(' ', '').replace('\xa0', '').replace(',', '.')
-                try:
-                    cell.value = int(round(float(s)))
-                except Exception:
-                    pass
-
-    for column_cells in worksheet.columns:
-        try:
-            length = max(len(str(c.value)) if c.value is not None else 0 for c in column_cells)
-            worksheet.column_dimensions[column_cells[0].column_letter].width = min(max(length + 2, 12), 60)
-        except Exception:
-            pass
-
-
-def _prepare_operations_export(df_raw: pd.DataFrame) -> pd.DataFrame:
-    """
-    Готовит DataFrame для экспорта в Excel: суммы — числа, а не строки.
-    """
-    df_export = df_raw.copy()
-    if 'Сумма' in df_export.columns:
-        df_export['Сумма'] = pd.to_numeric(df_export['Сумма'], errors='coerce').fillna(0.0).astype(float)
-    return df_export
-
-
-def build_operations_excel(df_raw: pd.DataFrame) -> BytesIO:
-    """Экспорт операций: суммы пишутся как числа с форматом '# ##0,00'."""
-    df_export = _prepare_operations_export(df_raw)
+def build_operations_excel(df_display: pd.DataFrame) -> BytesIO:
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        _write_df_to_excel_with_number_format(
-            writer,
-            df_export,
-            sheet_name='Транзакции',
-            numeric_columns=['Сумма'],
-        )
+        df_display.to_excel(writer, sheet_name='Транзакции', index=False)
     output.seek(0)
     return output
 
 
 def build_summary_excel(summary_df: pd.DataFrame) -> BytesIO:
-    """Экспорт сводки: суммы и сальдо — числа с форматом '# ##0,00', счётчики — целые."""
-    df_export = summary_df.copy()
-    numeric_cols = [
-        "Сумма приходных операций",
-        "Сумма расходных операций",
-        "Сальдо операций",
-    ]
-    int_cols = [
-        "Количество приходных операций",
-        "Количество расходных операций",
-    ]
-    for c in numeric_cols:
-        if c in df_export.columns:
-            df_export[c] = pd.to_numeric(df_export[c], errors='coerce').fillna(0.0).astype(float)
-    for c in int_cols:
-        if c in df_export.columns:
-            df_export[c] = pd.to_numeric(df_export[c], errors='coerce').fillna(0).astype(int)
-
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        _write_df_to_excel_with_number_format(
-            writer,
-            df_export,
-            sheet_name='Сводка по счетам',
-            numeric_columns=numeric_cols,
-            integer_columns=int_cols,
-        )
+        summary_df.to_excel(writer, sheet_name='Сводка по счетам', index=False)
     output.seek(0)
     return output
 
 
-def build_combined_excel(df_raw: pd.DataFrame, summary_df: pd.DataFrame) -> BytesIO:
-    """Два листа: операции и сводка, суммы — числа с числовым форматом."""
-    df_ops = _prepare_operations_export(df_raw)
-    df_sum = summary_df.copy()
-    num_sum = [
-        "Сумма приходных операций",
-        "Сумма расходных операций",
-        "Сальдо операций",
-    ]
-    int_sum = [
-        "Количество приходных операций",
-        "Количество расходных операций",
-    ]
-    for c in num_sum:
-        if c in df_sum.columns:
-            df_sum[c] = pd.to_numeric(df_sum[c], errors='coerce').fillna(0.0).astype(float)
-    for c in int_sum:
-        if c in df_sum.columns:
-            df_sum[c] = pd.to_numeric(df_sum[c], errors='coerce').fillna(0).astype(int)
-
+def build_combined_excel(df_display: pd.DataFrame, summary_df: pd.DataFrame) -> BytesIO:
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        _write_df_to_excel_with_number_format(
-            writer,
-            df_ops,
-            sheet_name='Транзакции',
-            numeric_columns=['Сумма'],
-        )
-        _write_df_to_excel_with_number_format(
-            writer,
-            df_sum,
-            sheet_name='Сводка по счетам',
-            numeric_columns=num_sum,
-            integer_columns=int_sum,
-        )
+        df_display.to_excel(writer, sheet_name='Транзакции', index=False)
+        summary_df.to_excel(writer, sheet_name='Сводка по счетам', index=False)
     output.seek(0)
     return output
 
@@ -4941,11 +5119,13 @@ def _process_uploaded_files(uploaded_files) -> Dict:
                 all_tx.extend(tx)
                 file_stats.append(f"✅ {uf.name}: {len(tx)} операций")
             else:
+                # Определяем, является ли файл служебным (только остатки)
                 ext_low = os.path.splitext(uf.name)[1].lower()
                 is_service_file = False
                 if 'bluor' in account_name.lower() and ext_low in ('.csv', '.xls', '.xlsx'):
                     raw = read_text_with_encoding(content)
                     if raw and 'начальный остаток' in raw.lower() and 'дебет (d)' in raw.lower():
+                        # Все транзакционные строки — служебные
                         is_service_file = True
                 if is_service_file:
                     file_stats.append(f"ℹ️ {uf.name}: служебный файл (только остатки), операций нет")
@@ -5037,7 +5217,14 @@ def _render_results(result: Dict):
     expense = float(abs(df_raw['Сумма_число'][df_raw['Сумма_число'] < 0].sum()))
 
     df_display = df_raw.drop(columns=['Сумма_число']).copy()
+    # [NEW-AMOUNT-FORMAT] — формат 0,00 для всех сумм
     df_display['Сумма'] = df_display['Сумма'].apply(format_amount)
+
+    # [NEW-TRANSLATE] — перевод описаний операций на русский
+    if 'Описание' in df_display.columns:
+        df_display['Описание'] = df_display['Описание'].apply(
+            lambda x: translate_description_field(str(x)) if x is not None else ''
+        )
 
     st.markdown("---")
     st.markdown("### 📊 Итоги")
@@ -5045,9 +5232,11 @@ def _render_results(result: Dict):
     with c1:
         st.metric("📊 Всего операций", len(all_tx))
     with c2:
-        st.metric("📈 Доходы", f"{income:,.2f}".replace('.', ','))
+        # [NEW-AMOUNT-FORMAT] — формат 0,00
+        st.metric("📈 Доходы", format_amount(income))
     with c3:
-        st.metric("📉 Расходы", f"{expense:,.2f}".replace('.', ','))
+        # [NEW-AMOUNT-FORMAT] — формат 0,00
+        st.metric("📉 Расходы", format_amount(expense))
 
     st.markdown("---")
     st.markdown("### 🧾 Детализация транзакций")
@@ -5060,10 +5249,9 @@ def _render_results(result: Dict):
         st.info("Нет данных для сводки по счетам.")
     else:
         summary_html_df = summary_df.copy()
+        # [NEW-AMOUNT-FORMAT] — формат 0,00
         for col in ["Сумма приходных операций", "Сумма расходных операций", "Сальдо операций"]:
-            summary_html_df[col] = summary_html_df[col].apply(
-                lambda x: f"{x:,.2f}".replace(",", " ").replace(".", ",")
-            )
+            summary_html_df[col] = summary_html_df[col].apply(format_amount)
         st.markdown(
             f'<div class="summary-table">{summary_html_df.to_html(index=False, escape=False)}</div>',
             unsafe_allow_html=True,
@@ -5073,12 +5261,12 @@ def _render_results(result: Dict):
     st.markdown("### 💾 Сохранить результат")
     st.markdown(
         "Скачайте **отдельно операции по выпискам** и **отдельно сводную таблицу**, "
-        "или всё вместе одним файлом. Суммы в Excel — настоящие числа с числовым форматом."
+        "или всё вместе одним файлом."
     )
 
-    ops_excel = build_operations_excel(df_raw)
+    ops_excel = build_operations_excel(df_display)
     summary_excel = build_summary_excel(summary_df) if not summary_df.empty else None
-    combined_excel = build_combined_excel(df_raw, summary_df) if not summary_df.empty else None
+    combined_excel = build_combined_excel(df_display, summary_df) if not summary_df.empty else None
 
     dl1, dl2, dl3 = st.columns(3)
 
@@ -5144,6 +5332,7 @@ def main():
     st.markdown("### 📥 Загрузка файлов")
     st.markdown("Перетащите выписки в окно ниже или нажмите **Browse files**.")
 
+    # [FIX-2026-RESET] Кнопка сброса
     col_reset, col_info = st.columns([1, 4])
     with col_reset:
         reset_clicked = st.button("🔄 Сбросить файлы", key="reset_btn")
@@ -5185,10 +5374,10 @@ def main():
             <div class="info-card">
             <div class="info-card-icon">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M3 12h4l3-9 4 18 3-9h4" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             </div>
-            <div class="info-card-text"><h4>Автоопределение</h4><p>Программа сама подберёт парсер по имени файла</p></div>
+            <div class="info-card-text"><h4>Перевод описаний</h4><p>EN / CS / LV / HU → RU (оффлайн)</p></div>
             </div>
             """, unsafe_allow_html=True)
         with c3:
@@ -5199,7 +5388,7 @@ def main():
             <path d="M3 3v18h18M18 17V9M13 17V5M8 17v-3" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             </div>
-            <div class="info-card-text"><h4>Экспорт в Excel</h4><p>Суммы — числа с форматом, готовые к расчётам</p></div>
+            <div class="info-card-text"><h4>Экспорт в Excel</h4><p>Скачайте итог в один клик</p></div>
             </div>
             """, unsafe_allow_html=True)
         st.markdown("""
