@@ -22,9 +22,12 @@ FIX-пакет:
   [FIX-2026-PASHA]       — Pasha Bank XLSX: усилен фильтр итоговых строк.
   [FIX-2026-BLUOR-EMPTY] — BluOr CSV: информативное сообщение для файлов без операций.
 
-  [NEW-TRANSLATE]        — Оффлайн-переводчик описаний: EN / CS / LV / HU → RU.
-  [NEW-AMOUNT-FORMAT]    — Все суммы — строго в формате 0,00 (запятая, пробел-разделитель разрядов).
-  [NEW-LACE-BG]          — Фон в стиле мезенской/городецкой росписи (полупрозрачное кружево).
+  [NEW-TRANSLATE-INLINE] — Оригинал описания сохраняется; перевод добавляется
+                           в круглых скобках в ТУ ЖЕ ячейку.
+  [NEW-AMOUNT-FORMAT]    — Суммы в формате 0,00 (запятая, пробел между разрядами).
+  [NEW-GORODETS-BG]      — Цветная городецкая роспись (розаны, купавки, бутоны).
+  [NEW-NEON-BUTTONS]     — Кнопки объёмные с переливающимся неоновым свечением,
+                           увеличен размер шрифта надписей.
 """
 
 import streamlit as st
@@ -50,46 +53,128 @@ st.set_page_config(
 )
 
 
-# ==================== CSS СТИЛИ ====================
+# ==================== [NEW-GORODETS-BG] ГОРОДЕЦКАЯ РОСПИСЬ — SVG-ПАТТЕРН ====================
 #
-# [NEW-LACE-BG] Фон — мезенская/городецкая роспись (кружево).
-# Паттерн — inline SVG (data URI), полупрозрачный, зелёные штрихи на
-# светлом градиенте. Не отвлекает, элементы управления остаются читаемыми.
-#
-# SVG-паттерн содержит: стилизованного коня (мезенский мотив), птицу,
-# ромбы, спираль и волнообразные линии по краям тайла 280x220.
+# Тайл 320×260 px. Мотивы Городца:
+#   • Розан      — крупный круглый цветок с лепестками и белой «оживкой».
+#   • Купавка    — цветок-бутон с завитками и оживкой.
+#   • Бутоны     — маленькие цветки на веточках.
+#   • Листья     — перистые листочки.
+#   • Ягодки     — мелкие точки-горошины.
+#   • Веточки    — плавные дуги.
+# Палитра Городца: розовый, синий, бирюзовый, зелёный, жёлтый, красный,
+# белая «оживка», тёмно-синий контур.
+# Общая прозрачность группы — 0.32 (мягкий, не отвлекающий фон).
 
-_LACE_SVG = (
-    "<svg xmlns='http://www.w3.org/2000/svg' width='280' height='220'>"
-    "<defs><pattern id='lace' x='0' y='0' width='280' height='220' "
+_GORODETS_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' width='320' height='260'>"
+    "<defs><pattern id='gorodets' x='0' y='0' width='320' height='260' "
     "patternUnits='userSpaceOnUse'>"
-    "<g fill='none' stroke='%231B5E20' stroke-width='1.1' "
-    "stroke-linecap='round' stroke-linejoin='round' opacity='0.14'>"
-    # Стилизованный конь (мезенский мотив)
-    "<path d='M20 100 Q30 78 50 78 L64 78 Q70 66 84 66 "
-    "Q96 66 100 76 L100 88 L96 88 L96 82 L90 82 L90 94 L86 94 "
-    "L86 82 L68 82 L68 94 L64 94 L64 82 L52 82 L52 94 L48 94 "
-    "L48 82 L40 82 Q30 82 26 92 L22 100 Z'/>"
-    # Птица
-    "<path d='M150 50 Q158 42 168 48 Q176 52 182 46 Q188 40 196 48 "
-    "M156 52 Q166 56 174 52 M172 56 L172 66 M180 54 L180 64'/>"
-    # Двойной ромб
-    "<path d='M240 140 L252 152 L240 164 L228 152 Z "
-    "M240 146 L246 152 L240 158 L234 152 Z'/>"
-    # Спираль (солнце)
-    "<path d='M110 40 Q120 30 130 40 Q140 50 130 60 Q120 70 110 60 "
-    "Q104 54 110 48 Q114 44 118 48'/>"
-    # Верхняя волна
-    "<path d='M0 12 Q14 6 28 12 Q42 18 56 12 Q70 6 84 12 Q98 18 112 12 "
-    "Q126 6 140 12 Q154 18 168 12 Q182 6 196 12 Q210 18 224 12 "
-    "Q238 6 252 12 Q266 18 280 12'/>"
-    # Нижняя волна
-    "<path d='M0 208 Q14 202 28 208 Q42 214 56 208 Q70 202 84 208 "
-    "Q98 214 112 208 Q126 202 140 208 Q154 214 168 208 Q182 202 196 208 "
-    "Q210 214 224 208 Q238 202 252 208 Q266 214 280 208'/>"
+    "<g opacity='0.32'>"
+
+    # -------------------- ВЕТОЧКИ (плавные дуги) --------------------
+    "<g fill='none' stroke='#2C3E50' stroke-width='1.4' stroke-linecap='round'>"
+    "<path d='M10 210 Q60 170 120 195 Q180 220 240 185 Q290 155 315 175'/>"
+    "<path d='M5 60 Q50 30 100 55 Q150 80 200 50 Q250 20 315 45'/>"
+    "<path d='M40 130 Q90 100 140 128 Q190 156 245 128 Q285 108 315 125'/>"
+    "</g>"
+
+    # -------------------- ЛИСТЬЯ --------------------
+    "<g fill='#43A047' stroke='#2C3E50' stroke-width='1.1'>"
+    "<path d='M70 190 q10 -16 26 -10 q-2 14 -14 20 q-14 6 -12 -10 z'/>"
+    "<path d='M70 190 q12 -6 26 -10' fill='none' stroke='#2C3E50' stroke-width='0.9'/>"
+    "<path d='M200 200 q12 -14 28 -8 q-2 14 -14 20 q-14 6 -14 -12 z'/>"
+    "<path d='M200 200 q14 -6 28 -8' fill='none' stroke='#2C3E50' stroke-width='0.9'/>"
+    "<path d='M100 45 q10 -14 24 -8 q-2 12 -13 18 q-12 5 -11 -10 z'/>"
+    "<path d='M245 40 q12 -12 26 -6 q-2 12 -13 18 q-13 6 -13 -12 z'/>"
+    "</g>"
+    "<g fill='#26A69A' stroke='#2C3E50' stroke-width='1.1'>"
+    "<path d='M150 175 q10 -14 24 -8 q-2 12 -13 18 q-13 6 -11 -10 z'/>"
+    "<path d='M270 195 q10 -12 22 -6 q-2 11 -12 16 q-11 5 -10 -10 z'/>"
+    "</g>"
+
+    # -------------------- РОЗАН (центральный) --------------------
+    "<g transform='translate(90,110)'>"
+    "<circle r='26' fill='#E91E63' stroke='#2C3E50' stroke-width='1.6'/>"
+    "<circle r='18' fill='#F48FB1' stroke='#2C3E50' stroke-width='1.2'/>"
+    "<circle r='10' fill='#FBC02D' stroke='#2C3E50' stroke-width='1.1'/>"
+    "<circle r='4' fill='#E53935' stroke='#2C3E50' stroke-width='1'/>"
+    "<g fill='#FFFFFF' opacity='0.95'>"
+    "<circle cx='-16' cy='-8' r='2.4'/><circle cx='-18' cy='6' r='2.4'/>"
+    "<circle cx='-6' cy='-16' r='2.4'/><circle cx='8' cy='-16' r='2.4'/>"
+    "<circle cx='16' cy='-6' r='2.4'/><circle cx='17' cy='8' r='2.4'/>"
+    "<circle cx='6' cy='17' r='2.4'/><circle cx='-7' cy='17' r='2.4'/>"
+    "</g>"
+    "</g>"
+
+    # -------------------- КУПАВКА (большой бутон) --------------------
+    "<g transform='translate(230,90)'>"
+    "<path d='M-20 6 q0 -22 20 -30 q20 8 20 30 q0 22 -20 30 q-20 -8 -20 -30 z' "
+    "fill='#1E88E5' stroke='#2C3E50' stroke-width='1.5'/>"
+    "<path d='M-12 4 q0 -14 12 -20 q12 6 12 20 q0 14 -12 20 q-12 -6 -12 -20 z' "
+    "fill='#90CAF9' stroke='#2C3E50' stroke-width='1.1'/>"
+    "<circle cy='-6' r='6' fill='#FBC02D' stroke='#2C3E50' stroke-width='1'/>"
+    "<g fill='#FFFFFF' opacity='0.95'>"
+    "<circle cx='-8' cy='6' r='1.9'/><circle cx='8' cy='6' r='1.9'/>"
+    "<circle cx='-4' cy='18' r='1.9'/><circle cx='4' cy='18' r='1.9'/>"
+    "<circle cy='-16' r='1.9'/>"
+    "</g>"
+    "</g>"
+
+    # -------------------- БУТОН №1 --------------------
+    "<g transform='translate(50,40)'>"
+    "<path d='M-12 4 q0 -14 12 -20 q12 6 12 20 q0 14 -12 20 q-12 -6 -12 -20 z' "
+    "fill='#F06292' stroke='#2C3E50' stroke-width='1.3'/>"
+    "<circle cy='-4' r='4.5' fill='#FBC02D' stroke='#2C3E50' stroke-width='1'/>"
+    "<g fill='#FFFFFF' opacity='0.95'>"
+    "<circle cx='-5' cy='6' r='1.6'/><circle cx='5' cy='6' r='1.6'/>"
+    "</g>"
+    "</g>"
+
+    # -------------------- БУТОН №2 --------------------
+    "<g transform='translate(280,230)'>"
+    "<path d='M-12 4 q0 -14 12 -20 q12 6 12 20 q0 14 -12 20 q-12 -6 -12 -20 z' "
+    "fill='#26A69A' stroke='#2C3E50' stroke-width='1.3'/>"
+    "<circle cy='-4' r='4.5' fill='#FBC02D' stroke='#2C3E50' stroke-width='1'/>"
+    "<g fill='#FFFFFF' opacity='0.95'>"
+    "<circle cx='-5' cy='6' r='1.6'/><circle cx='5' cy='6' r='1.6'/>"
+    "</g>"
+    "</g>"
+
+    # -------------------- БУТОН №3 --------------------
+    "<g transform='translate(150,235)'>"
+    "<path d='M-10 4 q0 -12 10 -17 q10 5 10 17 q0 12 -10 17 q-10 -5 -10 -17 z' "
+    "fill='#FBC02D' stroke='#2C3E50' stroke-width='1.2'/>"
+    "<circle cy='-3' r='3.6' fill='#E53935' stroke='#2C3E50' stroke-width='1'/>"
+    "<g fill='#FFFFFF' opacity='0.95'>"
+    "<circle cx='-4' cy='6' r='1.4'/><circle cx='4' cy='6' r='1.4'/>"
+    "</g>"
+    "</g>"
+
+    # -------------------- ЯГОДКИ --------------------
+    "<g fill='#E53935' stroke='#2C3E50' stroke-width='0.8'>"
+    "<circle cx='120' cy='30' r='3'/><circle cx='128' cy='34' r='3'/>"
+    "<circle cx='124' cy='40' r='3'/>"
+    "<circle cx='210' cy='235' r='3'/><circle cx='218' cy='231' r='3'/>"
+    "<circle cx='214' cy='225' r='3'/>"
+    "</g>"
+    "<g fill='#FBC02D' stroke='#2C3E50' stroke-width='0.8'>"
+    "<circle cx='60' cy='250' r='2.6'/><circle cx='68' cy='246' r='2.6'/>"
+    "<circle cx='255' cy='35' r='2.6'/><circle cx='263' cy='31' r='2.6'/>"
+    "</g>"
+
+    # -------------------- ДЕКОРАТИВНЫЕ ЗАВИТКИ --------------------
+    "<g fill='none' stroke='#2C3E50' stroke-width='1.1' stroke-linecap='round'>"
+    "<path d='M100 100 q-16 6 -20 22 q-2 14 10 20'/>"
+    "<path d='M250 100 q16 6 20 22 q2 14 -10 20'/>"
+    "</g>"
+
     "</g></pattern></defs>"
-    "<rect width='100%' height='100%' fill='url(%23lace)'/></svg>"
+    "<rect width='100%' height='100%' fill='url(%23gorodets)'/></svg>"
 )
+
+
+# ==================== CSS СТИЛИ ====================
 
 st.markdown("""
 <style>
@@ -108,12 +193,13 @@ st.markdown("""
     --border: #C8E6C9;
 }
 
+/* ---------- [NEW-GORODETS-BG] ФОН: цветная городецкая роспись ---------- */
 .stApp {
     background-image:
-        url("data:image/svg+xml;utf8,__LACE_SVG__"),
-        linear-gradient(180deg, #F7FAF5 0%, #EEF6EA 50%, #E1EEDD 100%);
+        url("data:image/svg+xml;utf8,__GORODETS_SVG__"),
+        linear-gradient(180deg, #FFFDF7 0%, #FFF6E8 50%, #FDEEDC 100%);
     background-repeat: repeat, no-repeat;
-    background-size: 280px 220px, cover;
+    background-size: 320px 260px, cover;
     background-attachment: fixed, fixed;
     background-position: 0 0, 0 0;
     font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
@@ -125,6 +211,7 @@ st.markdown("""
 footer {visibility: hidden;}
 #MainMenu {visibility: hidden;}
 
+/* ---------- HERO ---------- */
 .hero {
     background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 50%, #4CAF50 100%);
     padding: 3rem 2.5rem;
@@ -163,39 +250,114 @@ footer {visibility: hidden;}
 
 .hero-illustration { position: relative; z-index: 2; }
 
-.stButton > button {
-    background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 100%);
-    color: #FFFFFF;
-    border: none;
-    border-radius: 14px;
-    padding: 0.75rem 1.6rem;
-    font-weight: 600;
-    font-size: 1rem;
-    transition: all 0.25s;
-    box-shadow: 0 6px 16px rgba(27, 94, 32, 0.32);
+/* ============================================================ */
+/* [NEW-NEON-BUTTONS] ОБЪЁМНЫЕ КНОПКИ С ПЕРЕЛИВАЮЩИМСЯ НЕОНОМ  */
+/* ============================================================ */
+
+@keyframes neonPulseGreen {
+    0% {
+        box-shadow:
+            inset 0 3px 0 rgba(255,255,255,0.45),
+            inset 0 -5px 0 rgba(0,0,0,0.28),
+            0 10px 22px rgba(27, 94, 32, 0.50),
+            0 0 18px 2px rgba(64, 224, 208, 0.85),
+            0 0 36px 8px rgba(64, 224, 208, 0.40);
+    }
+    33% {
+        box-shadow:
+            inset 0 3px 0 rgba(255,255,255,0.45),
+            inset 0 -5px 0 rgba(0,0,0,0.28),
+            0 10px 22px rgba(27, 94, 32, 0.50),
+            0 0 22px 4px rgba(236, 64, 122, 0.85),
+            0 0 42px 10px rgba(236, 64, 122, 0.40);
+    }
+    66% {
+        box-shadow:
+            inset 0 3px 0 rgba(255,255,255,0.45),
+            inset 0 -5px 0 rgba(0,0,0,0.28),
+            0 10px 22px rgba(27, 94, 32, 0.50),
+            0 0 22px 4px rgba(255, 213, 79, 0.90),
+            0 0 42px 10px rgba(255, 213, 79, 0.42);
+    }
+    100% {
+        box-shadow:
+            inset 0 3px 0 rgba(255,255,255,0.45),
+            inset 0 -5px 0 rgba(0,0,0,0.28),
+            0 10px 22px rgba(27, 94, 32, 0.50),
+            0 0 18px 2px rgba(64, 224, 208, 0.85),
+            0 0 36px 8px rgba(64, 224, 208, 0.40);
+    }
 }
 
-.stButton > button:hover {
-    background: linear-gradient(135deg, #124A17 0%, #1B5E20 100%);
-    transform: translateY(-2px);
-    color: #FFFFFF;
+@keyframes neonPulseRed {
+    0% {
+        box-shadow:
+            inset 0 3px 0 rgba(255,255,255,0.45),
+            inset 0 -5px 0 rgba(0,0,0,0.28),
+            0 10px 22px rgba(120, 20, 20, 0.50),
+            0 0 18px 2px rgba(255, 99, 132, 0.95),
+            0 0 36px 8px rgba(255, 99, 132, 0.50);
+    }
+    50% {
+        box-shadow:
+            inset 0 3px 0 rgba(255,255,255,0.45),
+            inset 0 -5px 0 rgba(0,0,0,0.28),
+            0 10px 22px rgba(120, 20, 20, 0.50),
+            0 0 22px 4px rgba(255, 179, 71, 0.95),
+            0 0 44px 12px rgba(255, 179, 71, 0.50);
+    }
+    100% {
+        box-shadow:
+            inset 0 3px 0 rgba(255,255,255,0.45),
+            inset 0 -5px 0 rgba(0,0,0,0.28),
+            0 10px 22px rgba(120, 20, 20, 0.50),
+            0 0 18px 2px rgba(255, 99, 132, 0.95),
+            0 0 36px 8px rgba(255, 99, 132, 0.50);
+    }
 }
 
+/* --- Основные кнопки: Обработать, Скачать ... --- */
+.stButton > button,
 .stDownloadButton > button {
-    background: linear-gradient(135deg, #2E7D32 0%, #4CAF50 100%);
-    color: #FFFFFF;
-    border: none;
-    border-radius: 14px;
-    padding: 0.8rem 1.8rem;
-    font-weight: 600;
+    position: relative;
+    background:
+        radial-gradient(circle at 30% 22%, rgba(255,255,255,0.60), rgba(255,255,255,0) 55%),
+        linear-gradient(180deg, #4CAF50 0%, #2E7D32 45%, #1B5E20 100%);
+    color: #FFFFFF !important;
+    border: 2px solid rgba(255,255,255,0.60);
+    border-radius: 18px;
+    padding: 1rem 2.1rem;
+    font-weight: 800;
+    font-size: 1.25rem !important;   /* [NEW-NEON-BUTTONS] увеличен шрифт */
+    letter-spacing: 0.4px;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.55);
+    transition: transform 0.18s ease, filter 0.25s ease;
+    animation: neonPulseGreen 3.4s linear infinite;
+    transform: translateZ(0);
 }
 
+.stButton > button:hover,
 .stDownloadButton > button:hover {
-    background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 100%);
-    transform: translateY(-2px);
-    color: #FFFFFF;
+    transform: translateY(-3px) scale(1.015);
+    filter: brightness(1.10) saturate(1.18);
+    color: #FFFFFF !important;
 }
 
+.stButton > button:active,
+.stDownloadButton > button:active {
+    transform: translateY(0) scale(0.995);
+    filter: brightness(0.96);
+}
+
+/* --- Красная кнопка (сброс) --- */
+.stButton > button[kind="secondary"] {
+    background:
+        radial-gradient(circle at 30% 22%, rgba(255,255,255,0.60), rgba(255,255,255,0) 55%),
+        linear-gradient(180deg, #EF5350 0%, #C62828 45%, #8E0000 100%);
+    animation: neonPulseRed 3.0s linear infinite;
+}
+
+/* --- Кнопка внутри file_uploader --- */
 .stFileUploader {
     background: #FFFFFF;
     border-radius: 20px;
@@ -203,17 +365,22 @@ footer {visibility: hidden;}
     border: 2px dashed var(--border);
     box-shadow: 0 4px 20px rgba(27, 94, 32, 0.05);
 }
-
 .stFileUploader:hover { border-color: var(--grass-light); }
 .stFileUploader section { border: none !important; background: transparent !important; }
 .stFileUploader button {
     background: #E8F5E9 !important;
     color: var(--ink) !important;
-    border: 1px solid var(--grass-accent) !important;
-    border-radius: 10px !important;
+    border: 2px solid var(--grass-accent) !important;
+    border-radius: 12px !important;
+    font-size: 1.15rem !important;   /* [NEW-NEON-BUTTONS] увеличен шрифт */
+    font-weight: 700 !important;
+    animation: none !important;
+    text-shadow: none !important;
+    box-shadow: 0 3px 10px rgba(27,94,32,0.20) !important;
 }
 .stFileUploader button:hover { background: var(--grass-light) !important; color: #FFFFFF !important; }
 
+/* ---------- МЕТРИКИ ---------- */
 .stMetric {
     background: #FFFFFF;
     border-radius: 20px;
@@ -223,14 +390,12 @@ footer {visibility: hidden;}
     position: relative;
     overflow: hidden;
 }
-
 .stMetric::before {
     content: '';
     position: absolute;
     top: 0; left: 0; height: 100%; width: 6px;
     background: linear-gradient(180deg, #1B5E20 0%, #4CAF50 100%);
 }
-
 .stMetric:hover { transform: translateY(-4px); box-shadow: 0 14px 32px rgba(27, 94, 32, 0.20); }
 .stMetric label { color: var(--ink-soft) !important; font-size: 0.9rem !important; text-transform: uppercase; }
 .stMetric [data-testid="stMetricValue"] { color: var(--ink) !important; font-weight: 700 !important; font-size: 1.7rem !important; }
@@ -239,7 +404,7 @@ footer {visibility: hidden;}
 
 .stAlert { border-radius: 14px; border: none; }
 div[data-baseweb="notification"][kind="positive"] { background: #E8F5E9; color: var(--ink); }
-div[data-baseweb="notification"][kind="info"] { background: #EEF6EA; color: var(--ink); }
+div[data-baseweb="notification"][kind="info"] { background: #FFF6E8; color: var(--ink); }
 div[data-baseweb="notification"][kind="warning"] { background: #FBF3E0; color: #7A5B10; }
 
 .stProgress > div > div > div { background: linear-gradient(90deg, #1B5E20 0%, #4CAF50 100%); border-radius: 8px; }
@@ -255,9 +420,9 @@ h3 {
 }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: #F7FAF5; }
-::-webkit-scrollbar-thumb { background: #A5D6A7; border-radius: 5px; }
-::-webkit-scrollbar-thumb:hover { background: #4CAF50; }
+::-webkit-scrollbar-track { background: #FFF6E8; }
+::-webkit-scrollbar-thumb { background: #F48FB1; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #E91E63; }
 
 hr { border: none; border-top: 1px solid #E1EEDD; margin: 2rem 0; }
 
@@ -312,17 +477,11 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 2rem 0; }
     color: var(--ink);
     background: #FFFFFF;
 }
-.summary-table tbody tr:nth-child(even) td {
-    background: #F7FAF5;
-}
-.summary-table tbody tr:hover td {
-    background: #E8F5E9;
-}
-.summary-table tbody tr:last-child td {
-    border-bottom: none;
-}
+.summary-table tbody tr:nth-child(even) td { background: #FFF6E8; }
+.summary-table tbody tr:hover td { background: #FCE4EC; }
+.summary-table tbody tr:last-child td { border-bottom: none; }
 </style>
-""".replace("__LACE_SVG__", _LACE_SVG), unsafe_allow_html=True)
+""".replace("__GORODETS_SVG__", _GORODETS_SVG), unsafe_allow_html=True)
 
 
 # ==================== ШАПКА ====================
@@ -339,7 +498,7 @@ st.markdown("""
 <span class="chip">📑 XLS</span>
 <span class="chip">📝 DOCX</span>
 <span class="chip">📕 PDF</span>
-<span class="chip">🌐 Перевод описаний</span>
+<span class="chip">🌐 Перевод в скобках</span>
 </div>
 </div>
 <div class="hero-illustration">
@@ -429,7 +588,6 @@ def parse_date(date_str) -> str:
     if m:
         y, mo, d = m.groups()
         return f"{d}-{mo}-{y}"
-    # Revolut PDF: "10 Sept 2026"
     for fmt in ["%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d-%b-%y"]:
         try:
             return datetime.strptime(s, fmt).strftime("%d-%m-%Y")
@@ -486,9 +644,9 @@ def parse_amount(amount_str) -> float:
 
 def format_amount(amount: float) -> str:
     """
-    [NEW-AMOUNT-FORMAT] Единый формат вывода сумм: '0,00'.
-    Разделитель копеек — запятая; разделитель тысяч — неразрывный пробел.
-    Отрицательные суммы — со знаком минус. Пример: '1 234,56', '-45,00', '0,00'.
+    [NEW-AMOUNT-FORMAT] Единый формат сумм: '0,00'.
+    Десятичный разделитель — запятая, разделитель разрядов — пробел.
+    Отрицательные — со знаком минус. Пример: '1 234,56', '-45,00', '0,00'.
     """
     if amount is None:
         return "0,00"
@@ -516,22 +674,17 @@ def safe_str(v) -> str:
     return str(v).strip()
 
 
-# ==================== [NEW-TRANSLATE] ПЕРЕВОД ОПИСАНИЙ НА РУССКИЙ ====================
+# ==================== [NEW-TRANSLATE-INLINE] ПЕРЕВОД ОПИСАНИЙ ====================
 #
-# Оффлайн-переводчик банковских описаний для 4 языков:
-#   EN — английский
-#   CS — чешский
-#   LV — латвийский
-#   HU — венгерский
+# Логика:
+#   translate_description_inline(original) -> "original (перевод)"  — если перевод есть;
+#   translate_description_inline(original) -> "original"            — если перевода нет.
 #
-# Реализация — словарь терминов и фраз + один большой regex с alternation.
-# Работает без интернета. Покрывает наиболее частые банковские термины,
-# названия операций, служебные слова. Не переводит имена собственные,
-# номера счетов, IBAN, даты, суммы — они остаются как есть.
+# Оригинал НИКОГДА не изменяется. Перевод добавляется только в круглых скобках
+# в ту же ячейку. Регистр оригинала сохраняется как есть.
 #
-# Ключи словаря — в нижнем регистре. Значения — русские эквиваленты.
-# Порядок не важен: длинные фразы матчатся раньше коротких благодаря
-# сортировке по длине ключа при построении паттерна.
+# Словарь — банковские термины для EN / CS / LV / HU.
+# Используется один скомпилированный regex-alternation для быстрого прохода.
 
 _TRANSLATION_DICT: Dict[str, str] = {
     # ---------- English ----------
@@ -726,8 +879,7 @@ _TRANSLATION_DICT: Dict[str, str] = {
 }
 
 
-# Собираем единый regex из ключей словаря. Сортируем ключи по длине (убывание),
-# чтобы длинные фразы матчились первыми. Паттерн компилируется один раз.
+# Единый regex: длинные фразы — раньше коротких.
 _TRANSLATE_KEYS_SORTED = sorted(_TRANSLATION_DICT.keys(), key=len, reverse=True)
 _TRANSLATE_PATTERN = re.compile(
     r'(?<![A-Za-zÀ-ÖØ-öø-ÿĀ-žА-Яа-я])'
@@ -743,33 +895,35 @@ def _translate_repl(m: re.Match) -> str:
 
 
 def translate_to_russian(text: str) -> str:
-    """
-    [NEW-TRANSLATE] Перевод банковского описания на русский.
-    Работает оффлайн, на основе словаря банковских терминов.
-    Имена собственные, IBAN, номера, даты, суммы остаются нетронутыми.
-    """
+    """Перевод банковского описания на русский (оффлайн)."""
     if not text:
         return text
     s = str(text)
-    # Первый проход: замена терминов.
     s = _TRANSLATE_PATTERN.sub(_translate_repl, s)
-    # Нормализуем пробелы.
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 
-def translate_description_field(desc: str) -> str:
+def translate_description_inline(original: str) -> str:
     """
-    Обёртка: при пустом описании возвращает как есть.
-    Может быть расширена дополнительной логикой (нормализация и т.п.).
+    [NEW-TRANSLATE-INLINE] Возвращает "оригинал (перевод)" — если перевод есть;
+    иначе возвращает оригинал без изменений.
+    Оригинал НЕ модифицируется. Перевод всегда в круглых скобках.
     """
-    if not desc:
-        return desc
+    if original is None:
+        return ""
+    orig = str(original).strip()
+    if not orig:
+        return ""
     try:
-        translated = translate_to_russian(desc)
-        return translated if translated else desc
+        translated = translate_to_russian(orig)
     except Exception:
-        return desc
+        return orig
+    # Если перевод не отличается от оригинала — не добавляем скобки.
+    if not translated or translated.strip() == orig.strip():
+        return orig
+    # Не дублируем скобки, если перевод уже идентичен тому, что в скобках.
+    return f"{orig} ({translated})"
 
 
 # ==================== ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
@@ -1256,20 +1410,16 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
 
 
 def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]:
-    # [FIX-2026-REG-DOCX] Обрабатываем таблицы отдельно, т.к. в них дата/код/описание/сумма
-    # разделены ячейками, а docx_all_text склеивает их через ' | '.
     result = []
     try:
         doc = Document(BytesIO(file_content))
     except Exception:
         return []
 
-    # 1) Сначала пробуем таблицы
     for table in doc.tables:
         if not table.rows:
             continue
         hdr = [c.text.strip().lower() for c in table.rows[0].cells]
-        # Ищем таблицу с колонками: дата проводки, код операции, описание, сумма
         if not any('дата проводки' in h for h in hdr):
             continue
         date_i = code_i = desc_i = amount_i = -1
@@ -1323,14 +1473,12 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
             a_clean = re.match(r'^(-?[\d\s\u00a0]+[.,]\d{2})\s*(RUR|USD|EUR|CZK|AZN)?', a_raw)
 
             if d_clean:
-                # новая операция
                 flush()
                 current_date = d_clean.group(1)
                 current_code = c_raw
                 current_desc_parts = [desc_raw] if desc_raw else []
                 current_amount = a_clean.group(1) if a_clean else None
             else:
-                # продолжение
                 if current_date:
                     if desc_raw:
                         current_desc_parts.append(desc_raw)
@@ -1341,11 +1489,9 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
     if result:
         return result
 
-    # 2) Fallback — старый regex по всему тексту
     full_text = docx_all_text(file_content)
     if not full_text:
         return []
-    # Заменяем ' | ' на пробел, чтобы regex сработал
     normalized = full_text.replace(' | ', ' ')
     pattern = re.compile(
         r'(\d{2}\.\d{2}\.\d{4})\s*([A-Z0-9\_]+)\s*(.{1,2000}?)(-?[\d\s\u00a0]+,\d{2})\s*RUR',
@@ -1713,14 +1859,12 @@ def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict
 
 
 def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dict]:
-    # [FIX-2026-JEN-DOCX] Ужесточён фильтр служебных строк.
     result = []
     try:
         doc = Document(BytesIO(file_content))
     except Exception:
         return []
     for table in doc.tables:
-        # Пропускаем таблицы-сводки целиком
         flat_parts = []
         for row in table.rows:
             for cell in row.cells:
@@ -1919,7 +2063,6 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Industra ====================
 
 def _read_xls_with_xlrd(file_content: bytes):
-    """[FIX-2026-XLS-FALLBACK] Чтение старого .xls через xlrd с ignore_workbook_corruption."""
     try:
         import xlrd
     except ImportError:
@@ -1945,7 +2088,6 @@ def _read_xls_with_xlrd(file_content: bytes):
 def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
     df = None
-    # Сначала xlrd для .xls (устойчив к повреждениям)
     if _is_real_xls(file_content):
         df = _read_xls_with_xlrd(file_content)
     if df is None or df.empty:
@@ -2135,19 +2277,6 @@ def parse_industra_kl59(file_content, account_name):
 
 
 def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-2026-PDF-IND-2] Industra PDF.
-    Формат блока:
-      DD.MM.YYYY <ref>, #<num>, <тип>, <контрагент>,
-      <IBAN>, <банк>, <SWIFT>,
-      <описание> <сумма>
-    Стратегия:
-      1. Идём по строкам. Строка, содержащая дату DD.MM.YYYY — начало новой операции.
-      2. Накапливаем строки до следующей даты.
-      3. Сумма — последнее число в блоке (не ссылка, не номер).
-      4. Контрагент — первый содержательный фрагмент после типа.
-      5. Описание — остаток после IBAN/BIC, либо тип, если описание пусто.
-    """
     result = []
     full_text = pdf_all_text(file_content)
     if not full_text:
@@ -2167,8 +2296,6 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if not stripped:
             continue
         m = date_re.search(stripped)
-        # Дата считается началом блока, если она в начале строки или
-        # сразу после неё идёт запятая/пробел (характерно для Industra)
         if m and (m.start() == 0 or stripped[:m.start()].strip() == ''):
             if current_date is not None:
                 blocks.append((current_date, current_lines))
@@ -2203,7 +2330,6 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         amount_matches = list(amount_re.finditer(block_text))
         if not amount_matches:
             continue
-        # Берём последнее число, но пропускаем явные ссылки (длинные числа без точки)
         amount = None
         for am in reversed(amount_matches):
             v = parse_amount(am.group(1))
@@ -2216,7 +2342,6 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
         head = block_text[:amount_matches[-1].start()].strip().rstrip(' ,;')
 
-        # Определяем тип операции
         op_type = ''
         head_clean = re.sub(r'^[^,]*?,\s*#[\w/]+,\s*', '', head)
         parts = [p.strip() for p in head_clean.split(',') if p.strip()]
@@ -2257,7 +2382,6 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if (not desc or desc.strip() in ('', ',')) and op_type:
             desc = op_type
 
-        # Для комиссий — фиксированное описание
         if op_type.lower().startswith('комиссия') or 'комиссия за банковскую операцию' in low_block:
             desc = 'Комиссия за банковскую операцию'
 
@@ -2967,8 +3091,6 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Paysera (XLSX/DOCX) ====================
 
 def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
-    # [FIX-2026-PAY-XLSX] Расширенный поиск заголовков: поддерживаем
-    # латышские, английские и русские варианты.
     result = []
     df = read_xlsx(file_content, sheet_name='Worksheet')
     if df is None or df.empty:
@@ -2977,7 +3099,6 @@ def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
         return []
 
     header_row = -1
-    # Возможные наборы ключевых слов в заголовке
     header_keyword_sets = [
         ['Тип', 'Дата и время', 'Сумма и валюта'],
         ['Тип', 'Дата', 'Сумма'],
@@ -3187,22 +3308,6 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== Paysera PDF ====================
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-2026-PDF-PAY-2] Paysera PDF.
-    Формат:
-      <Тип> <номер выписки> <номер перевода> <Контрагент> [(код)] <IBAN> <Сумма> EUR
-      <Дата> <Время> [+0200] <Остаток> EUR
-      Назначение платежа: <текст>
-
-    Стратегия:
-      1. Идём по строкам, накапливая блок. Блок завершается, когда встречаем
-         строку с 'Назначение платежа' (возможен перенос между словами).
-      2. В блоке ищем:
-         - дату YYYY-MM-DD HH:MM:SS (последняя в блоке);
-         - сумму операции — первая EUR-сумма до даты, иначе первая EUR-сумма;
-         - контрагента — текст до первой EUR-суммы, очищенный от служебного;
-         - описание — текст после 'Назначение платежа:'.
-    """
     result = []
     full_text = pdf_all_text(file_content)
     if not full_text:
@@ -3210,7 +3315,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
     lines = full_text.split('\n')
 
-    # Собираем блоки: блок завершается строкой, содержащей 'Назначение' и 'платежа'
     blocks = []
     current_lines = []
     for line in lines:
@@ -3227,7 +3331,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     for block in blocks:
         block_text = '\n'.join(block)
 
-        # Извлекаем purpose
         purpose = ''
         pm = purpose_re.search(block_text)
         if pm:
@@ -3244,7 +3347,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         amount_matches = list(amount_re.finditer(block_text))
         if not amount_matches:
             continue
-        # Сумма операции — первая EUR-сумма до даты; если такой нет — первая вообще
         amount = None
         for am in amount_matches:
             if am.start() < last_date.start():
@@ -3261,7 +3363,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if amount is None or amount == 0.0:
             continue
 
-        # Контрагент: всё до первой EUR-суммы, очищенное
         first_amt_pos = amount_matches[0].start()
         party_raw = block_text[:first_amt_pos]
         party_raw = re.sub(r'\+\d{4}', ' ', party_raw)
@@ -3288,7 +3389,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             'Описание': purpose
         })
 
-    # Дедупликация
     seen = set()
     deduped = []
     for r in result:
@@ -3496,31 +3596,16 @@ def parse_revolut_plavas(file_content, account_name):
 
 
 def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    [FIX-2026-PDF-REV-2] Revolut PDF.
-    Формат:
-      <Date> <Type> <Description> <Money out|Money in> <Balance>
-      [продолжение Description на следующих строках]
-
-    Пример:
-      10 Sept 2026 MOA Money added from JANIS LIELMANIS • €423.41 €59 470.42
-      A14-7-09/2026. Rek. Nr. INV-2026-0156
-      9 Sept 2026 MOS To SANDAR BLAZMA • Kompensācijas €333.39 €57 397.29
-      izmaksa (1.2.15.1)
-    Описание — весь текст между типом и первой €-суммой, включая продолжения.
-    """
     result = []
     full_text = pdf_all_text(file_content)
     if not full_text:
         return []
 
-    # Дата может быть в начале строки, но допускаем ведущие пробелы
     date_re = re.compile(
         r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s+\d{4})\s+(.*)$',
         re.IGNORECASE | re.MULTILINE
     )
     type_re = re.compile(r'\b(MOA|MOS|MOR|FEE|CAR|ATM|EXO|EXI|TOPUP|TRANSFER)\b')
-    # Устойчивый поиск EUR-сумм: €1 234.56, €1,234.56, 1 234.56 €, -€1.23
     eur_re = re.compile(
         r'(-?\s?€\s?\d[\d\s\u00a0]*[.,]\d{2}|-?\d[\d\s\u00a0]*[.,]\d{2}\s?€)'
     )
@@ -4083,7 +4168,6 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
             desc = safe_str(row.iloc[ci['description']]) if ci['description'] < len(row) else ''
             low_desc = desc.lower()
-            # [FIX-2026-PASHA] усиленный фильтр итоговых строк
             if 'balans' in low_desc and ('dövr' in low_desc or 'mövcud' in low_desc):
                 continue
             if 'dövrün sonuna balans' in low_desc or 'mövcud balans' in low_desc:
@@ -4642,7 +4726,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_bluor_pdf, 'bluor_pdf'
         if 'jenhor' in low or 'unelma' in low:
             return parse_jenhor_unelma_pdf, 'jenhor_unelma_pdf'
-        # [FIX-2026-ROUTE] убран 'an14' (матчил AN14 Revolut)
         if 'industra' in low or 'plavas' in low or 'kl59' in low or 'p1 statement' in low:
             return parse_industra_pdf, 'industra_pdf'
         if 'kapital' in low or ('saida' in low and 'azn' in low):
@@ -4723,7 +4806,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_dzibik_main_csob, 'dzibik_main_csob'
         if 'stalkin' in low or 'fio' in low:
             return parse_stalkin_ml2_fio, 'stalkin_ml2_fio'
-        # [FIX-2026-ROUTE] убран 'an14' (матчил AN14 Revolut)
         if 'industra' in low or 'plavas' in low or 'p1 statement' in low or 'kl59' in low:
             if 'plavas' in low:
                 return parse_industra_plavas1, 'industra_plavas1'
@@ -4819,7 +4901,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_dzibik_main_csob, 'dzibik_main_csob'
         if 'stalkin' in low or 'fio' in low:
             return parse_stalkin_ml2_fio, 'stalkin_ml2_fio'
-        # [FIX-2026-ROUTE] убран 'an14' (матчил AN14 Revolut)
         if 'industra' in low or 'plavas' in low or 'p1 statement' in low or 'kl59' in low:
             if 'plavas' in low:
                 return parse_industra_plavas1, 'industra_plavas1'
@@ -5119,13 +5200,11 @@ def _process_uploaded_files(uploaded_files) -> Dict:
                 all_tx.extend(tx)
                 file_stats.append(f"✅ {uf.name}: {len(tx)} операций")
             else:
-                # Определяем, является ли файл служебным (только остатки)
                 ext_low = os.path.splitext(uf.name)[1].lower()
                 is_service_file = False
                 if 'bluor' in account_name.lower() and ext_low in ('.csv', '.xls', '.xlsx'):
                     raw = read_text_with_encoding(content)
                     if raw and 'начальный остаток' in raw.lower() and 'дебет (d)' in raw.lower():
-                        # Все транзакционные строки — служебные
                         is_service_file = True
                 if is_service_file:
                     file_stats.append(f"ℹ️ {uf.name}: служебный файл (только остатки), операций нет")
@@ -5217,13 +5296,14 @@ def _render_results(result: Dict):
     expense = float(abs(df_raw['Сумма_число'][df_raw['Сумма_число'] < 0].sum()))
 
     df_display = df_raw.drop(columns=['Сумма_число']).copy()
-    # [NEW-AMOUNT-FORMAT] — формат 0,00 для всех сумм
+
+    # [NEW-AMOUNT-FORMAT] — формат 0,00 для сумм
     df_display['Сумма'] = df_display['Сумма'].apply(format_amount)
 
-    # [NEW-TRANSLATE] — перевод описаний операций на русский
+    # [NEW-TRANSLATE-INLINE] — оригинал + перевод в скобках в ту же ячейку
     if 'Описание' in df_display.columns:
         df_display['Описание'] = df_display['Описание'].apply(
-            lambda x: translate_description_field(str(x)) if x is not None else ''
+            lambda x: translate_description_inline(str(x)) if x is not None else ''
         )
 
     st.markdown("---")
@@ -5232,10 +5312,10 @@ def _render_results(result: Dict):
     with c1:
         st.metric("📊 Всего операций", len(all_tx))
     with c2:
-        # [NEW-AMOUNT-FORMAT] — формат 0,00
+        # [NEW-AMOUNT-FORMAT]
         st.metric("📈 Доходы", format_amount(income))
     with c3:
-        # [NEW-AMOUNT-FORMAT] — формат 0,00
+        # [NEW-AMOUNT-FORMAT]
         st.metric("📉 Расходы", format_amount(expense))
 
     st.markdown("---")
@@ -5249,7 +5329,7 @@ def _render_results(result: Dict):
         st.info("Нет данных для сводки по счетам.")
     else:
         summary_html_df = summary_df.copy()
-        # [NEW-AMOUNT-FORMAT] — формат 0,00
+        # [NEW-AMOUNT-FORMAT]
         for col in ["Сумма приходных операций", "Сумма расходных операций", "Сальдо операций"]:
             summary_html_df[col] = summary_html_df[col].apply(format_amount)
         st.markdown(
@@ -5332,7 +5412,6 @@ def main():
     st.markdown("### 📥 Загрузка файлов")
     st.markdown("Перетащите выписки в окно ниже или нажмите **Browse files**.")
 
-    # [FIX-2026-RESET] Кнопка сброса
     col_reset, col_info = st.columns([1, 4])
     with col_reset:
         reset_clicked = st.button("🔄 Сбросить файлы", key="reset_btn")
@@ -5377,7 +5456,7 @@ def main():
             <path d="M3 12h4l3-9 4 18 3-9h4" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             </div>
-            <div class="info-card-text"><h4>Перевод описаний</h4><p>EN / CS / LV / HU → RU (оффлайн)</p></div>
+            <div class="info-card-text"><h4>Перевод в скобках</h4><p>EN / CS / LV / HU → RU, оригинал сохраняется</p></div>
             </div>
             """, unsafe_allow_html=True)
         with c3:
