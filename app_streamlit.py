@@ -24,10 +24,13 @@ FIX-пакет:
 
   [NEW-TRANSLATE-INLINE] — Оригинал описания сохраняется; перевод добавляется
                            в круглых скобках в ТУ ЖЕ ячейку.
-  [NEW-AMOUNT-FORMAT]    — Суммы в формате 0,00 (запятая, пробел между разрядами).
-  [NEW-GORODETS-BG]      — Цветная городецкая роспись (розаны, купавки, бутоны).
-  [NEW-NEON-BUTTONS]     — Кнопки объёмные с переливающимся неоновым свечением,
-                           увеличен размер шрифта надписей.
+  [NEW-AMOUNT-FORMAT]    — Суммы на экране в формате 0,00.
+  [NEW-EXCEL-NUMERIC]    — В Excel-выгрузке суммы — ЧИСЛА с форматом ячейки
+                           # ##0.00 (запятая как десятичный разделитель на экране,
+                           в файле — числовое значение + числовой формат).
+  [NEW-GORODETS-BG]      — Фон: цветная городецкая роспись.
+  [NEW-SOLID-BUTTONS]    — Кнопки объёмные тёмно-зелёные, с жирной цветной
+                           обводкой по периметру, БЕЗ неонового свечения.
 """
 
 import streamlit as st
@@ -41,6 +44,10 @@ from io import BytesIO, StringIO
 from typing import Dict, List, Tuple, Callable, Optional
 from docx import Document
 import pdfplumber
+
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 
 # ==================== НАСТРОЙКА СТРАНИЦЫ ====================
@@ -62,8 +69,6 @@ st.set_page_config(
 #   • Листья     — перистые листочки.
 #   • Ягодки     — мелкие точки-горошины.
 #   • Веточки    — плавные дуги.
-# Палитра Городца: розовый, синий, бирюзовый, зелёный, жёлтый, красный,
-# белая «оживка», тёмно-синий контур.
 # Общая прозрачность группы — 0.32 (мягкий, не отвлекающий фон).
 
 _GORODETS_SVG = (
@@ -72,7 +77,7 @@ _GORODETS_SVG = (
     "patternUnits='userSpaceOnUse'>"
     "<g opacity='0.32'>"
 
-    # -------------------- ВЕТОЧКИ (плавные дуги) --------------------
+    # -------------------- ВЕТОЧКИ --------------------
     "<g fill='none' stroke='#2C3E50' stroke-width='1.4' stroke-linecap='round'>"
     "<path d='M10 210 Q60 170 120 195 Q180 220 240 185 Q290 155 315 175'/>"
     "<path d='M5 60 Q50 30 100 55 Q150 80 200 50 Q250 20 315 45'/>"
@@ -93,7 +98,7 @@ _GORODETS_SVG = (
     "<path d='M270 195 q10 -12 22 -6 q-2 11 -12 16 q-11 5 -10 -10 z'/>"
     "</g>"
 
-    # -------------------- РОЗАН (центральный) --------------------
+    # -------------------- РОЗАН --------------------
     "<g transform='translate(90,110)'>"
     "<circle r='26' fill='#E91E63' stroke='#2C3E50' stroke-width='1.6'/>"
     "<circle r='18' fill='#F48FB1' stroke='#2C3E50' stroke-width='1.2'/>"
@@ -107,7 +112,7 @@ _GORODETS_SVG = (
     "</g>"
     "</g>"
 
-    # -------------------- КУПАВКА (большой бутон) --------------------
+    # -------------------- КУПАВКА --------------------
     "<g transform='translate(230,90)'>"
     "<path d='M-20 6 q0 -22 20 -30 q20 8 20 30 q0 22 -20 30 q-20 -8 -20 -30 z' "
     "fill='#1E88E5' stroke='#2C3E50' stroke-width='1.5'/>"
@@ -163,7 +168,7 @@ _GORODETS_SVG = (
     "<circle cx='255' cy='35' r='2.6'/><circle cx='263' cy='31' r='2.6'/>"
     "</g>"
 
-    # -------------------- ДЕКОРАТИВНЫЕ ЗАВИТКИ --------------------
+    # -------------------- ЗАВИТКИ --------------------
     "<g fill='none' stroke='#2C3E50' stroke-width='1.1' stroke-linecap='round'>"
     "<path d='M100 100 q-16 6 -20 22 q-2 14 10 20'/>"
     "<path d='M250 100 q16 6 20 22 q2 14 -10 20'/>"
@@ -251,110 +256,70 @@ footer {visibility: hidden;}
 .hero-illustration { position: relative; z-index: 2; }
 
 /* ============================================================ */
-/* [NEW-NEON-BUTTONS] ОБЪЁМНЫЕ КНОПКИ С ПЕРЕЛИВАЮЩИМСЯ НЕОНОМ  */
+/* [NEW-SOLID-BUTTONS] ОБЪЁМНЫЕ ТЁМНО-ЗЕЛЁНЫЕ КНОПКИ            */
+/* С жирной цветной обводкой по периметру, БЕЗ неонового свечения*/
 /* ============================================================ */
 
-@keyframes neonPulseGreen {
-    0% {
-        box-shadow:
-            inset 0 3px 0 rgba(255,255,255,0.45),
-            inset 0 -5px 0 rgba(0,0,0,0.28),
-            0 10px 22px rgba(27, 94, 32, 0.50),
-            0 0 18px 2px rgba(64, 224, 208, 0.85),
-            0 0 36px 8px rgba(64, 224, 208, 0.40);
-    }
-    33% {
-        box-shadow:
-            inset 0 3px 0 rgba(255,255,255,0.45),
-            inset 0 -5px 0 rgba(0,0,0,0.28),
-            0 10px 22px rgba(27, 94, 32, 0.50),
-            0 0 22px 4px rgba(236, 64, 122, 0.85),
-            0 0 42px 10px rgba(236, 64, 122, 0.40);
-    }
-    66% {
-        box-shadow:
-            inset 0 3px 0 rgba(255,255,255,0.45),
-            inset 0 -5px 0 rgba(0,0,0,0.28),
-            0 10px 22px rgba(27, 94, 32, 0.50),
-            0 0 22px 4px rgba(255, 213, 79, 0.90),
-            0 0 42px 10px rgba(255, 213, 79, 0.42);
-    }
-    100% {
-        box-shadow:
-            inset 0 3px 0 rgba(255,255,255,0.45),
-            inset 0 -5px 0 rgba(0,0,0,0.28),
-            0 10px 22px rgba(27, 94, 32, 0.50),
-            0 0 18px 2px rgba(64, 224, 208, 0.85),
-            0 0 36px 8px rgba(64, 224, 208, 0.40);
-    }
-}
-
-@keyframes neonPulseRed {
-    0% {
-        box-shadow:
-            inset 0 3px 0 rgba(255,255,255,0.45),
-            inset 0 -5px 0 rgba(0,0,0,0.28),
-            0 10px 22px rgba(120, 20, 20, 0.50),
-            0 0 18px 2px rgba(255, 99, 132, 0.95),
-            0 0 36px 8px rgba(255, 99, 132, 0.50);
-    }
-    50% {
-        box-shadow:
-            inset 0 3px 0 rgba(255,255,255,0.45),
-            inset 0 -5px 0 rgba(0,0,0,0.28),
-            0 10px 22px rgba(120, 20, 20, 0.50),
-            0 0 22px 4px rgba(255, 179, 71, 0.95),
-            0 0 44px 12px rgba(255, 179, 71, 0.50);
-    }
-    100% {
-        box-shadow:
-            inset 0 3px 0 rgba(255,255,255,0.45),
-            inset 0 -5px 0 rgba(0,0,0,0.28),
-            0 10px 22px rgba(120, 20, 20, 0.50),
-            0 0 18px 2px rgba(255, 99, 132, 0.95),
-            0 0 36px 8px rgba(255, 99, 132, 0.50);
-    }
-}
-
-/* --- Основные кнопки: Обработать, Скачать ... --- */
 .stButton > button,
 .stDownloadButton > button {
     position: relative;
     background:
-        radial-gradient(circle at 30% 22%, rgba(255,255,255,0.60), rgba(255,255,255,0) 55%),
-        linear-gradient(180deg, #4CAF50 0%, #2E7D32 45%, #1B5E20 100%);
+        radial-gradient(circle at 30% 22%, rgba(255,255,255,0.45), rgba(255,255,255,0) 60%),
+        linear-gradient(180deg, #3E8E41 0%, #1B5E20 45%, #0D3A12 100%);
     color: #FFFFFF !important;
-    border: 2px solid rgba(255,255,255,0.60);
-    border-radius: 18px;
+    /* Жирная золотисто-жёлтая обводка по периметру */
+    border: 3px solid #FBC02D;
+    border-radius: 16px;
     padding: 1rem 2.1rem;
     font-weight: 800;
-    font-size: 1.25rem !important;   /* [NEW-NEON-BUTTONS] увеличен шрифт */
+    font-size: 1.25rem !important;
     letter-spacing: 0.4px;
-    text-shadow: 0 2px 4px rgba(0,0,0,0.55);
-    transition: transform 0.18s ease, filter 0.25s ease;
-    animation: neonPulseGreen 3.4s linear infinite;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.60);
+    /* Объём: внутренний блик сверху, внутреннее затемнение снизу, внешняя тень */
+    box-shadow:
+        inset 0 3px 0 rgba(255,255,255,0.35),
+        inset 0 -6px 0 rgba(0,0,0,0.45),
+        0 8px 18px rgba(0,0,0,0.35),
+        0 4px 0 #0D3A12;
+    transition: transform 0.15s ease, filter 0.20s ease, box-shadow 0.20s ease;
+    animation: none !important;
     transform: translateZ(0);
 }
 
 .stButton > button:hover,
 .stDownloadButton > button:hover {
-    transform: translateY(-3px) scale(1.015);
-    filter: brightness(1.10) saturate(1.18);
+    transform: translateY(-2px);
+    filter: brightness(1.10) saturate(1.10);
+    box-shadow:
+        inset 0 3px 0 rgba(255,255,255,0.45),
+        inset 0 -6px 0 rgba(0,0,0,0.50),
+        0 12px 22px rgba(0,0,0,0.40),
+        0 5px 0 #0D3A12;
     color: #FFFFFF !important;
 }
 
 .stButton > button:active,
 .stDownloadButton > button:active {
-    transform: translateY(0) scale(0.995);
-    filter: brightness(0.96);
+    transform: translateY(2px);
+    box-shadow:
+        inset 0 3px 0 rgba(255,255,255,0.30),
+        inset 0 -3px 0 rgba(0,0,0,0.45),
+        0 4px 10px rgba(0,0,0,0.30),
+        0 1px 0 #0D3A12;
+    filter: brightness(0.95);
 }
 
-/* --- Красная кнопка (сброс) --- */
+/* --- Красная кнопка сброса: тот же объём, обводка — жёлтая --- */
 .stButton > button[kind="secondary"] {
     background:
-        radial-gradient(circle at 30% 22%, rgba(255,255,255,0.60), rgba(255,255,255,0) 55%),
-        linear-gradient(180deg, #EF5350 0%, #C62828 45%, #8E0000 100%);
-    animation: neonPulseRed 3.0s linear infinite;
+        radial-gradient(circle at 30% 22%, rgba(255,255,255,0.45), rgba(255,255,255,0) 60%),
+        linear-gradient(180deg, #C62828 0%, #8E0000 45%, #5C0000 100%);
+    border: 3px solid #FBC02D;
+    box-shadow:
+        inset 0 3px 0 rgba(255,255,255,0.35),
+        inset 0 -6px 0 rgba(0,0,0,0.45),
+        0 8px 18px rgba(0,0,0,0.35),
+        0 4px 0 #5C0000;
 }
 
 /* --- Кнопка внутри file_uploader --- */
@@ -372,7 +337,7 @@ footer {visibility: hidden;}
     color: var(--ink) !important;
     border: 2px solid var(--grass-accent) !important;
     border-radius: 12px !important;
-    font-size: 1.15rem !important;   /* [NEW-NEON-BUTTONS] увеличен шрифт */
+    font-size: 1.15rem !important;
     font-weight: 700 !important;
     animation: none !important;
     text-shadow: none !important;
@@ -644,9 +609,8 @@ def parse_amount(amount_str) -> float:
 
 def format_amount(amount: float) -> str:
     """
-    [NEW-AMOUNT-FORMAT] Единый формат сумм: '0,00'.
-    Десятичный разделитель — запятая, разделитель разрядов — пробел.
-    Отрицательные — со знаком минус. Пример: '1 234,56', '-45,00', '0,00'.
+    Формат отображения на экране: '0,00' — запятая как десятичный,
+    пробел между разрядами. Пример: '1 234,56', '-45,00', '0,00'.
     """
     if amount is None:
         return "0,00"
@@ -668,6 +632,36 @@ def format_amount(amount: float) -> str:
     return f"{sign}{formatted}"
 
 
+def to_float_amount(v) -> float:
+    """Приводит любое значение к float. Используется в экспорте."""
+    if v is None:
+        return 0.0
+    if isinstance(v, (int, float)):
+        try:
+            if pd.isna(v):
+                return 0.0
+        except Exception:
+            pass
+        return float(v)
+    s = str(v).strip()
+    if not s or s.lower() in ('nan', 'none', 'null'):
+        return 0.0
+    # Убираем пробелы-разделители разрядов
+    s = s.replace('\xa0', '').replace('\u202f', '').replace(' ', '')
+    # Если есть и точка, и запятая — считаем, что последняя из них — десятичный разделитель
+    if ',' in s and '.' in s:
+        if s.rfind('.') < s.rfind(','):
+            s = s.replace('.', '').replace(',', '.')
+        else:
+            s = s.replace(',', '')
+    elif ',' in s:
+        s = s.replace(',', '.')
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
+
+
 def safe_str(v) -> str:
     if v is None or pd.isna(v):
         return ''
@@ -681,10 +675,7 @@ def safe_str(v) -> str:
 #   translate_description_inline(original) -> "original"            — если перевода нет.
 #
 # Оригинал НИКОГДА не изменяется. Перевод добавляется только в круглых скобках
-# в ту же ячейку. Регистр оригинала сохраняется как есть.
-#
-# Словарь — банковские термины для EN / CS / LV / HU.
-# Используется один скомпилированный regex-alternation для быстрого прохода.
+# в ту же ячейку.
 
 _TRANSLATION_DICT: Dict[str, str] = {
     # ---------- English ----------
@@ -879,7 +870,6 @@ _TRANSLATION_DICT: Dict[str, str] = {
 }
 
 
-# Единый regex: длинные фразы — раньше коротких.
 _TRANSLATE_KEYS_SORTED = sorted(_TRANSLATION_DICT.keys(), key=len, reverse=True)
 _TRANSLATE_PATTERN = re.compile(
     r'(?<![A-Za-zÀ-ÖØ-öø-ÿĀ-žА-Яа-я])'
@@ -895,7 +885,6 @@ def _translate_repl(m: re.Match) -> str:
 
 
 def translate_to_russian(text: str) -> str:
-    """Перевод банковского описания на русский (оффлайн)."""
     if not text:
         return text
     s = str(text)
@@ -906,9 +895,8 @@ def translate_to_russian(text: str) -> str:
 
 def translate_description_inline(original: str) -> str:
     """
-    [NEW-TRANSLATE-INLINE] Возвращает "оригинал (перевод)" — если перевод есть;
-    иначе возвращает оригинал без изменений.
-    Оригинал НЕ модифицируется. Перевод всегда в круглых скобках.
+    [NEW-TRANSLATE-INLINE] "оригинал (перевод)" — если перевод есть;
+    иначе — оригинал без изменений.
     """
     if original is None:
         return ""
@@ -919,10 +907,8 @@ def translate_description_inline(original: str) -> str:
         translated = translate_to_russian(orig)
     except Exception:
         return orig
-    # Если перевод не отличается от оригинала — не добавляем скобки.
     if not translated or translated.strip() == orig.strip():
         return orig
-    # Не дублируем скобки, если перевод уже идентичен тому, что в скобках.
     return f"{orig} ({translated})"
 
 
@@ -5065,24 +5051,8 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     if "Наименование счета" not in df.columns or "Сумма" not in df.columns:
         return pd.DataFrame(columns=columns)
 
-    def _to_float(v):
-        if v is None:
-            return 0.0
-        if isinstance(v, (int, float)):
-            try:
-                if pd.isna(v):
-                    return 0.0
-            except Exception:
-                pass
-            return float(v)
-        s = str(v).strip().replace(" ", "").replace(",", ".")
-        try:
-            return float(s)
-        except ValueError:
-            return 0.0
-
     df = df.copy()
-    df["Сумма"] = df["Сумма"].map(_to_float)
+    df["Сумма"] = df["Сумма"].map(to_float_amount)
     df["Наименование счета"] = df["Наименование счета"].fillna("").astype(str)
 
     mask_reasonable = df["Сумма"].abs() < MAX_REASONABLE_AMOUNT
@@ -5119,29 +5089,176 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     return summary[columns]
 
 
-# ==================== ЭКСПОРТ ====================
+# ==================== ЭКСПОРТ (ЧИСЛОВЫЕ ЗНАЧЕНИЯ + ФОРМАТ 0,00) ====================
 
-def build_operations_excel(df_display: pd.DataFrame) -> BytesIO:
+_NUMERIC_FMT = '# ##0.00'
+_INT_FMT = '# ##0'
+_HEADER_FILL = PatternFill(start_color='1B5E20', end_color='1B5E20', fill_type='solid')
+_HEADER_FONT = Font(color='FFFFFF', bold=True, size=11)
+_THIN = Side(border_style='thin', color='C8E6C9')
+_BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
+
+
+def _autosize_worksheet(ws, max_width=60):
+    for col_idx, col_cells in enumerate(ws.iter_cols(), start=1):
+        max_len = 0
+        for cell in col_cells:
+            v = cell.value
+            if v is None:
+                continue
+            s = str(v)
+            if len(s) > max_len:
+                max_len = len(s)
+        w = min(max_len + 2, max_width)
+        if w < 10:
+            w = 10
+        ws.column_dimensions[get_column_letter(col_idx)].width = w
+
+
+def _write_operations_sheet(ws, df_export: pd.DataFrame):
+    """
+    df_export: колонки Дата, Сумма (float), Контрагент, Наименование счета, Описание.
+    Заголовки — стилизованные. Сумма — формат '# ##0.00'.
+    """
+    # Заголовки
+    for j, col_name in enumerate(df_export.columns, start=1):
+        c = ws.cell(row=1, column=j, value=col_name)
+        c.fill = _HEADER_FILL
+        c.font = _HEADER_FONT
+        c.alignment = Alignment(horizontal='left', vertical='center')
+        c.border = _BORDER
+
+    sum_col_name = 'Сумма'
+    sum_col_idx = None
+    for j, col_name in enumerate(df_export.columns, start=1):
+        if col_name == sum_col_name:
+            sum_col_idx = j
+            break
+
+    for i, row in enumerate(df_export.itertuples(index=False), start=2):
+        for j, value in enumerate(row, start=1):
+            c = ws.cell(row=i, column=j, value=value)
+            c.border = _BORDER
+            c.alignment = Alignment(horizontal='left', vertical='top', wrap_text=False)
+            if sum_col_idx is not None and j == sum_col_idx:
+                try:
+                    c.value = float(value)
+                    c.number_format = _NUMERIC_FMT
+                    c.alignment = Alignment(horizontal='right', vertical='top')
+                except Exception:
+                    pass
+
+    ws.freeze_panes = 'A2'
+    _autosize_worksheet(ws)
+
+
+def _write_summary_sheet(ws, summary_df: pd.DataFrame):
+    """
+    summary_df: колонки:
+      Наименование счета, Количество приходных операций, Сумма приходных операций,
+      Количество расходных операций, Сумма расходных операций, Сальдо операций.
+    Суммовые колонки — числа + формат '# ##0.00'; счётчики — формат '# ##0'.
+    """
+    for j, col_name in enumerate(summary_df.columns, start=1):
+        c = ws.cell(row=1, column=j, value=col_name)
+        c.fill = _HEADER_FILL
+        c.font = _HEADER_FONT
+        c.alignment = Alignment(horizontal='left', vertical='center')
+        c.border = _BORDER
+
+    sum_cols = {
+        "Сумма приходных операций",
+        "Сумма расходных операций",
+        "Сальдо операций",
+    }
+    cnt_cols = {
+        "Количество приходных операций",
+        "Количество расходных операций",
+    }
+
+    for i, row in enumerate(summary_df.itertuples(index=False), start=2):
+        for j, value in enumerate(row, start=1):
+            col_name = summary_df.columns[j - 1]
+            c = ws.cell(row=i, column=j, value=value)
+            c.border = _BORDER
+            c.alignment = Alignment(horizontal='left', vertical='top')
+            if col_name in sum_cols:
+                try:
+                    c.value = float(value)
+                    c.number_format = _NUMERIC_FMT
+                    c.alignment = Alignment(horizontal='right', vertical='top')
+                except Exception:
+                    pass
+            elif col_name in cnt_cols:
+                try:
+                    c.value = int(value)
+                    c.number_format = _INT_FMT
+                    c.alignment = Alignment(horizontal='right', vertical='top')
+                except Exception:
+                    pass
+
+    ws.freeze_panes = 'A2'
+    _autosize_worksheet(ws)
+
+
+def build_operations_excel(df_display: pd.DataFrame, df_numeric: pd.DataFrame) -> BytesIO:
+    """
+    df_display — для отображения (не используется для значений),
+    df_numeric — источник настоящих чисел.
+
+    Возвращает Excel с числами и форматом '# ##0.00'.
+    """
     output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_display.to_excel(writer, sheet_name='Транзакции', index=False)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Транзакции'
+
+    # Готовим DataFrame для записи в Excel: берём из df_numeric, добавляем
+    # отформатированное описание (оригинал + перевод в скобках), если оно
+    # есть в df_display.
+    df_export = pd.DataFrame({
+        'Дата': df_numeric['Дата'].astype(str),
+        'Сумма': df_numeric['Сумма'].astype(float),
+        'Контрагент': df_numeric['Контрагент'].astype(str),
+        'Наименование счета': df_numeric['Наименование счета'].astype(str),
+        'Описание': df_display['Описание'].astype(str) if 'Описание' in df_display.columns else df_numeric.get('Описание', pd.Series([''] * len(df_numeric))).astype(str),
+    })
+    _write_operations_sheet(ws, df_export)
+
+    wb.save(output)
     output.seek(0)
     return output
 
 
 def build_summary_excel(summary_df: pd.DataFrame) -> BytesIO:
     output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        summary_df.to_excel(writer, sheet_name='Сводка по счетам', index=False)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Сводка по счетам'
+    _write_summary_sheet(ws, summary_df)
+    wb.save(output)
     output.seek(0)
     return output
 
 
-def build_combined_excel(df_display: pd.DataFrame, summary_df: pd.DataFrame) -> BytesIO:
+def build_combined_excel(df_display: pd.DataFrame,
+                         df_numeric: pd.DataFrame,
+                         summary_df: pd.DataFrame) -> BytesIO:
     output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_display.to_excel(writer, sheet_name='Транзакции', index=False)
-        summary_df.to_excel(writer, sheet_name='Сводка по счетам', index=False)
+    wb = Workbook()
+    ws1 = wb.active
+    ws1.title = 'Транзакции'
+    df_export = pd.DataFrame({
+        'Дата': df_numeric['Дата'].astype(str),
+        'Сумма': df_numeric['Сумма'].astype(float),
+        'Контрагент': df_numeric['Контрагент'].astype(str),
+        'Наименование счета': df_numeric['Наименование счета'].astype(str),
+        'Описание': df_display['Описание'].astype(str) if 'Описание' in df_display.columns else df_numeric.get('Описание', pd.Series([''] * len(df_numeric))).astype(str),
+    })
+    _write_operations_sheet(ws1, df_export)
+    ws2 = wb.create_sheet('Сводка по счетам')
+    _write_summary_sheet(ws2, summary_df)
+    wb.save(output)
     output.seek(0)
     return output
 
@@ -5290,17 +5407,23 @@ def _render_results(result: Dict):
         return
 
     df_raw = pd.DataFrame(all_tx)
-    df_raw['Сумма_число'] = pd.to_numeric(df_raw['Сумма'], errors='coerce').fillna(0.0)
+    df_raw['Сумма_число'] = df_raw['Сумма'].map(to_float_amount)
 
     income = float(df_raw['Сумма_число'][df_raw['Сумма_число'] > 0].sum())
     expense = float(abs(df_raw['Сумма_число'][df_raw['Сумма_число'] < 0].sum()))
 
+    # df_numeric — источник настоящих чисел для экспорта.
+    df_numeric = pd.DataFrame({
+        'Дата': df_raw['Дата'].astype(str),
+        'Сумма': df_raw['Сумма_число'].astype(float),
+        'Контрагент': df_raw['Контрагент'].astype(str) if 'Контрагент' in df_raw.columns else '',
+        'Наименование счета': df_raw['Наименование счета'].astype(str),
+        'Описание': df_raw['Описание'].astype(str) if 'Описание' in df_raw.columns else '',
+    })
+
+    # df_display — то, что показываем в интерфейсе (суммы — строкой '0,00', описание — с переводом).
     df_display = df_raw.drop(columns=['Сумма_число']).copy()
-
-    # [NEW-AMOUNT-FORMAT] — формат 0,00 для сумм
-    df_display['Сумма'] = df_display['Сумма'].apply(format_amount)
-
-    # [NEW-TRANSLATE-INLINE] — оригинал + перевод в скобках в ту же ячейку
+    df_display['Сумма'] = df_raw['Сумма_число'].apply(format_amount)
     if 'Описание' in df_display.columns:
         df_display['Описание'] = df_display['Описание'].apply(
             lambda x: translate_description_inline(str(x)) if x is not None else ''
@@ -5312,10 +5435,8 @@ def _render_results(result: Dict):
     with c1:
         st.metric("📊 Всего операций", len(all_tx))
     with c2:
-        # [NEW-AMOUNT-FORMAT]
         st.metric("📈 Доходы", format_amount(income))
     with c3:
-        # [NEW-AMOUNT-FORMAT]
         st.metric("📉 Расходы", format_amount(expense))
 
     st.markdown("---")
@@ -5329,7 +5450,6 @@ def _render_results(result: Dict):
         st.info("Нет данных для сводки по счетам.")
     else:
         summary_html_df = summary_df.copy()
-        # [NEW-AMOUNT-FORMAT]
         for col in ["Сумма приходных операций", "Сумма расходных операций", "Сальдо операций"]:
             summary_html_df[col] = summary_html_df[col].apply(format_amount)
         st.markdown(
@@ -5341,12 +5461,12 @@ def _render_results(result: Dict):
     st.markdown("### 💾 Сохранить результат")
     st.markdown(
         "Скачайте **отдельно операции по выпискам** и **отдельно сводную таблицу**, "
-        "или всё вместе одним файлом."
+        "или всё вместе одним файлом. В Excel суммы — числа с форматом `0,00`."
     )
 
-    ops_excel = build_operations_excel(df_display)
+    ops_excel = build_operations_excel(df_display, df_numeric)
     summary_excel = build_summary_excel(summary_df) if not summary_df.empty else None
-    combined_excel = build_combined_excel(df_display, summary_df) if not summary_df.empty else None
+    combined_excel = build_combined_excel(df_display, df_numeric, summary_df) if not summary_df.empty else None
 
     dl1, dl2, dl3 = st.columns(3)
 
@@ -5467,7 +5587,7 @@ def main():
             <path d="M3 3v18h18M18 17V9M13 17V5M8 17v-3" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             </div>
-            <div class="info-card-text"><h4>Экспорт в Excel</h4><p>Скачайте итог в один клик</p></div>
+            <div class="info-card-text"><h4>Числовой экспорт</h4><p>Суммы — числа с форматом 0,00</p></div>
             </div>
             """, unsafe_allow_html=True)
         st.markdown("""
