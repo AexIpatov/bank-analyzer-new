@@ -17,6 +17,7 @@ FIX-пакет:
   [NEW-SMART-COUNTERPARTY] — Умное извлечение контрагента
   [FIX-KAPITAL-XLSX]     — Новый парсер Kapital bank Saida AZN (XLSX, 2-колоночный)
   [FIX-KAPITAL-PDF]      — Улучшен PDF-парсер Kapital bank (склейка Məxaric/Mədaxil)
+  [FIX-KAPITAL-DOCX-ERROR] — Исправлена ошибка name 'parse_kapital_saida_docx' is not defined
 """
 
 import streamlit as st
@@ -3418,7 +3419,14 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
         if desc_raw:
             desc_parts.append(desc_raw)
         if code_raw and code_raw.lower() not in ('nan', 'none'):
-            desc_parts.append(code_raw)
+            # Код добавляем только если он короткий или если Təsvir пустой.
+            # В файле Saida_AZN колонка "Код" содержит длинный бухгалтерский текст,
+            # который портит описание. Поэтому добавляем его только как fallback.
+            if not desc_raw:
+                desc_parts.append(code_raw)
+            elif len(code_raw) < 20:
+                desc_parts.append(code_raw)
+        
         desc = ' | '.join(desc_parts) if len(desc_parts) > 1 else (desc_parts[0] if desc_parts else '')
 
         # Дополнительная защита: если описание пустое, но есть код — берём код
@@ -5886,8 +5894,9 @@ def get_parser_by_ext(account_name: str, ext: str):
         return parse_pdf_universal, 'pdf_universal'
 
     if ext == '.docx':
-        if is_kapital_saida:
-            return parse_kapital_saida_docx, 'kapital_saida_docx'
+        # [FIX-KAPITAL-DOCX-ERROR] Убираем вызов несуществующего парсера
+        # if is_kapital_saida:
+        #     return parse_kapital_saida_docx, 'kapital_saida_docx'
         if 'regina alfa' in low:
             return parse_regina_alfa_docx, 'regina_alfa_docx'
         if 'tinkoff' in low:
