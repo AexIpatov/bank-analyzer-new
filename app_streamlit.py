@@ -6,30 +6,14 @@ app.py — Аналитик банковских выписок.
 FIX-пакет:
   [FIX-SYNTAX-MASHREQ]   — устранена слипшаяся строка "amount = credit  elif ..."
   [FIX-TRANSLATE-FULL]   — многословные фразы переводятся ПОЛНОСТЬЮ
-                           (Value Added Tax - Output, Corr.Bank.Charges,
-                            Inward Remittance FUND TRANSFER и т.д.)
-  [FIX-BG-BASE64]        — фон: SVG в base64 + CSS-градиенты (гарантированно
-                           работает в Streamlit 1.30+)
-  [FIX-BUTTONS-HUGE]     — крупный жирный шрифт, все селекторы Streamlit
-  [FIX-COUNTERPARTY-2]   — чистка имени контрагента от \ / ROC / REF / SRN /
-                           номера / телефонов / банковских хвостов
-  [FIX-2026-DESC-REV]    — Revolut: Description | Reference
-  [FIX-2026-DESC-IND]    — Industra: fallback на тип транзакции
-  [FIX-2026-ROUTE]       — убран 'an14' из условий Industra
-  [FIX-2026-RESET]       — кнопка сброса
-  [FIX-2026-PDF-*]       — устойчивые парсеры PDF Revolut/Paysera/Industra
-  [FIX-2026-XLS-FALLBACK]— Industra XLS через xlrd с ignore_workbook_corruption
-  [FIX-2026-PAY-XLSX]    — Paysera XLSX: расширенный поиск заголовков
-  [FIX-2026-REG-DOCX]    — Regina Alfa DOCX: ' | ' между ячейками
-  [FIX-2026-JEN-DOCX]    — JenHor Unelma DOCX: фильтр служебных строк
-  [FIX-2026-PASHA]       — Pasha Bank XLSX: фильтр итоговых строк
-  [FIX-2026-BLUOR-EMPTY] — BluOr CSV: информативное сообщение
+  [FIX-BG-BASE64]        — фон: SVG в base64 + CSS-градиенты
+  [FIX-BUTTONS-SMALL]    — уменьшен шрифт кнопок (1.05rem)
+  [FIX-COUNTERPARTY-2]   — чистка имени контрагента
+  [NEW-NORMALIZE-ACCOUNT]— приведение наименований счетов к эталонному списку
+  [NEW-GORODETS-TEA]     — фон: городецкая роспись "Чаепитие" (самовар, чашки)
   [NEW-TRANSLATE-INLINE] — Оригинал + (перевод) в одной ячейке
   [NEW-AMOUNT-FORMAT]    — Суммы на экране: 1 234,56
   [NEW-EXCEL-NUMERIC]    — В Excel суммы — числа с форматом # ##0.00
-  [NEW-GORODETS-BG]      — Яркая цветная городецкая роспись
-  [NEW-SOLID-BUTTONS]    — Объёмные тёмно-зелёные кнопки без неона
-  [NEW-BIG-BUTTON-FONT]  — Крупный шрифт кнопок
   [NEW-SMART-COUNTERPARTY] — Умное извлечение контрагента
 """
 
@@ -61,125 +45,138 @@ st.set_page_config(
 )
 
 
-# ==================== [NEW-GORODETS-BG] ЯРКАЯ ГОРОДЕЦКАЯ РОСПИСЬ ====================
+# ==================== [NEW-GORODETS-TEA] ФОН: ГОРОДЕЦКАЯ РОСПИСЬ "ЧАЕПИТИЕ" ====================
 #
-# Тайл 480×420 px. Сюжет: розан, купавка, птица-павлин, конь, листья, бутоны,
-# ягодки, завитки. Палитра: красный, синий, жёлтый, зелёный, оранжевый,
-# розовый, фиолетовый. Прозрачность группы — 0.55.
+# Тайл 520×460 px. Сюжет: стол, самовар, две чашки с блюдцами, купчиха,
+# веточки с розанами и купавками, листья, завитки.
+# Палитра: красный, синий, жёлтый, зелёный, оранжевый, розовый, фиолетовый.
 
 _GORODETS_SVG = (
-    "<svg xmlns='http://www.w3.org/2000/svg' width='480' height='420'>"
-    "<defs><pattern id='gorodets' x='0' y='0' width='480' height='420' "
+    "<svg xmlns='http://www.w3.org/2000/svg' width='520' height='460'>"
+    "<defs><pattern id='gorodets' x='0' y='0' width='520' height='460' "
     "patternUnits='userSpaceOnUse'>"
     "<g opacity='0.55'>"
 
     # ============ ФОНОВЫЕ ВЕТОЧКИ ============
     "<g fill='none' stroke='#2C3E50' stroke-width='2' stroke-linecap='round'>"
-    "<path d='M15 340 Q90 270 180 310 Q270 350 360 290 Q430 245 470 275'/>"
-    "<path d='M10 100 Q80 50 160 85 Q240 120 320 75 Q400 35 475 70'/>"
-    "<path d='M60 210 Q140 165 220 205 Q300 245 380 205 Q440 175 480 200'/>"
-    "<path d='M0 400 Q100 370 200 395 Q320 425 480 385'/>"
+    "<path d='M10 380 Q120 320 240 360 Q360 400 510 340'/>"
+    "<path d='M5 120 Q90 70 190 100 Q290 130 390 90 Q470 55 520 85'/>"
+    "<path d='M60 250 Q160 210 260 245 Q360 280 460 240'/>"
+    "<path d='M0 445 Q130 415 260 440 Q400 465 520 430'/>"
     "</g>"
 
     # ============ ЛИСТЬЯ ============
     "<g fill='#43A047' stroke='#1B5E20' stroke-width='1.6'>"
-    "<path d='M110 305 q16 -26 42 -16 q-4 24 -22 32 q-22 10 -20 -16 z'/>"
-    "<path d='M110 305 q20 -10 42 -16' fill='none' stroke='#1B5E20' stroke-width='1.3'/>"
-    "<path d='M300 320 q18 -24 46 -14 q-4 24 -24 32 q-24 10 -22 -18 z'/>"
-    "<path d='M300 320 q22 -10 46 -14' fill='none' stroke='#1B5E20' stroke-width='1.3'/>"
-    "<path d='M160 70 q16 -22 38 -12 q-4 20 -20 28 q-20 8 -18 -16 z'/>"
-    "<path d='M380 60 q18 -20 40 -10 q-4 20 -22 28 q-22 8 -18 -18 z'/>"
+    "<path d='M120 350 q18 -28 46 -18 q-4 26 -24 34 q-24 10 -22 -16 z'/>"
+    "<path d='M120 350 q22 -10 46 -18' fill='none' stroke='#1B5E20' stroke-width='1.3'/>"
+    "<path d='M340 365 q20 -26 50 -16 q-4 26 -26 34 q-26 10 -24 -18 z'/>"
+    "<path d='M340 365 q24 -10 50 -16' fill='none' stroke='#1B5E20' stroke-width='1.3'/>"
+    "<path d='M180 80 q16 -22 40 -12 q-4 22 -22 30 q-22 8 -18 -18 z'/>"
+    "<path d='M420 70 q20 -22 44 -12 q-4 22 -24 30 q-24 8 -20 -18 z'/>"
     "</g>"
     "<g fill='#26A69A' stroke='#00695C' stroke-width='1.6'>"
-    "<path d='M240 285 q16 -22 40 -12 q-4 20 -22 28 q-22 8 -18 -16 z'/>"
-    "<path d='M420 300 q16 -20 36 -10 q-4 20 -20 26 q-18 8 -16 -16 z'/>"
-    "<path d='M60 190 q16 -20 38 -10 q-4 20 -22 28 q-22 8 -16 -18 z'/>"
+    "<path d='M260 320 q18 -24 44 -14 q-4 22 -24 30 q-24 8 -20 -16 z'/>"
+    "<path d='M460 330 q16 -22 40 -12 q-4 22 -22 30 q-22 8 -18 -18 z'/>"
+    "<path d='M70 210 q16 -20 40 -10 q-4 22 -24 30 q-24 8 -16 -20 z'/>"
     "</g>"
 
-    # ============ РОЗАН (крупный, левый нижний) ============
-    "<g transform='translate(140,220)'>"
-    "<circle r='42' fill='#E91E63' stroke='#880E4F' stroke-width='2.4'/>"
-    "<circle r='30' fill='#F48FB1' stroke='#C2185B' stroke-width='2'/>"
-    "<circle r='18' fill='#FBC02D' stroke='#F57F17' stroke-width='1.8'/>"
-    "<circle r='8' fill='#E53935' stroke='#B71C1C' stroke-width='1.5'/>"
+    # ============ СТОЛ (центр) ============
+    "<g transform='translate(260,360)'>"
+    "<ellipse cx='0' cy='0' rx='170' ry='34' fill='#8D6E63' stroke='#4E342E' stroke-width='2'/>"
+    "<ellipse cx='0' cy='-6' rx='170' ry='30' fill='#A1887F' stroke='#4E342E' stroke-width='1.6'/>"
+    "<ellipse cx='0' cy='-12' rx='160' ry='24' fill='#D7CCC8' stroke='#4E342E' stroke-width='1.2'/>"
+    # Кружевная салфетка по центру
+    "<ellipse cx='0' cy='-14' rx='90' ry='16' fill='#FFFFFF' opacity='0.6' stroke='#BCAAA4' stroke-width='1'/>"
+    "</g>"
+
+    # ============ САМОВАР (центр стола) ============
+    "<g transform='translate(260,300)'>"
+    # тело
+    "<path d='M-30 0 q-8 -55 30 -60 q38 5 30 60 z' fill='#FBC02D' stroke='#F57F17' stroke-width='2'/>"
+    # крышка
+    "<ellipse cx='0' cy='-60' rx='30' ry='8' fill='#FDD835' stroke='#F57F17' stroke-width='1.8'/>"
+    # носик
+    "<path d='M-30 -20 l-18 -6 l18 -6 z' fill='#FBC02D' stroke='#F57F17' stroke-width='1.6'/>"
+    # ручки
+    "<path d='M30 -30 q14 10 0 20' fill='none' stroke='#F57F17' stroke-width='3'/>"
+    "<path d='M-30 -30 q-14 10 0 20' fill='none' stroke='#F57F17' stroke-width='3'/>"
+    # ножка
+    "<rect x='-4' y='0' width='8' height='14' fill='#F57F17'/>"
+    "<ellipse cx='0' cy='14' rx='14' ry='4' fill='#FDD835' stroke='#F57F17' stroke-width='1.4'/>"
+    # блик
+    "<path d='M-15 -50 q0 -6 6 -6' fill='none' stroke='#FFF9C4' stroke-width='2'/>"
+    "</g>"
+
+    # ============ ЧАШКА СЛЕВА ============
+    "<g transform='translate(180,340)'>"
+    "<ellipse cx='0' cy='0' rx='24' ry='7' fill='#FFFFFF' stroke='#1565C0' stroke-width='1.6'/>"
+    "<path d='M-20 -2 q0 -18 20 -18 q20 0 20 18 z' fill='#FFFFFF' stroke='#1565C0' stroke-width='1.8'/>"
+    "<path d='M20 -14 q12 4 0 12' fill='none' stroke='#1565C0' stroke-width='2'/>"
+    # цветочек на чашке
+    "<circle cx='-4' cy='-8' r='3' fill='#E91E63' stroke='#880E4F' stroke-width='1'/>"
+    "<circle cx='4' cy='-8' r='3' fill='#E91E63' stroke='#880E4F' stroke-width='1'/>"
+    "<circle cx='0' cy='-3' r='2.4' fill='#FBC02D' stroke='#F57F17' stroke-width='1'/>"
+    "</g>"
+
+    # ============ ЧАШКА СПРАВА ============
+    "<g transform='translate(340,340)'>"
+    "<ellipse cx='0' cy='0' rx='24' ry='7' fill='#FFFFFF' stroke='#C62828' stroke-width='1.6'/>"
+    "<path d='M-20 -2 q0 -18 20 -18 q20 0 20 18 z' fill='#FFFFFF' stroke='#C62828' stroke-width='1.8'/>"
+    "<path d='M20 -14 q12 4 0 12' fill='none' stroke='#C62828' stroke-width='2'/>"
+    "<circle cx='-4' cy='-8' r='3' fill='#1E88E5' stroke='#0D47A1' stroke-width='1'/>"
+    "<circle cx='4' cy='-8' r='3' fill='#1E88E5' stroke='#0D47A1' stroke-width='1'/>"
+    "<circle cx='0' cy='-3' r='2.4' fill='#FBC02D' stroke='#F57F17' stroke-width='1'/>"
+    "</g>"
+
+    # ============ БЛЮДЦЕ С ПИРОЖКАМИ ============
+    "<g transform='translate(260,335)'>"
+    "<ellipse cx='0' cy='0' rx='22' ry='6' fill='#FFFFFF' stroke='#7E57C2' stroke-width='1.4'/>"
+    "<circle cx='-6' cy='-4' r='5' fill='#FFB74D' stroke='#E65100' stroke-width='1'/>"
+    "<circle cx='4' cy='-4' r='5' fill='#FFB74D' stroke='#E65100' stroke-width='1'/>"
+    "</g>"
+
+    # ============ РОЗАН (слева, крупный) ============
+    "<g transform='translate(90,150)'>"
+    "<circle r='34' fill='#E91E63' stroke='#880E4F' stroke-width='2.2'/>"
+    "<circle r='24' fill='#F48FB1' stroke='#C2185B' stroke-width='1.8'/>"
+    "<circle r='14' fill='#FBC02D' stroke='#F57F17' stroke-width='1.6'/>"
+    "<circle r='6' fill='#E53935' stroke='#B71C1C' stroke-width='1.4'/>"
     "<g fill='#FFFFFF' opacity='0.98'>"
-    "<circle cx='-26' cy='-12' r='3.6'/><circle cx='-28' cy='10' r='3.6'/>"
-    "<circle cx='-10' cy='-26' r='3.6'/><circle cx='12' cy='-26' r='3.6'/>"
-    "<circle cx='26' cy='-10' r='3.6'/><circle cx='28' cy='12' r='3.6'/>"
-    "<circle cx='10' cy='28' r='3.6'/><circle cx='-12' cy='28' r='3.6'/>"
+    "<circle cx='-20' cy='-10' r='3'/><circle cx='-22' cy='8' r='3'/>"
+    "<circle cx='-8' cy='-20' r='3'/><circle cx='10' cy='-20' r='3'/>"
+    "<circle cx='20' cy='-8' r='3'/><circle cx='22' cy='10' r='3'/>"
+    "<circle cx='8' cy='22' r='3'/><circle cx='-10' cy='22' r='3'/>"
     "</g>"
     "</g>"
 
-    # ============ КУПАВКА (правый верх) ============
-    "<g transform='translate(370,150)'>"
-    "<path d='M-34 10 q0 -36 34 -50 q34 14 34 50 q0 36 -34 50 q-34 -14 -34 -50 z' "
+    # ============ КУПАВКА (справа) ============
+    "<g transform='translate(430,170)'>"
+    "<path d='M-30 8 q0 -32 30 -44 q30 12 30 44 q0 32 -30 44 q-30 -12 -30 -44 z' "
     "fill='#1E88E5' stroke='#0D47A1' stroke-width='2.2'/>"
-    "<path d='M-20 6 q0 -22 20 -32 q20 10 20 32 q0 22 -20 32 q-20 -10 -20 -32 z' "
+    "<path d='M-18 4 q0 -20 18 -28 q18 8 18 28 q0 20 -18 28 q-18 -8 -18 -28 z' "
     "fill='#90CAF9' stroke='#1565C0' stroke-width='1.8'/>"
-    "<circle cy='-10' r='10' fill='#FBC02D' stroke='#F57F17' stroke-width='1.5'/>"
+    "<circle cy='-8' r='9' fill='#FBC02D' stroke='#F57F17' stroke-width='1.4'/>"
     "<g fill='#FFFFFF' opacity='0.98'>"
-    "<circle cx='-14' cy='10' r='2.8'/><circle cx='14' cy='10' r='2.8'/>"
-    "<circle cx='-6' cy='28' r='2.8'/><circle cx='6' cy='28' r='2.8'/>"
-    "<circle cy='-26' r='2.8'/>"
+    "<circle cx='-12' cy='8' r='2.6'/><circle cx='12' cy='8' r='2.6'/>"
+    "<circle cx='-5' cy='24' r='2.6'/><circle cx='5' cy='24' r='2.6'/>"
+    "<circle cy='-22' r='2.6'/>"
     "</g>"
-    "</g>"
-
-    # ============ ПТИЦА-ПАВЛИН (центр, вверху) ============
-    "<g transform='translate(240,60)'>"
-    "<ellipse cx='0' cy='20' rx='34' ry='20' fill='#7E57C2' stroke='#4527A0' stroke-width='2'/>"
-    "<path d='M25 25 q30 -5 45 15 q-10 12 -30 10 q-20 -2 -25 -10 z' "
-    "fill='#26A69A' stroke='#00695C' stroke-width='1.8'/>"
-    "<path d='M28 30 q20 0 30 12' fill='none' stroke='#FBC02D' stroke-width='1.6'/>"
-    "<circle cx='-30' cy='10' r='13' fill='#E91E63' stroke='#880E4F' stroke-width='1.8'/>"
-    "<path d='M-42 10 l-10 3 l10 3 z' fill='#FBC02D' stroke='#F57F17' stroke-width='1.4'/>"
-    "<circle cx='-32' cy='8' r='2.6' fill='#FFFFFF'/>"
-    "<circle cx='-32' cy='8' r='1.2' fill='#1A2E1F'/>"
-    "<path d='M-12 14 q18 6 36 2 q-10 14 -30 12 q-14 -2 -6 -14 z' "
-    "fill='#FBC02D' stroke='#F57F17' stroke-width='1.4'/>"
-    "<g fill='#FFFFFF' opacity='0.9'>"
-    "<circle cx='20' cy='35' r='2'/><circle cx='30' cy='38' r='2'/>"
-    "<circle cx='38' cy='42' r='2'/><circle cx='46' cy='45' r='2'/>"
-    "</g>"
-    "</g>"
-
-    # ============ КОНЬ (правый низ) ============
-    "<g transform='translate(380,340)'>"
-    "<ellipse cx='0' cy='0' rx='40' ry='22' fill='#3E2723' stroke='#1B0000' stroke-width='2'/>"
-    "<path d='M-38 -6 q-22 -10 -30 -28 q14 -4 22 4 q10 -8 18 2 z' "
-    "fill='#5D4037' stroke='#1B0000' stroke-width='1.8'/>"
-    "<path d='M-50 -34 l-4 -12 l10 6 z' fill='#5D4037' stroke='#1B0000' stroke-width='1.4'/>"
-    "<circle cx='-46' cy='-24' r='2.4' fill='#FFFFFF'/>"
-    "<circle cx='-46' cy='-24' r='1' fill='#1A2E1F'/>"
-    "<path d='M-32 -18 q-6 6 -2 14 q6 -4 10 -8 q-4 6 -2 12 q6 -4 10 -8' "
-    "fill='none' stroke='#FBC02D' stroke-width='2' stroke-linecap='round'/>"
-    "<path d='M-20 20 l-4 26 M-6 20 l0 26 M14 20 l2 26 M28 20 l6 26' "
-    "stroke='#3E2723' stroke-width='5' stroke-linecap='round'/>"
-    "<path d='M40 -4 q18 -6 24 -20' fill='none' stroke='#3E2723' stroke-width='4' stroke-linecap='round'/>"
     "</g>"
 
     # ============ БУТОНЫ ============
-    "<g transform='translate(60,60)'>"
-    "<path d='M-18 6 q0 -22 18 -30 q18 8 18 30 q0 22 -18 30 q-18 -8 -18 -30 z' "
-    "fill='#F06292' stroke='#AD1457' stroke-width='1.8'/>"
-    "<circle cy='-8' r='7' fill='#FBC02D' stroke='#F57F17' stroke-width='1.4'/>"
-    "<g fill='#FFFFFF' opacity='0.98'>"
-    "<circle cx='-8' cy='10' r='2.4'/><circle cx='8' cy='10' r='2.4'/>"
-    "</g>"
-    "</g>"
-
-    "<g transform='translate(450,220)'>"
+    "<g transform='translate(340,120)'>"
     "<path d='M-16 5 q0 -20 16 -27 q16 7 16 27 q0 20 -16 27 q-16 -7 -16 -27 z' "
-    "fill='#26A69A' stroke='#00695C' stroke-width='1.8'/>"
+    "fill='#F06292' stroke='#AD1457' stroke-width='1.8'/>"
     "<circle cy='-7' r='6' fill='#FBC02D' stroke='#F57F17' stroke-width='1.4'/>"
     "<g fill='#FFFFFF' opacity='0.98'>"
     "<circle cx='-7' cy='9' r='2.2'/><circle cx='7' cy='9' r='2.2'/>"
     "</g>"
     "</g>"
 
-    "<g transform='translate(220,400)'>"
+    "<g transform='translate(200,210)'>"
     "<path d='M-14 5 q0 -18 14 -24 q14 6 14 24 q0 18 -14 24 q-14 -6 -14 -24 z' "
-    "fill='#FBC02D' stroke='#F57F17' stroke-width='1.6'/>"
-    "<circle cy='-5' r='5' fill='#E53935' stroke='#B71C1C' stroke-width='1.3'/>"
+    "fill='#26A69A' stroke='#00695C' stroke-width='1.8'/>"
+    "<circle cy='-5' r='5' fill='#FBC02D' stroke='#F57F17' stroke-width='1.4'/>"
     "<g fill='#FFFFFF' opacity='0.98'>"
     "<circle cx='-6' cy='8' r='1.8'/><circle cx='6' cy='8' r='1.8'/>"
     "</g>"
@@ -187,32 +184,242 @@ _GORODETS_SVG = (
 
     # ============ ЯГОДКИ ============
     "<g fill='#E53935' stroke='#B71C1C' stroke-width='1.2'>"
-    "<circle cx='180' cy='45' r='4.5'/><circle cx='192' cy='52' r='4.5'/>"
-    "<circle cx='186' cy='60' r='4.5'/>"
-    "<circle cx='320' cy='380' r='4.5'/><circle cx='332' cy='374' r='4.5'/>"
-    "<circle cx='326' cy='364' r='4.5'/>"
+    "<circle cx='160' cy='60' r='4.5'/><circle cx='172' cy='66' r='4.5'/>"
+    "<circle cx='166' cy='74' r='4.5'/>"
+    "<circle cx='360' cy='420' r='4.5'/><circle cx='372' cy='414' r='4.5'/>"
+    "<circle cx='366' cy='404' r='4.5'/>"
     "</g>"
     "<g fill='#FBC02D' stroke='#F57F17' stroke-width='1.2'>"
-    "<circle cx='90' cy='390' r='4'/><circle cx='102' cy='384' r='4'/>"
-    "<circle cx='400' cy='55' r='4'/><circle cx='412' cy='50' r='4'/>"
-    "<circle cx='300' cy='250' r='4'/><circle cx='312' cy='244' r='4'/>"
+    "<circle cx='80' cy='420' r='4'/><circle cx='92' cy='414' r='4'/>"
+    "<circle cx='440' cy='65' r='4'/><circle cx='452' cy='60' r='4'/>"
+    "<circle cx='300' cy='270' r='4'/><circle cx='312' cy='264' r='4'/>"
     "</g>"
 
     # ============ ЗАВИТКИ ============
     "<g fill='none' stroke='#2C3E50' stroke-width='1.8' stroke-linecap='round'>"
-    "<path d='M200 160 q-24 10 -30 34 q-4 22 16 32'/>"
+    "<path d='M220 180 q-24 10 -30 34 q-4 22 16 32'/>"
     "<path d='M340 220 q24 10 30 34 q4 22 -16 32'/>"
-    "<path d='M60 260 q-20 8 -24 28'/>"
-    "<path d='M440 130 q20 8 24 28'/>"
+    "<path d='M60 280 q-20 8 -24 28'/>"
+    "<path d='M460 130 q20 8 24 28'/>"
     "</g>"
 
     "</g></pattern></defs>"
     "<rect width='100%' height='100%' fill='url(%23gorodets)'/></svg>"
 )
 
-# [FIX-BG-BASE64] Кодируем SVG в base64 — Streamlit 1.30+ гарантированно
-# пропускает data:image/svg+xml;base64 внутри url("...").
 _GORODETS_SVG_B64 = base64.b64encode(_GORODETS_SVG.encode('utf-8')).decode('ascii')
+
+
+# ==================== [NEW-NORMALIZE-ACCOUNT] ЭТАЛОННЫЙ СПИСОК СЧЕТОВ ====================
+#
+# Пользовательский список. Все парсеры получают уже нормализованное имя.
+# Сопоставление: убираем пробелы/дефисы/подчёркивания, приводим к lower и
+# ищем по ключевым словам.
+
+_ACCOUNT_ALIASES: List[Tuple[str, str]] = [
+    # (набор ключей через нижний регистр без пробелов/дефисов/подчёркиваний, эталонное имя)
+    # --- Industra / Revolut AN14 ---
+    ("an14estateeurindustra", "AN14_Estate_EUR_Industra"),
+    ("an14estateeurrevolut",  "AN14_Estate_EUR_Revolut"),
+    # --- B1 Estate ---
+    ("b1estateczkuc",         "B1_Estate_CZK_UC"),
+    ("b1estate",              "B1_Estate_CZK_UC"),
+    # --- BluOr ---
+    ("bsrestateeurbluor2",    "BSR_Estate_EUR_BluOr_2"),
+    ("bsrestateeurbluor3",    "BSR_Estate_EUR_BluOr_3"),
+    ("bsrbluor2",             "BSR_Estate_EUR_BluOr_2"),
+    ("bsrbluor3",             "BSR_Estate_EUR_BluOr_3"),
+    ("kl59revnbeurbluor",     "KL59_Rev_NB_EUR_BluOR"),
+    ("kl59bluor",             "KL59_Rev_NB_EUR_BluOR"),
+    # --- MKB Budapest ---
+    ("budapesthufmkb",        "Budapest HUF-MKB"),
+    ("budapesthuf",           "Budapest HUF-MKB"),
+    ("budapesteurmkb",        "Budapest EUR-MKB"),
+    ("budapesteuro",          "Budapest EUR-MKB"),
+    ("budapest",              "Budapest EUR-MKB"),
+    ("mkbbudapest",           "Budapest EUR-MKB"),
+    # --- Pasha / BUNDA ---
+    ("bundallcpashabankaedдирхам", "BUNDA LLC-Pasha Bank - AED-дирхам"),
+    ("bundallcpashabankaed",  "BUNDA LLC-Pasha Bank - AED-дирхам"),
+    ("bundapashaaed",         "BUNDA LLC-Pasha Bank - AED-дирхам"),
+    ("pashabankaed",          "BUNDA LLC-Pasha Bank - AED-дирхам"),
+    ("pashaaed",              "BUNDA LLC-Pasha Bank - AED-дирхам"),
+    ("bundallcpashabankazn",  "BUNDA LLC-Pasha Bank-AZN"),
+    ("bundapashaazn",         "BUNDA LLC-Pasha Bank-AZN"),
+    ("pashabankazn",          "BUNDA LLC-Pasha Bank-AZN"),
+    ("pashaazn",              "BUNDA LLC-Pasha Bank-AZN"),
+    # --- CSOB ---
+    ("dzibikmaincsobczk",     "DŽIBIK Main CSOB CZK"),
+    ("dzibikcsob",            "DŽIBIK Main CSOB CZK"),
+    ("dzibik",                "DŽIBIK Main CSOB CZK"),
+    ("jenisovhorskasrczk",    "JENISOV - HORSKA S.R CZK"),
+    ("jenisovhorskaczkeur",   "JENISOV - HORSKA S.R EUR"),
+    ("jenisovhorskasreur",    "JENISOV - HORSKA S.R EUR"),
+    ("jenisovhorskaczk",      "JENISOV - HORSKA S.R CZK"),
+    ("jenisovcsobczk",        "JENISOV - HORSKA S.R CZK"),
+    ("jenisovcsobeur",        "JENISOV - HORSKA S.R EUR"),
+    ("jenisov",               "JENISOV - HORSKA S.R CZK"),
+    ("korunastrojkaczkcsob",  "Koruna_Strojka_CZK_CSOB"),
+    ("korunastrojkaczkeur",   "Koruna_Strojka_EUR_CSOB"),
+    ("korunastrojkaeurcsob",  "Koruna_Strojka_EUR_CSOB"),
+    ("korunastrojkaczk",      "Koruna_Strojka_CZK_CSOB"),
+    ("korunastrojka",         "Koruna_Strojka_CZK_CSOB"),
+    ("rrstrovkaczkcsob",      "RR_Strojka_CZK_CSOB"),
+    ("rrstrovkaeurcsob",      "RR_Strojka_EUR_CSOB"),
+    ("rrstrovkaczk",          "RR_Strojka_CZK_CSOB"),
+    ("rrstrovkaeur",          "RR_Strojka_EUR_CSOB"),
+    ("rrstrovka",             "RR_Strojka_CZK_CSOB"),
+    ("rrrevostr",             "RR_Strojka_CZK_CSOB"),
+    # --- UniCredit ---
+    ("garpizunicreditbankczk", "Garpiz UniCredit Bank CZK"),
+    ("garpizunicredit",        "Garpiz UniCredit Bank CZK"),
+    ("garpiz",                 "Garpiz UniCredit Bank CZK"),
+    ("garpizperninkczkuc",     "Garpiz_Pernink_CZK_UC"),
+    ("garpizpernink",          "Garpiz_Pernink_CZK_UC"),
+    ("pernink",                "Garpiz_Pernink_CZK_UC"),
+    ("korunaunicreditczk",     "Koruna UniCredit- CZK"),
+    ("korunaunicredit",        "Koruna UniCredit- CZK"),
+    ("twohillsmollyunicreditczk", "TwoHills_Molly_Unicredit_CZK"),
+    ("twohillsmollyunicredit", "TwoHills_Molly_Unicredit_CZK"),
+    ("twohillsmolly",          "TwoHills_Molly_Unicredit_CZK"),
+    ("twohills",               "TwoHills_Molly_Unicredit_CZK"),
+    # --- JenHor ---
+    ("jenhorunelmaczkcsas",    "JenHor_Unelma_CZK_CSAS"),
+    ("jenhorunelma",           "JenHor_Unelma_CZK_CSAS"),
+    ("jenhor",                 "JenHor_Unelma_CZK_CSAS"),
+    ("unelma",                 "JenHor_Unelma_CZK_CSAS"),
+    # --- Kapital Saida ---
+    ("kapitalbanksaidaazn",    "Kapital bank_Saida_AZN"),
+    ("kapitalbanksaida",       "Kapital bank_Saida_AZN"),
+    ("kapitalbankazn",         "Kapital bank_Saida_AZN"),
+    ("kapitalazn",             "Kapital bank_Saida_AZN"),
+    ("saidaazn",               "Kapital bank_Saida_AZN"),
+    # --- KL59 ---
+    ("kl59revnbeurindustra",   "KL59_Rev_NB_EUR_Industra"),
+    ("kl59industra",           "KL59_Rev_NB_EUR_Industra"),
+    ("kl59",                   "KL59_Rev_NB_EUR_Industra"),
+    # --- Mashreq ---
+    ("mashreqbankaednomiqa",   "MASHREQ BANK-AED-NOMIQA"),
+    ("mashreqaednomiqa",       "MASHREQ BANK-AED-NOMIQA"),
+    ("mashreqnomiqa",          "MASHREQ BANK-AED-NOMIQA"),
+    ("mashreq",                "MASHREQ BANK-AED-NOMIQA"),
+    ("nomiqa",                 "MASHREQ BANK-AED-NOMIQA"),
+    # --- Revolut NB ---
+    ("nbreveurrevolut",        "NB_Rev_EUR_Revolut"),
+    ("nbreveur",               "NB_Rev_EUR_Revolut"),
+    ("nbrev",                  "NB_Rev_EUR_Revolut"),
+    # --- Paysera ---
+    ("payserabalticsolutionseur", "Paysera Baltic Solutions EUR"),
+    ("payserabalticsolutions", "Paysera Baltic Solutions EUR"),
+    ("payserabaltic",          "Paysera Baltic Solutions EUR"),
+    ("payserasveciynamailithuaniaeur", "Paysera Sveciy Namai Lithuania EUR"),
+    ("payserasveciynamailithuania", "Paysera Sveciy Namai Lithuania EUR"),
+    ("payserasveciy",          "Paysera Sveciy Namai Lithuania EUR"),
+    ("payserabspropertysia",   "Paysera-BS PROPERTY, SIA"),
+    ("payserabsproperty",      "Paysera-BS PROPERTY, SIA"),
+    ("payseraproperty",        "Paysera-BS PROPERTY, SIA"),
+    ("payserabsrerumsia",      "Paysera-BS RERUM, SIA"),
+    ("payserabsrerum",         "Paysera-BS RERUM, SIA"),
+    ("payserarerum",           "Paysera-BS RERUM, SIA"),
+    ("paysera",                "Paysera Baltic Solutions EUR"),
+    # --- Plavas ---
+    ("plavas1estateeurindustra", "Plavas1_Estate_EUR_Industra"),
+    ("plavas1industra",        "Plavas1_Estate_EUR_Industra"),
+    ("plavasestateeurindustra", "Plavas1_Estate_EUR_Industra"),
+    ("plavas1",                "Plavas1_Estate_EUR_Industra"),
+    ("plavas",                 "Plavas1_Estate_EUR_Industra"),
+    # --- Regina Alfa ---
+    ("reginaalfabanknomiqarub", "Regina Alfa-bank_NOMIQA_RUB"),
+    ("reginaalfanomiqarub",     "Regina Alfa-bank_NOMIQA_RUB"),
+    ("reginaalfabanknomiqa",    "Regina Alfa-bank_NOMIQA_RUB"),
+    ("reginaalfanomiqa",        "Regina Alfa-bank_NOMIQA_RUB"),
+    ("reginaalfa",              "Regina Alfa-bank_NOMIQA_RUB"),
+    # --- Revolut Plavas ---
+    ("revolutplavas1sia",      "Revolut_Plavas 1 SIA"),
+    ("revolutplavas1",         "Revolut_Plavas 1 SIA"),
+    ("revolutplavas",          "Revolut_Plavas 1 SIA"),
+    ("revolutnb",              "NB_Rev_EUR_Revolut"),
+    ("revolutan14",            "AN14_Estate_EUR_Revolut"),
+    ("revolut",                "AN14_Estate_EUR_Revolut"),
+    # --- Saida ---
+    ("saidan26",               "Saida_N26"),
+    ("saida26",                "Saida_N26"),
+    ("n26",                    "Saida_N26"),
+    ("saidawise",              "Saida_Wise"),
+    ("wise",                   "Saida_Wise"),
+    # --- Stalkin FIO ---
+    ("stalkinml2czkfio",       "Stalkin_ML2_CZK_FIO"),
+    ("stalkinml2fio",          "Stalkin_ML2_CZK_FIO"),
+    ("stalkinfio",             "Stalkin_ML2_CZK_FIO"),
+    ("stalkin",                "Stalkin_ML2_CZK_FIO"),
+    ("fio",                    "Stalkin_ML2_CZK_FIO"),
+    # --- Tinkoff ---
+    ("tinkoffrub",             "Tinkoff RUB"),
+    ("tinkoff",                "Tinkoff RUB"),
+    # --- WIO ---
+    ("wiobusinessbank",        "WIO Business Bank"),
+    ("wiobusiness",            "WIO Business Bank"),
+    ("wio",                    "WIO Business Bank"),
+]
+
+
+def _normalize_key(s: str) -> str:
+    """Убирает пробелы, дефисы, подчёркивания, точки, приводит к lower."""
+    if s is None:
+        return ""
+    s = str(s).lower()
+    s = re.sub(r'[\s_\-\.\,]+', '', s)
+    return s
+
+
+def normalize_account_name(raw_name: str) -> str:
+    """
+    Сопоставляет сырое имя счёта с эталонным списком.
+    Возвращает эталонное имя или исходное, если ничего не нашли.
+    """
+    if not raw_name:
+        return raw_name
+
+    # Сначала убираем даты / IBAN / длинные номера как в clean_account_name
+    clean = raw_name
+    clean = re.sub(
+        r'\(\s*(?:'
+        r'[A-Za-z]{3,9}\.?\s+\d{1,2},?\s*\d{4}'
+        r'|\d{1,2}[\.\-/]\d{1,2}[\.\-/]\d{2,4}'
+        r'|\d{4}[\.\-/]\d{1,2}[\.\-/]\d{1,2}'
+        r')'
+        r'(?:\s*[-–—]\s*'
+        r'(?:'
+        r'[A-Za-z]{3,9}\.?\s+\d{1,2},?\s*\d{4}'
+        r'|\d{1,2}[\.\-/]\d{1,2}[\.\-/]\d{2,4}'
+        r'|\d{4}[\.\-/]\d{1,2}[\.\-/]\d{1,2}'
+        r'))?'
+        r'\s*\)',
+        ' ', clean
+    )
+    clean = re.sub(r'\b\d{2}-[A-Za-z]{3}-\d{4}\b', ' ', clean)
+    clean = re.sub(r'\b\d{4}-\d{2}-\d{2}\b', ' ', clean)
+    clean = re.sub(r'\b\d{8}\b', ' ', clean)          # 20260801
+    clean = re.sub(r'\b\d{2}\.\d{2}\.\d{4}\b', ' ', clean)
+    clean = re.sub(r'\bLV\d{2}[A-Z]{4}\d{13,}\b', ' ', clean)
+    clean = re.sub(r'\b\d{10,}\b', ' ', clean)
+    clean = re.sub(r'\s+', ' ', clean).strip()
+
+    key = _normalize_key(clean)
+
+    # Сначала ищем самое длинное совпадение
+    best = None
+    best_len = -1
+    for alias_key, canonical in _ACCOUNT_ALIASES:
+        if alias_key in key:
+            if len(alias_key) > best_len:
+                best_len = len(alias_key)
+                best = canonical
+    if best:
+        return best
+
+    # Если не нашли — вернём очищенное имя как есть
+    return clean if clean else raw_name
 
 
 # ==================== CSS СТИЛИ ====================
@@ -234,7 +441,7 @@ _CSS = """
     --border: #C8E6C9;
 }
 
-/* ---------- [FIX-BG-BASE64] ФОН: яркая цветная городецкая роспись ---------- */
+/* ---------- [FIX-BG-BASE64] ФОН: городецкая роспись "Чаепитие" ---------- */
 html, body {
     background-color: #FFFDF2 !important;
 }
@@ -249,7 +456,7 @@ html, body {
         radial-gradient(circle at 80% 75%, #FFE9C8 0%, transparent 50%),
         linear-gradient(180deg, #FFFDF2 0%, #FFF6DE 50%, #FDEBC8 100%);
     background-repeat: repeat, no-repeat, no-repeat, no-repeat;
-    background-size: 480px 420px, cover, cover, cover;
+    background-size: 520px 460px, cover, cover, cover;
     background-attachment: fixed, fixed, fixed, fixed;
     background-position: 0 0, 0 0, 0 0, 0 0;
     font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
@@ -267,11 +474,11 @@ footer {visibility: hidden;}
 /* ---------- HERO ---------- */
 .hero {
     background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 50%, #4CAF50 100%);
-    padding: 3rem 2.5rem;
-    border-radius: 28px;
+    padding: 2.2rem 2rem;
+    border-radius: 24px;
     color: #FFFFFF;
-    margin-bottom: 2rem;
-    box-shadow: 0 20px 45px rgba(27, 94, 32, 0.32);
+    margin-bottom: 1.6rem;
+    box-shadow: 0 16px 36px rgba(27, 94, 32, 0.30);
     position: relative;
     overflow: hidden;
 }
@@ -285,18 +492,18 @@ footer {visibility: hidden;}
     border-radius: 50%;
 }
 
-.hero-content { position: relative; z-index: 2; display: flex; align-items: center; gap: 2rem; flex-wrap: wrap; }
-.hero-text { flex: 1; min-width: 280px; }
-.hero-text h1 { font-size: 2.5rem; font-weight: 800; margin: 0 0 0.6rem 0; letter-spacing: -1px; }
-.hero-text p { font-size: 1.1rem; margin: 0; opacity: 0.95; }
-.hero-chips { display: flex; gap: 0.5rem; margin-top: 1.2rem; flex-wrap: wrap; }
+.hero-content { position: relative; z-index: 2; display: flex; align-items: center; gap: 1.6rem; flex-wrap: wrap; }
+.hero-text { flex: 1; min-width: 260px; }
+.hero-text h1 { font-size: 1.9rem; font-weight: 800; margin: 0 0 0.5rem 0; letter-spacing: -0.5px; }
+.hero-text p { font-size: 1rem; margin: 0; opacity: 0.95; }
+.hero-chips { display: flex; gap: 0.4rem; margin-top: 1rem; flex-wrap: wrap; }
 
 .chip {
     background: rgba(255,255,255,0.2);
     border: 1px solid rgba(255,255,255,0.3);
-    padding: 0.35rem 0.85rem;
+    padding: 0.3rem 0.75rem;
     border-radius: 999px;
-    font-size: 0.85rem;
+    font-size: 0.78rem;
     font-weight: 500;
     backdrop-filter: blur(8px);
 }
@@ -304,8 +511,7 @@ footer {visibility: hidden;}
 .hero-illustration { position: relative; z-index: 2; }
 
 /* ============================================================ */
-/* [FIX-BUTTONS-HUGE] КРУПНЫЕ ОБЪЁМНЫЕ КНОПКИ                    */
-/* Покрываем ВСЕ селекторы Streamlit 1.30+                       */
+/* [FIX-BUTTONS-SMALL] КНОПКИ — уменьшенный шрифт                */
 /* ============================================================ */
 
 .stButton > button,
@@ -329,25 +535,25 @@ section[data-testid="stFileUploaderDropzone"] button {
         radial-gradient(circle at 30% 22%, rgba(255,255,255,0.45), rgba(255,255,255,0) 60%),
         linear-gradient(180deg, #3E8E41 0%, #1B5E20 45%, #0D3A12 100%) !important;
     color: #FFFFFF !important;
-    border: 4px solid #FBC02D !important;
-    border-radius: 18px !important;
-    padding: 1.4rem 2.6rem !important;
-    font-weight: 900 !important;
-    font-size: 2rem !important;
-    letter-spacing: 0.5px !important;
-    line-height: 1.15 !important;
-    text-shadow: 0 2px 4px rgba(0,0,0,0.60) !important;
+    border: 3px solid #FBC02D !important;
+    border-radius: 12px !important;
+    padding: 0.55rem 1.1rem !important;
+    font-weight: 800 !important;
+    font-size: 1.05rem !important;
+    letter-spacing: 0.2px !important;
+    line-height: 1.2 !important;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.55) !important;
     box-shadow:
-        inset 0 4px 0 rgba(255,255,255,0.35),
-        inset 0 -7px 0 rgba(0,0,0,0.45),
-        0 10px 22px rgba(0,0,0,0.35),
-        0 5px 0 #0D3A12 !important;
+        inset 0 2px 0 rgba(255,255,255,0.30),
+        inset 0 -4px 0 rgba(0,0,0,0.40),
+        0 6px 14px rgba(0,0,0,0.28),
+        0 3px 0 #0D3A12 !important;
     transition: transform 0.15s ease, filter 0.20s ease, box-shadow 0.20s ease !important;
     animation: none !important;
     transform: translateZ(0);
     width: auto !important;
-    min-width: 12rem !important;
-    min-height: 4.2rem !important;
+    min-width: 8rem !important;
+    min-height: 2.6rem !important;
 }
 
 .stButton > button p,
@@ -357,9 +563,10 @@ section[data-testid="stFileUploaderDropzone"] button {
 [data-testid="stBaseButton-secondary"] p,
 .stDownloadButton > button p,
 [data-testid="stDownloadButton"] > button p {
-    font-size: 2rem !important;
-    font-weight: 900 !important;
+    font-size: 1.05rem !important;
+    font-weight: 800 !important;
     color: #FFFFFF !important;
+    margin: 0 !important;
 }
 
 .stButton > button:hover,
@@ -367,48 +574,48 @@ section[data-testid="stFileUploaderDropzone"] button {
 [data-testid="stBaseButton-primary"]:hover,
 [data-testid="stBaseButton-secondary"]:hover,
 [data-testid="stDownloadButton"] > button:hover {
-    transform: translateY(-2px) !important;
+    transform: translateY(-1px) !important;
     filter: brightness(1.10) saturate(1.10) !important;
     box-shadow:
-        inset 0 4px 0 rgba(255,255,255,0.45),
-        inset 0 -7px 0 rgba(0,0,0,0.50),
-        0 14px 26px rgba(0,0,0,0.40),
-        0 6px 0 #0D3A12 !important;
+        inset 0 2px 0 rgba(255,255,255,0.40),
+        inset 0 -4px 0 rgba(0,0,0,0.45),
+        0 8px 18px rgba(0,0,0,0.34),
+        0 4px 0 #0D3A12 !important;
     color: #FFFFFF !important;
 }
 
 .stButton > button:active,
 .stDownloadButton > button:active {
-    transform: translateY(2px) !important;
+    transform: translateY(1px) !important;
     box-shadow:
-        inset 0 4px 0 rgba(255,255,255,0.30),
-        inset 0 -3px 0 rgba(0,0,0,0.45),
-        0 5px 12px rgba(0,0,0,0.30),
+        inset 0 2px 0 rgba(255,255,255,0.25),
+        inset 0 -2px 0 rgba(0,0,0,0.40),
+        0 3px 8px rgba(0,0,0,0.25),
         0 1px 0 #0D3A12 !important;
     filter: brightness(0.95) !important;
 }
 
-/* --- Красная кнопка сброса: тот же объём, обводка — жёлтая --- */
+/* --- Красная кнопка сброса --- */
 .stButton > button[kind="secondary"],
 [data-testid="stBaseButton-secondary"] {
     background:
         radial-gradient(circle at 30% 22%, rgba(255,255,255,0.45), rgba(255,255,255,0) 60%),
         linear-gradient(180deg, #C62828 0%, #8E0000 45%, #5C0000 100%) !important;
-    border: 4px solid #FBC02D !important;
+    border: 3px solid #FBC02D !important;
     box-shadow:
-        inset 0 4px 0 rgba(255,255,255,0.35),
-        inset 0 -7px 0 rgba(0,0,0,0.45),
-        0 10px 22px rgba(0,0,0,0.35),
-        0 5px 0 #5C0000 !important;
+        inset 0 2px 0 rgba(255,255,255,0.30),
+        inset 0 -4px 0 rgba(0,0,0,0.40),
+        0 6px 14px rgba(0,0,0,0.28),
+        0 3px 0 #5C0000 !important;
 }
 
-/* --- Кнопка внутри file_uploader — крупнее и заметнее --- */
+/* --- Кнопка внутри file_uploader --- */
 .stFileUploader {
     background: #FFFFFF;
-    border-radius: 20px;
-    padding: 1.2rem;
+    border-radius: 16px;
+    padding: 1rem;
     border: 2px dashed var(--border);
-    box-shadow: 0 4px 20px rgba(27, 94, 32, 0.05);
+    box-shadow: 0 4px 16px rgba(27, 94, 32, 0.05);
 }
 .stFileUploader:hover { border-color: var(--grass-light); }
 .stFileUploader section { border: none !important; background: transparent !important; }
@@ -420,16 +627,16 @@ section[data-testid="stFileUploaderDropzone"] button {
         radial-gradient(circle at 30% 22%, rgba(255,255,255,0.6), rgba(255,255,255,0) 60%),
         linear-gradient(180deg, #4CAF50 0%, #2E7D32 100%) !important;
     color: #FFFFFF !important;
-    border: 3px solid #FBC02D !important;
-    border-radius: 14px !important;
-    font-size: 1.6rem !important;
-    font-weight: 900 !important;
-    padding: 1rem 2rem !important;
-    text-shadow: 0 2px 4px rgba(0,0,0,0.55) !important;
+    border: 2px solid #FBC02D !important;
+    border-radius: 10px !important;
+    font-size: 1rem !important;
+    font-weight: 800 !important;
+    padding: 0.55rem 1.1rem !important;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.55) !important;
     box-shadow:
-        inset 0 3px 0 rgba(255,255,255,0.35),
-        inset 0 -5px 0 rgba(0,0,0,0.35),
-        0 6px 16px rgba(0,0,0,0.30) !important;
+        inset 0 2px 0 rgba(255,255,255,0.30),
+        inset 0 -3px 0 rgba(0,0,0,0.30),
+        0 4px 10px rgba(0,0,0,0.22) !important;
     animation: none !important;
 }
 .stFileUploader button:hover,
@@ -439,16 +646,17 @@ section[data-testid="stFileUploaderDropzone"] button {
 }
 .stFileUploader button p,
 [data-testid="stFileUploader"] button p {
-    font-size: 1.6rem !important;
-    font-weight: 900 !important;
+    font-size: 1rem !important;
+    font-weight: 800 !important;
     color: #FFFFFF !important;
+    margin: 0 !important;
 }
 
 /* ---------- МЕТРИКИ ---------- */
 .stMetric {
     background: #FFFFFF;
-    border-radius: 20px;
-    padding: 1.5rem 1.6rem;
+    border-radius: 16px;
+    padding: 1.2rem 1.4rem;
     border: 1px solid #E1EEDD;
     box-shadow: 0 6px 22px rgba(27, 94, 32, 0.07);
     position: relative;
@@ -460,13 +668,13 @@ section[data-testid="stFileUploaderDropzone"] button {
     top: 0; left: 0; height: 100%; width: 6px;
     background: linear-gradient(180deg, #1B5E20 0%, #4CAF50 100%);
 }
-.stMetric:hover { transform: translateY(-4px); box-shadow: 0 14px 32px rgba(27, 94, 32, 0.20); }
-.stMetric label { color: var(--ink-soft) !important; font-size: 0.9rem !important; text-transform: uppercase; }
-.stMetric [data-testid="stMetricValue"] { color: var(--ink) !important; font-weight: 700 !important; font-size: 1.7rem !important; }
+.stMetric:hover { transform: translateY(-3px); box-shadow: 0 14px 32px rgba(27, 94, 32, 0.20); }
+.stMetric label { color: var(--ink-soft) !important; font-size: 0.85rem !important; text-transform: uppercase; }
+.stMetric [data-testid="stMetricValue"] { color: var(--ink) !important; font-weight: 700 !important; font-size: 1.5rem !important; }
 
-.stDataFrame { border-radius: 20px; overflow: hidden; box-shadow: 0 8px 28px rgba(27, 94, 32, 0.10); background: #FFFFFF; }
+.stDataFrame { border-radius: 16px; overflow: hidden; box-shadow: 0 8px 28px rgba(27, 94, 32, 0.10); background: #FFFFFF; }
 
-.stAlert { border-radius: 14px; border: none; }
+.stAlert { border-radius: 12px; border: none; }
 div[data-baseweb="notification"][kind="positive"] { background: #E8F5E9; color: var(--ink); }
 div[data-baseweb="notification"][kind="info"] { background: #FFF6E8; color: var(--ink); }
 div[data-baseweb="notification"][kind="warning"] { background: #FBF3E0; color: #7A5B10; }
@@ -476,11 +684,11 @@ div[data-baseweb="notification"][kind="warning"] { background: #FBF3E0; color: #
 h3 {
     color: var(--ink);
     font-weight: 700;
-    padding-bottom: 0.6rem;
+    padding-bottom: 0.5rem;
     border-bottom: 2px solid #E1EEDD;
-    margin-top: 2rem;
-    margin-bottom: 1.2rem;
-    font-size: 1.25rem;
+    margin-top: 1.6rem;
+    margin-bottom: 1rem;
+    font-size: 1.15rem;
 }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -488,33 +696,33 @@ h3 {
 ::-webkit-scrollbar-thumb { background: #F48FB1; border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: #E91E63; }
 
-hr { border: none; border-top: 1px solid #E1EEDD; margin: 2rem 0; }
+hr { border: none; border-top: 1px solid #E1EEDD; margin: 1.6rem 0; }
 
 .info-card {
     background: #FFFFFF;
-    border-radius: 18px;
-    padding: 1.4rem 1.5rem;
+    border-radius: 14px;
+    padding: 1.2rem 1.3rem;
     border: 1px solid #E1EEDD;
     display: flex;
     align-items: center;
-    gap: 1.2rem;
+    gap: 1rem;
     box-shadow: 0 4px 16px rgba(27, 94, 32, 0.06);
 }
 
 .info-card-icon {
-    flex-shrink: 0; width: 56px; height: 56px;
+    flex-shrink: 0; width: 48px; height: 48px;
     display: flex; align-items: center; justify-content: center;
-    border-radius: 14px;
+    border-radius: 12px;
     background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%);
 }
 
-.info-card-text h4 { color: var(--ink); margin: 0 0 0.25rem 0; font-size: 1rem; font-weight: 600; }
-.info-card-text p { color: var(--ink-muted); margin: 0; font-size: 0.88rem; }
+.info-card-text h4 { color: var(--ink); margin: 0 0 0.25rem 0; font-size: 0.95rem; font-weight: 600; }
+.info-card-text p { color: var(--ink-muted); margin: 0; font-size: 0.82rem; }
 
-.footer-note { text-align: center; color: var(--ink-muted); font-size: 0.85rem; padding: 1.5rem 0 0.5rem 0; }
+.footer-note { text-align: center; color: var(--ink-muted); font-size: 0.8rem; padding: 1.2rem 0 0.4rem 0; }
 
 .summary-table {
-    border-radius: 16px;
+    border-radius: 14px;
     overflow: hidden;
     box-shadow: 0 8px 28px rgba(27, 94, 32, 0.10);
     background: #FFFFFF;
@@ -524,19 +732,19 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 2rem 0; }
     border-collapse: collapse;
     width: 100%;
     font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
-    font-size: 0.92rem;
+    font-size: 0.88rem;
 }
 .summary-table thead th {
     background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 100%);
     color: #FFFFFF;
-    padding: 12px 14px;
+    padding: 10px 12px;
     text-align: left;
     font-weight: 600;
     border: none;
     white-space: nowrap;
 }
 .summary-table tbody td {
-    padding: 10px 14px;
+    padding: 8px 12px;
     border-bottom: 1px solid #E1EEDD;
     color: var(--ink);
     background: #FFFFFF;
@@ -568,7 +776,7 @@ st.markdown("""
 </div>
 </div>
 <div class="hero-illustration">
-<svg width="180" height="180" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="150" height="150" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
 <circle cx="100" cy="100" r="90" fill="rgba(255,255,255,0.15)"/>
 <rect x="50" y="110" width="14" height="50" rx="4" fill="rgba(255,255,255,0.85)"/>
 <rect x="72" y="90" width="14" height="70" rx="4" fill="rgba(255,255,255,0.95)"/>
@@ -593,6 +801,7 @@ st.markdown("""
 # ==================== ОБЩИЕ УТИЛИТЫ ====================
 
 def clean_account_name(filename: str) -> str:
+    """Сырое имя счёта из имени файла (без дат, IBAN, длинных номеров)."""
     name = os.path.splitext(filename)[0]
     name = re.sub(
         r'\(\s*(?:'
@@ -775,15 +984,6 @@ def safe_str(v) -> str:
 
 
 # ==================== [FIX-TRANSLATE-FULL] ПЕРЕВОД ОПИСАНИЙ ====================
-#
-# Два слоя:
-#   1) _PHRASE_DICT — многословные фразы, заменяются целиком (регистронезависимо,
-#      без границ слов). Это ключевой фикс: "Value Added Tax - Output",
-#      "Corr.Bank.Charges", "Inward Remittance FUND TRANSFER" и т.д.
-#   2) _TRANSLATION_DICT — одиночные слова для fallback.
-#
-# Замены многословных фраз применяются ПЕРВЫМИ, и уже переведённые фрагменты
-# не трогаются одиночными заменами (защита через плейсхолдеры).
 
 _PHRASE_DICT: Dict[str, str] = {
     # ---------- English (многословные) ----------
@@ -1200,8 +1400,6 @@ _TRANSLATION_DICT: Dict[str, str] = {
     "kifizetés": "выплата",
 }
 
-# Список многословных ключей, отсортированный по длине (длинные — первыми),
-# чтобы "account maintenance charges. for" заменялось раньше "account maintenance".
 _PHRASE_KEYS_SORTED = sorted(_PHRASE_DICT.keys(), key=len, reverse=True)
 
 _TRANSLATE_KEYS_SORTED = sorted(_TRANSLATION_DICT.keys(), key=len, reverse=True)
@@ -1219,13 +1417,9 @@ def _translate_repl(m: re.Match) -> str:
 
 
 def translate_to_russian(text: str) -> str:
-    """Переводит описание: сначала многословные фразы целиком, потом слова."""
     if not text:
         return text
     s = str(text)
-
-    # 1) Многословные фразы — заменяем на плейсхолдеры, чтобы одиночные
-    #    замены не трогали уже переведённые фрагменты.
     placeholders: List[Tuple[str, str]] = []
     for i, key in enumerate(_PHRASE_KEYS_SORTED):
         pattern = re.compile(re.escape(key), re.IGNORECASE)
@@ -1235,20 +1429,14 @@ def translate_to_russian(text: str) -> str:
             placeholders.append((ph, translated))
             return ph
         s = pattern.sub(repl, s)
-
-    # 2) Одиночные слова — по границам слов.
     s = _TRANSLATE_PATTERN.sub(_translate_repl, s)
-
-    # 3) Возвращаем многословные переводы.
     for ph, translated in placeholders:
         s = s.replace(ph, translated)
-
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 
 def translate_description_inline(original: str) -> str:
-    """Возвращает 'оригинал (перевод)' если перевод есть, иначе — оригинал."""
     if original is None:
         return ""
     orig = str(original).strip()
@@ -1305,15 +1493,14 @@ def _is_service_description(desc: str) -> bool:
     return False
 
 
-# [FIX-COUNTERPARTY-2] Более агрессивная чистка мусора.
 _JUNK_PATTERNS = [
-    r'\b[A-Z]{2}\d{2}[A-Z0-9]{10,}\b',               # IBAN
-    r'\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2,5}\b',            # SWIFT/BIC
+    r'\b[A-Z]{2}\d{2}[A-Z0-9]{10,}\b',
+    r'\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2,5}\b',
     r'\bREF\b[^\s]*', r'\bSRN\b[^\s]*', r'\bREC\b[^\s]*',
     r'\bROC\b[^\s]*', r'\bMCC\d+\b', r'\bTOC-[A-Z0-9\-]+\b',
     r'\bT_[A-F0-9]{10,}\b',
-    r'\b\d{10,}\b',                                   # длинные числа
-    r'\+\d[\d\s\(\)\-]{6,}',                          # телефоны
+    r'\b\d{10,}\b',
+    r'\+\d[\d\s\(\)\-]{6,}',
     r'\b[A-Z]{2}\d{2}[A-Z]{4}\d{10,}\b',
     r'\bLV\d{2}[A-Z]{4}\d{10,}\b',
     r'\bLT\d{2}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b',
@@ -1322,13 +1509,13 @@ _JUNK_PATTERNS = [
     r'\bAE\d{2}\s?\d{3,}\b',
     r'\b[A-Z]{2}\d{2}\s?[A-Z0-9 ]{10,}\b',
     r'_x000D_', r'\r', r'\n',
-    r'\b[A-Z0-9]{4,}\*[A-Z0-9]+\b',                   # FACEBK *XXXX
-    r'\\[a-zA-Z]{2,}\b',                              # \ru, \RU — хвосты
-    r'\b[A-Z]-\d+[A-Z0-9]*\b',                        # M-Y5LIVJQ422MO7
-    r'\b[A-Z]-\d+[A-Z0-9]*/[A-Z0-9]*\b',              # M-Y5LIVJQ422MO7 /ROC/...
-    r'/[A-Z]/?',                                      # одиночные /
-    r'\\',                                            # оставшиеся слэши
-    r'\b\d{5,}(?:[A-Z0-9]*)\b',                       # длинные номера с буквами
+    r'\b[A-Z0-9]{4,}\*[A-Z0-9]+\b',
+    r'\\[a-zA-Z]{2,}\b',
+    r'\b[A-Z]-\d+[A-Z0-9]*\b',
+    r'\b[A-Z]-\d+[A-Z0-9]*/[A-Z0-9]*\b',
+    r'/[A-Z]/?',
+    r'\\',
+    r'\b\d{5,}(?:[A-Z0-9]*)\b',
 ]
 
 
@@ -1508,7 +1695,6 @@ def _extract_regina_alfa_name(desc: str) -> str:
         place = re.search(r'место совершения операции:\s*(.+?)(?:MCC|$)', s)
         if place:
             place_s = place.group(1).strip()
-            # Убираем ведущий код "25485396\RU\" или "0Y013363\RU\"
             place_s = re.sub(r'^[0-9A-Z]{4,}\\[A-Z]{2}\\', '', place_s)
             place_s = _clean_counterparty_name(place_s)
             if place_s:
@@ -1646,18 +1832,9 @@ def extract_counterparty_smart(description: str,
                                 account_name: str = '',
                                 payer: str = '',
                                 beneficiary: str = '') -> Tuple[str, str]:
-    """
-    Возвращает (контрагент, описание_оригинал).
-    Приоритет:
-      1) Явные колонки payer/beneficiary (если не банк).
-      2) Специализированные правила по банку из account_name.
-      3) Универсальные паттерны.
-      4) Первое «осмысленное» имя из описания.
-    """
     desc = (description or '').strip()
     acc_low = (account_name or '').lower()
 
-    # --- 1. Явные колонки ---
     if beneficiary:
         b = beneficiary.strip()
         if b and b.lower() not in ('nan', 'none', 'n/a', '-') and not _looks_like_bank_name(b):
@@ -1672,7 +1849,6 @@ def extract_counterparty_smart(description: str,
 
     cp = ''
 
-    # --- 2. Специализированные правила по банку ---
     if 'wise' in acc_low or 'saida wise' in acc_low:
         cp = _extract_wise_name(desc)
 
@@ -1692,7 +1868,8 @@ def extract_counterparty_smart(description: str,
         cp = _extract_revolut_name(desc, account_name)
 
     if not cp and ('csob' in acc_low or 'jenhor' in acc_low or 'jenisov' in acc_low
-                   or 'dzibik' in acc_low or 'rr ' in acc_low or 'koruna strojka' in acc_low):
+                   or 'dzibik' in acc_low or 'džibik' in acc_low
+                   or 'rr ' in acc_low or 'koruna strojka' in acc_low):
         cp = _extract_csob_name(desc)
 
     if not cp and ('unicredit' in acc_low or 'garpiz' in acc_low or 'twohills' in acc_low
@@ -1714,11 +1891,9 @@ def extract_counterparty_smart(description: str,
     if not cp and 'kapital' in acc_low:
         cp = _extract_kapital_name(desc)
 
-    # --- 3. Универсальные паттерны ---
     if not cp:
         cp = _extract_name_by_patterns(desc)
 
-    # --- 4. Последняя попытка: первое осмысленное имя из описания ---
     if not cp:
         parts = re.split(r'[|•;]', desc)
         for p in parts:
@@ -1734,7 +1909,6 @@ def extract_counterparty_smart(description: str,
                 if cp:
                     break
 
-    # --- 5. Если совсем ничего — имя банка по account_name ---
     if not cp:
         m = re.search(
             r'\b(CSOB|UniCredit|Revolut|Tinkoff|Paysera|Wise|BluOr|Industra|Pasha|Mashreq|WIO|N26|MKB|FIO|Kapital|RAK|ČSOB)\b',
@@ -3336,7 +3510,6 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
 
 
 # ==================== MASHREQ ====================
-# [FIX-SYNTAX-MASHREQ] Здесь была слипшаяся строка "amount = credit  elif ...".
 
 def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -3422,7 +3595,6 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """[FIX-SYNTAX-MASHREQ] Исправлена слипшаяся строка."""
     result = []
     tables = pdf_all_tables(file_content)
     for table in tables:
@@ -3829,7 +4001,7 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== Paysera (XLSX/DOCX) ====================
+# ==================== Paysera ====================
 
 def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -4050,8 +4222,6 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
-
-# ==================== Paysera PDF ====================
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -5485,7 +5655,7 @@ def get_parser_by_ext(account_name: str, ext: str):
         if 'jenhor' in low or 'unelma' in low:
             return parse_jenhor_unelma_csv, 'jenhor_unelma_csv'
         if 'csob' in low:
-            if 'dzibik' in low:
+            if 'dzibik' in low or 'džibik' in low:
                 return parse_dzibik_main_csob, 'dzibik_main_csob'
             if 'jenisov' in low and 'eur' in low:
                 return parse_jenisov_csob_eur, 'jenisov_csob_eur'
@@ -5580,7 +5750,7 @@ def get_parser_by_ext(account_name: str, ext: str):
         if 'jenhor' in low or 'unelma' in low:
             return parse_jenhor_unelma_csv, 'jenhor_unelma_csv'
         if 'csob' in low:
-            if 'dzibik' in low:
+            if 'dzibik' in low or 'džibik' in low:
                 return parse_dzibik_main_csob, 'dzibik_main_csob'
             if 'jenisov' in low and 'eur' in low:
                 return parse_jenisov_csob_eur, 'jenisov_csob_eur'
@@ -5719,7 +5889,12 @@ def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[T
 
 
 def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
-    account_name = clean_account_name(filename)
+    """
+    Возвращает (список операций, отчёт).
+    Все операции уже содержат НОРМАЛИЗОВАННОЕ имя счёта.
+    """
+    raw_account_name = clean_account_name(filename)
+    account_name = normalize_account_name(raw_account_name)
     ext = os.path.splitext(filename)[1].lower()
     real_type = _detect_real_type(file_content, ext)
     chain = get_parser_chain(account_name, real_type, filename)
@@ -5737,6 +5912,9 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
             errors.append(f'{key}: {e}')
             continue
         if tx:
+            # На всякий случай — принудительно проставляем нормализованное имя счёта
+            for t in tx:
+                t['Наименование счета'] = account_name
             return tx, f'{key} ({account_name}, real={real_type}, {len(tx)} операций)'
 
     msg = f'all_failed: {tried}'
@@ -5998,16 +6176,18 @@ def _process_uploaded_files(uploaded_files) -> Dict:
             seen_hashes[h] = uf.name
 
             tx, parser_name = parse_file(content, uf.name)
-            account_name = clean_account_name(uf.name)
+            raw_account_name = clean_account_name(uf.name)
+            account_name = normalize_account_name(raw_account_name)
 
             debug_info.append(
-                f"🔍 `{uf.name}` → счёт: `{account_name}` → "
+                f"🔍 `{uf.name}` → сырое имя: `{raw_account_name}` → "
+                f"нормализовано: `{account_name}` → "
                 f"парсер: `{parser_name}` → **{len(tx)}** операций"
             )
 
             if tx:
                 all_tx.extend(tx)
-                file_stats.append(f"✅ {uf.name}: {len(tx)} операций")
+                file_stats.append(f"✅ {uf.name}: {len(tx)} операций → {account_name}")
             else:
                 ext_low = os.path.splitext(uf.name)[1].lower()
                 is_service_file = False
@@ -6036,25 +6216,6 @@ def _process_uploaded_files(uploaded_files) -> Dict:
                         )
                     except Exception as e:
                         debug_info.append(f"⚠️ `{uf.name}`: 0 операций, не удалось получить сырой текст: {e}")
-
-            if uf.name.lower().endswith('.docx'):
-                try:
-                    dump = docx_dump(content)
-                    debug_info.append(f"📄 ДАМП `{uf.name}`:\n```\n{dump[:3000]}\n```")
-                except Exception as e:
-                    debug_info.append(f"📄 Ошибка дампа: {e}")
-            elif uf.name.lower().endswith('.pdf'):
-                try:
-                    txt = pdf_all_text(content)
-                    debug_info.append(f"📄 PDF-текст `{uf.name}` (первые 3000):\n```\n{txt[:3000]}\n```")
-                except Exception as e:
-                    debug_info.append(f"📄 Ошибка дампа PDF: {e}")
-            else:
-                try:
-                    txt = read_text_with_encoding(content)
-                    debug_info.append(f"📄 Текст `{uf.name}` (первые 2000):\n```\n{txt[:2000]}\n```")
-                except Exception as e:
-                    debug_info.append(f"📄 Ошибка чтения: {e}")
 
         except Exception as e:
             failed.append(f"{uf.name} (ошибка: {e})")
