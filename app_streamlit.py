@@ -3,26 +3,27 @@
 app.py — Аналитик банковских выписок.
 Полная рабочая версия + интеграция DeepSeek AI.
 
-FIX-пакет v3:
-  [FIX-SYNTAX-MASHREQ]       — устранена слипшаяся строка "amount = credit  elif ..."
-  [FIX-TRANSLATE-FULL]       — многословные фразы переводятся ПОЛНОСТЬЮ
-  [FIX-TRANSLATE-WORDBOUND]  — перевод слов только по границам слова (algas ≠ alga+s)
-  [FIX-TRANSLATE-CLEAN]      — перевод не попадает внутрь оригинала
-  [FIX-BG-BASE64]            — фон: SVG в base64 + CSS-градиенты
-  [FIX-BUTTONS-SMALL]        — уменьшен шрифт кнопок (1.05rem)
-  [FIX-COUNTERPARTY-2]       — чистка имени контрагента
-  [FIX-COUNTERPARTY-FULL-V2] — ПОЛНЫЕ имена контрагентов: приоритет Beneficiary/Payer,
-                               сохранение составных имён, отдельные парсеры для Revolut/Paysera/Industra
-  [NEW-NORMALIZE-ACCOUNT]    — приведение наименований счетов к эталонному списку
-  [NEW-GORODETS-TEA]         — фон: городецкая роспись "Чаепитие"
-  [NEW-TRANSLATE-INLINE]     — Оригинал + (перевод) в одной ячейке
-  [NEW-AMOUNT-FORMAT]        — Суммы на экране: 1 234,56
-  [NEW-EXCEL-NUMERIC]        — В Excel суммы — числа с форматом # ##0.00
-  [FIX-KAPITAL-XLSX]         — Новый парсер Kapital bank Saida AZN (XLSX)
-  [FIX-KAPITAL-PDF]          — Улучшен PDF-парсер Kapital bank
-  [FIX-KAPITAL-DOCX-ERROR]   — Исправлена ошибка name 'parse_kapital_saida_docx' is not defined
-  [FIX-UI-RUSSIAN]           — Русский текст везде
-  [DEEPSEEK-INTEGRATION]     — AI-ассистент DeepSeek
+FIX-пакет v4:
+  [FIX-SYNTAX-MASHREQ]        — устранена слипшаяся строка
+  [FIX-TRANSLATE-FULL]        — многословные фразы переводятся ПОЛНОСТЬЮ
+  [FIX-TRANSLATE-WORDBOUND]   — перевод слов только по границам слова
+  [FIX-TRANSLATE-CLEAN]       — перевод не попадает внутрь оригинала
+  [FIX-TRANSLATE-LV-V4]       — расширены латвийский/чешский/венгерский словари
+  [FIX-BG-BASE64]             — фон: SVG в base64
+  [FIX-BUTTONS-SMALL]         — уменьшен шрифт кнопок
+  [FIX-COUNTERPARTY-2]        — чистка имени контрагента
+  [FIX-COUNTERPARTY-FULL-V4]  — ПРИОРИТЕТ Beneficiary/Payer, полные имена Revolut/Paysera/Industra
+  [NEW-NORMALIZE-ACCOUNT]     — приведение наименований счетов к эталону
+  [NEW-GORODETS-TEA]          — фон: городецкая роспись
+  [NEW-TRANSLATE-INLINE]      — Оригинал + (перевод) в одной ячейке
+  [NEW-AMOUNT-FORMAT]         — Суммы на экране: 1 234,56
+  [NEW-EXCEL-NUMERIC]         — В Excel суммы — числа с форматом # ##0.00
+  [FIX-KAPITAL-XLSX]          — Kapital bank Saida AZN (XLSX)
+  [FIX-KAPITAL-PDF]           — Kapital bank (PDF)
+  [FIX-KAPITAL-DOCX-ERROR]    — Исправлена ошибка парсера DOCX
+  [FIX-UI-RUSSIAN]            — Русский текст везде
+  [FIX-RENAME-COLUMN-V4]      — "Наименование счета" → "Наименование банка"
+  [DEEPSEEK-INTEGRATION]      — AI-ассистент DeepSeek
 """
 
 import streamlit as st
@@ -808,7 +809,7 @@ def call_deepseek_json(
 _AI_TRANSACTION_SYSTEM = (
     "Ты — эксперт по банковским выпискам. "
     "На вход получаешь одну транзакцию: оригинальное описание (может быть на английском, "
-    "чешском, латышском, венгерском, азербайджанском), имя счёта и сумму. "
+    "чешском, латышском, венгерском, азербайджанском), имя банка и сумму. "
     "Верни СТРОГО JSON без пояснений:\n"
     "{\n"
     '  "translation": "перевод описания на русский (кратко, по делу)",\n'
@@ -846,11 +847,11 @@ def ai_enrich_transactions(
 
     for i, tx in enumerate(subset):
         desc = str(tx.get("Описание", ""))[:1500]
-        acc = str(tx.get("Наименование счета", ""))
+        acc = str(tx.get("Наименование банка", tx.get("Наименование счета", "")))
         amount = tx.get("Сумма", 0)
 
         user_prompt = (
-            f"Счёт: {acc}\n"
+            f"Банк: {acc}\n"
             f"Сумма: {amount}\n"
             f"Описание: {desc}\n"
         )
@@ -1110,6 +1111,7 @@ def safe_str(v) -> str:
 # ==================== [FIX-TRANSLATE-FULL] ПЕРЕВОД ОПИСАНИЙ ====================
 
 _PHRASE_DICT: Dict[str, str] = {
+    # === Английский: банковские термины ===
     "value added tax - output": "НДС к уплате",
     "value added tax - input": "НДС к возмещению",
     "value added tax": "НДС",
@@ -1173,7 +1175,19 @@ _PHRASE_DICT: Dict[str, str] = {
     "notprovided": "не указано",
     "comission": "комиссия",
     "commission": "комиссия",
+    "interest payment for loan": "процентный платёж по кредиту",
+    "loan payment": "платёж по кредиту",
+    "loan interest": "проценты по кредиту",
+    "sent from revolut": "отправлено из Revolut",
+    "sutits no revolut": "отправлено из Revolut",
+    "inviato da revolut": "отправлено из Revolut",
+    "sent from": "отправлено из",
+    "rent and utilities": "аренда и коммунальные услуги",
+    "apartment rent": "аренда квартиры",
+    "rent": "аренда",
+    "utilities": "коммунальные услуги",
 
+    # === Бренды ===
     "tiktok ads": "реклама TikTok",
     "tiktok": "TikTok",
     "google *ads": "GOOGLE *ADS",
@@ -1231,23 +1245,25 @@ _PHRASE_DICT: Dict[str, str] = {
     "rak bank": "RAK Bank",
     "wio": "WIO",
 
+    # === Латышский ===
+    "apmaksa par rēķinu nr.": "оплата по счёту №",
+    "apmaksa par rekinu nr.": "оплата по счёту №",
+    "apmaksa par pakalpojumiem objekta": "оплата за услуги объекта",
+    "apmaksa par pakalpojumiem": "оплата за услуги",
+    "apmaksa par rēķinu": "оплата по счёту",
+    "apmaksa par rekinu": "оплата по счёту",
+    "apmaksa par": "оплата за",
+    "apmaksa": "оплата",
+
+    "darba algas izmaksa par": "выплата заработной платы за",
     "darba algas izmaksa": "выплата заработной платы",
     "darba alga par": "заработная плата за",
     "darba alga": "заработная плата",
     "darba algas": "заработной платы",
-    "apmaksa par rēķinu": "оплата по счёту",
-    "apmaksa par rekinu": "оплата по счёту",
-    "apmaksa par rēķinu nr.": "оплата по счёту №",
-    "apmaksa par rekinu nr.": "оплата по счёту №",
-    "apmaksa par pakalpojumiem": "оплата за услуги",
-    "apmaksa par": "оплата за",
-    "apmaksa": "оплата",
-    "rēķinu": "счёт",
-    "rekinu": "счёт",
-    "rēķins": "счёт",
-    "rekins": "счёт",
-    "rēķina": "счёта",
-    "rekina": "счёта",
+    "darba algu": "заработную плату",
+
+    "rēķinu nr.": "счёт №",
+    "rekinu nr.": "счёт №",
     "rēķins nr.": "счёт №",
     "rekins nr.": "счёт №",
     "rēķina nr.": "счёта №",
@@ -1255,72 +1271,110 @@ _PHRASE_DICT: Dict[str, str] = {
     "rek. nr.": "счёт №",
     "rek.nr.": "счёт №",
     "rek nr.": "счёт №",
-    "skaidras naudas iemaksa": "внесение наличных",
-    "skaidras naudas izņemšana": "снятие наличных",
-    "maksājums ar karti": "оплата картой",
-    "komisijas maksa": "комиссионный сбор",
-    "maksājuma mērķis": "назначение платежа",
-    "sākuma atlikums": "начальный остаток",
-    "beigu atlikums": "конечный остаток",
-    "ienākošais maksājums": "входящий платёж",
-    "izejošais maksājums": "исходящий платёж",
-    "bankas komisija par holdinga izveidi internetbankā": "банковская комиссия за создание холдинга в интернет-банке",
-    "bankas komisija par izmaiņām klientu lietā": "банковская комиссия за изменения в деле клиента",
-    "bankas komisija": "банковская комиссия",
-    "par rekinu": "по счёту",
-    "par rēķinu": "по счёту",
-    "rek. inv": "счёт INV",
-    "maksājums": "платёж",
-    "pārskaitījums": "перевод",
-    "ienākošais": "входящий",
-    "izejošais": "исходящий",
-    "komisija": "комиссия",
-    "izņemšana": "снятие",
-    "iemaksa": "взнос",
-    "procenti": "проценты",
-    "alga": "зарплата",
-    "algas": "зарплаты",
-    "algu": "зарплату",
-    "īre": "аренда",
+    "rēķinu": "счёт",
+    "rekinu": "счёт",
+    "rēķins": "счёт",
+    "rekins": "счёт",
+    "rēķina": "счёта",
+    "rekina": "счёта",
+    "rēķin": "счёт",
+    "rekin": "счёт",
+    "reķins": "счёт",
+    "reķinu": "счёт",
+
+    "ires maksa par periodu": "арендная плата за период",
     "ires maksa": "арендная плата",
+    "īres maksa": "арендная плата",
     "ire par dzivokli": "аренда за квартиру",
     "īre par dzīvokli": "аренда за квартиру",
+    "īre un komunālie pakalpojumi": "аренда и коммунальные услуги",
+    "īre un komunālie": "аренда и коммунальные",
+    "ire un komunālie": "аренда и коммунальные",
+    "ire un komunālie": "аренда и коммунальные",
+    "nomas maksa": "арендная плата",
     "par dzivokli": "за квартиру",
     "par dzīvokli": "за квартиру",
     "dzivokli": "квартиру",
     "dzīvokli": "квартиру",
-    "nomas maksa": "арендная плата",
+    "par periodu": "за период",
+    "par pakalpojumiem": "за услуги",
+
     "komunalie pakalpojumi": "коммунальные услуги",
-    "komunālie": "коммунальные",
+    "komunālie pakalpojumi": "коммунальные услуги",
     "komunalie": "коммунальные",
+    "komunālie": "коммунальные",
+
+    "kredīta apgrozījums": "кредитовый оборот",
+    "debeta apgrozījums": "дебетовый оборот",
+    "kredīta": "кредитовый",
+    "debeta": "дебетовый",
+    "apgrozījums": "оборот",
+
+    "sākuma atlikums": "начальный остаток",
+    "beigu atlikums": "конечный остаток",
+    "atlikums": "остаток",
+
+    "kompensācijas izmaksa": "выплата компенсации",
+    "kompensācija": "компенсация",
+    "izmaksa": "выплата",
+    "izmaksas": "выплаты",
+
+    "skaidras naudas iemaksa": "внесение наличных",
+    "skaidras naudas izņemšana": "снятие наличных",
+
+    "maksājums ar karti": "оплата картой",
+    "maksājuma mērķis": "назначение платежа",
+    "maksājums": "платёж",
+    "maksājumi": "платежи",
+
+    "ienākošais maksājums": "входящий платёж",
+    "izejošais maksājums": "исходящий платёж",
+    "ienākošais": "входящий",
+    "izejošais": "исходящий",
+
+    "bankas komisija par holdinga izveidi internetbankā": "банковская комиссия за создание холдинга в интернет-банке",
+    "bankas komisija par izmaiņām klientu lietā": "банковская комиссия за изменения в деле клиента",
+    "bankas komisija": "банковская комиссия",
+    "komisijas maksa": "комиссионный сбор",
+    "komisija": "комиссия",
+
+    "pārskaitījums": "перевод",
+    "pārskaitījumi": "переводы",
+    "pārskaitīts": "переведено",
+
+    "īpašuma tiesību maiņas noformēšanu bankā": "оформление смены права собственности в банке",
+    "īpašuma tiesību": "права собственности",
+    "noformēšanu": "оформление",
+    "cenrādis": "прейскурант",
+
+    "procenti par aizdevumu": "проценты по кредиту",
+    "procentu maksājums": "процентный платёж",
+    "procenti": "проценты",
+
     "nodoklis": "налог",
+    "nodokļi": "налоги",
     "apdrošināšana": "страхование",
     "aizdevums": "кредит",
-    "atmaksa": "возврат",
+    "aizdevuma": "кредита",
+
     "atlīdzība": "вознаграждение",
     "prēmija": "премия",
-    "kompensācija": "компенсация",
-    "kompensācijas izmaksa": "выплата компенсации",
-    "atlikums": "остаток",
-    "kopsumma": "итого",
-    "ienākumi": "доходы",
-    "izdevumi": "расходы",
+    "prēmijas": "премии",
+
+    "konts": "счёт",
+    "kontā": "на счёте",
+    "no konta": "со счёта",
+
     "saņēmējs": "получатель",
     "maksātājs": "плательщик",
     "mērķis": "назначение",
     "datums": "дата",
     "summa": "сумма",
+    "valūta": "валюта",
     "veids": "тип",
-    "konts": "счёт",
-    "sent from revolut": "отправлено из Revolut",
-    "sutits no revolut": "отправлено из Revolut",
-    "inviato da revolut": "отправлено из Revolut",
-    "rent and utilities": "аренда и коммунальные услуги",
-    "apartment rent": "аренда квартиры",
-    "rent": "аренда",
-    "sent from": "отправлено из",
-    "interest payment for loan": "процентный платёж по кредиту",
+    "statuss": "статус",
 
+    # === Чешский ===
     "trvalý příkaz": "постоянное поручение",
     "vklad hotovosti": "внесение наличных",
     "výběr hotovosti": "снятие наличных",
@@ -1364,6 +1418,7 @@ _PHRASE_DICT: Dict[str, str] = {
     "zůstatek": "остаток",
     "pohyby": "операции",
 
+    # === Венгерский ===
     "készpénzfelvétel": "снятие наличных",
     "készpénzbefizetés": "внесение наличных",
     "kártyás fizetés": "оплата картой",
@@ -1418,6 +1473,7 @@ _PHRASE_DICT: Dict[str, str] = {
     "befizetés": "внесение",
     "kifizetés": "выплата",
 
+    # === Азербайджанский ===
     "hesaba mədaxil": "зачисление на счёт",
     "hesaba medaxil": "зачисление на счёт",
     "dövrün sonuna balans": "остаток на конец периода",
@@ -1433,9 +1489,17 @@ _PHRASE_DICT: Dict[str, str] = {
     "kart hesabi": "карточный счёт",
     "icare haqqi odenisi": "оплата аренды",
     "dovlet vergi xidmeti": "государственная налоговая служба",
+
+    # === Русский: служебные строки ===
+    "плата за обслуживание счета": "плата за обслуживание счёта",
+    "остаток в начале": "остаток на начало",
+    "остаток в конце": "остаток на конец",
+    "комиссионная плата": "комиссионная плата",
+    "назначение платежа": "назначение платежа",
 }
 
 _WORD_DICT: Dict[str, str] = {
+    # === Английский ===
     "fee": "комиссия", "fees": "комиссии", "payment": "платёж", "payments": "платежи",
     "transfer": "перевод", "transfers": "переводы", "salary": "заработная плата",
     "refund": "возврат", "invoice": "счёт", "rent": "аренда",
@@ -1452,6 +1516,7 @@ _WORD_DICT: Dict[str, str] = {
     "internal": "внутренний", "external": "внешний", "card": "карта",
     "outgoing": "исходящий", "incoming": "входящий",
 
+    # === Чешский ===
     "poplatek": "комиссия", "úrok": "проценты", "převod": "перевод",
     "vklad": "внесение", "výběr": "снятие", "platba": "платёж",
     "faktura": "счёт", "nájem": "аренда", "mzda": "зарплата",
@@ -1463,19 +1528,149 @@ _WORD_DICT: Dict[str, str] = {
     "popis": "описание", "protiúčet": "корсчёт", "příchozí": "входящий",
     "odchozí": "исходящий",
 
-    "maksājums": "платёж", "pārskaitījums": "перевод", "ienākošais": "входящий",
-    "izejošais": "исходящий", "komisija": "комиссия", "izņemšana": "снятие",
-    "iemaksa": "взнос", "procenti": "проценты", "alga": "зарплата",
-    "algas": "зарплаты", "algu": "зарплату", "īre": "аренда",
-    "rēķins": "счёт", "rekins": "счёт", "nodoklis": "налог",
-    "apdrošināšana": "страхование", "aizdevums": "кредит", "atmaksa": "возврат",
-    "atlīdzība": "вознаграждение", "prēmija": "премия", "kompensācija": "компенсация",
-    "atlikums": "остаток", "kopsumma": "итого", "ienākumi": "доходы",
-    "izdevumi": "расходы", "saņēmējs": "получатель", "maksātājs": "плательщик",
-    "mērķis": "назначение", "datums": "дата", "summa": "сумма",
-    "veids": "тип", "konts": "счёт", "izmaksa": "выплата",
-    "darba": "рабочей", "darba algas": "заработной платы",
+    # === Латышский ===
+    "apmaksa": "оплата",
+    "apmaksas": "оплаты",
+    "apmaksāts": "оплачено",
+    "rēķins": "счёт",
+    "rēķina": "счёта",
+    "rēķinu": "счёт",
+    "rēķini": "счета",
+    "rekins": "счёт",
+    "rekina": "счёта",
+    "rekinu": "счёт",
+    "rekini": "счета",
+    "reķins": "счёт",
+    "reķinu": "счёт",
+    "rēkins": "счёт",
+    "rēkinu": "счёт",
 
+    "maksa": "плата",
+    "maksas": "платы",
+    "maksājums": "платёж",
+    "maksājumi": "платежи",
+    "maksājumu": "платежей",
+
+    "alga": "зарплата",
+    "algas": "зарплаты",
+    "algu": "зарплату",
+    "algām": "зарплатам",
+    "darba": "рабочей",
+    "darba alga": "заработная плата",
+    "darba algas": "заработной платы",
+
+    "izmaksa": "выплата",
+    "izmaksas": "выплаты",
+    "izmaksu": "выплат",
+    "izmaksāt": "выплатить",
+
+    "īre": "аренда",
+    "īres": "аренды",
+    "īri": "аренду",
+    "ire": "аренда",
+    "ires": "аренды",
+    "noma": "аренда",
+    "nomas": "аренды",
+    "nomas maksa": "арендная плата",
+
+    "dzīvoklis": "квартира",
+    "dzīvokli": "квартиру",
+    "dzīvokļa": "квартиры",
+    "dzivoklis": "квартира",
+    "dzivokli": "квартиру",
+    "dzivokla": "квартиры",
+
+    "māja": "дом",
+    "mājas": "дома",
+    "iela": "улица",
+    "ielas": "улицы",
+    "ielā": "на улице",
+
+    "periods": "период",
+    "periodu": "период",
+    "perioda": "периода",
+    "no": "с",
+    "līdz": "до",
+    "lidz": "до",
+
+    "komunālie": "коммунальные",
+    "komunalie": "коммунальные",
+    "komunālo": "коммунальных",
+    "komunāliem": "коммунальным",
+    "pakalpojumi": "услуги",
+    "pakalpojumu": "услуг",
+    "pakalpojumiem": "услуг",
+    "pakalpojums": "услуга",
+
+    "procenti": "проценты",
+    "procentu": "процентов",
+    "procents": "процент",
+
+    "nodoklis": "налог",
+    "nodokļi": "налоги",
+    "nodokļa": "налога",
+    "nodokļu": "налогов",
+
+    "apdrošināšana": "страхование",
+    "apdrošināšanas": "страхования",
+    "aizdevums": "кредит",
+    "aizdevuma": "кредита",
+    "kredīts": "кредит",
+    "kredīta": "кредита",
+
+    "komisija": "комиссия",
+    "komisijas": "комиссии",
+    "komisiju": "комиссию",
+    "komisijas maksa": "комиссионный сбор",
+
+    "atlikums": "остаток",
+    "atlikuma": "остатка",
+    "atlikumu": "остаток",
+    "sākuma": "начальный",
+    "beigu": "конечный",
+
+    "ienākumi": "доходы",
+    "izdevumi": "расходы",
+    "ienākumu": "доходов",
+    "izdevumu": "расходов",
+
+    "saņēmējs": "получатель",
+    "saņēmēja": "получателя",
+    "maksātājs": "плательщик",
+    "maksātāja": "плательщика",
+    "mērķis": "назначение",
+    "mērķa": "назначения",
+    "datums": "дата",
+    "datuma": "даты",
+    "summa": "сумма",
+    "summas": "суммы",
+    "valūta": "валюта",
+    "valūtas": "валюты",
+    "veids": "тип",
+    "veida": "типа",
+    "statuss": "статус",
+    "numurs": "номер",
+    "numura": "номера",
+    "kods": "код",
+    "koda": "кода",
+
+    "konts": "счёт",
+    "konta": "счёта",
+    "kontā": "на счёте",
+    "kontu": "счёт",
+    "kontiem": "счетам",
+
+    "bankas": "банковские",
+    "banka": "банк",
+    "bankā": "в банке",
+    "banku": "банк",
+
+    "pārskaitījums": "перевод",
+    "pārskaitījuma": "перевода",
+    "pārskaitīt": "перевести",
+    "pārskaitīts": "переведено",
+
+    # === Венгерский ===
     "fizetés": "платёж", "átutalás": "перевод", "bejövő": "входящий",
     "kimenő": "исходящий", "díj": "сбор", "jutalék": "комиссия",
     "vásárlás": "покупка", "kamat": "проценты", "bér": "зарплата",
@@ -1550,10 +1745,7 @@ def translate_description_inline(original: str) -> str:
     return f"{orig} ({translated})"
 
 
-# ==================== [FIX-COUNTERPARTY-FULL-V2] ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
-# ГЛАВНОЕ ИЗМЕНЕНИЕ: _clean_counterparty_name больше не режет по '|',
-# ' • ', ' — ' когда имя и так явное. Разделитель остаётся только если
-# в одной из частей есть служебное слово.
+# ==================== [FIX-COUNTERPARTY-FULL-V4] ====================
 
 _BANK_SERVICE_MARKERS = [
     'начальный остаток', 'конечный остаток', 'входящий остаток', 'исходящий остаток',
@@ -1638,10 +1830,8 @@ def _strip_junk(s: str) -> str:
 
 def _clean_counterparty_name(name: str, keep_full: bool = False) -> str:
     """
-    [FIX-COUNTERPARTY-FULL-V2]
+    [FIX-COUNTERPARTY-FULL-V4]
     keep_full=True: не режем по ' | ', ' • ', ' — ' — оставляем как есть.
-    Используется, когда имя уже получено из явного поля (Beneficiary name, Payer
-    или из парсера банка) и точно содержит только имя.
     """
     if not name:
         return ''
@@ -1651,7 +1841,6 @@ def _clean_counterparty_name(name: str, keep_full: bool = False) -> str:
         for sep in [' | ', ' • ', ' — ', ' – ']:
             if sep in s:
                 parts = [p.strip() for p in s.split(sep) if p.strip()]
-                # если есть явная служебная часть — берём самую длинную неслужебную
                 candidates = [p for p in parts if not _is_service_description(p)]
                 if candidates:
                     candidates.sort(key=len, reverse=True)
@@ -1704,7 +1893,6 @@ def _extract_name_by_patterns(desc: str) -> str:
         m = re.search(pat, desc, re.IGNORECASE)
         if m:
             cand = m.group(grp).strip()
-            # [FIX] если в cand осталась ' | ' — берём только часть ДО разделителя
             if ' | ' in cand:
                 cand = cand.split(' | ', 1)[0].strip()
             cand = _clean_counterparty_name(cand, keep_full=True)
@@ -1714,38 +1902,41 @@ def _extract_name_by_patterns(desc: str) -> str:
     return ''
 
 
-# ==================== [FIX-COUNTERPARTY-FULL-V2] ПОЛНЫЕ ИМЕНА ПО БАНКАМ ====================
+# ==================== [FIX-COUNTERPARTY-FULL-V4] ПОЛНЫЕ ИМЕНА ПО БАНКАМ ====================
 
 def _extract_revolut_name(desc: str,
                            account_name: str = '',
                            payer: str = '',
                            beneficiary: str = '') -> str:
     """
-    [FIX-COUNTERPARTY-FULL-V2]
-    Для Revolut:
-      1) Beneficiary name — самое надёжное (это имя получателя/плательщика).
-      2) Payer.
-      3) Из Description: "Money added from X", "Money sent to X", "From X", "To X".
-         Берём X до ' • ' или ' | '.
+    [FIX-COUNTERPARTY-FULL-V4]
+    Для Revolut в CSV есть явные поля Payer и Beneficiary name.
+    Они ВСЕГДА приоритетнее, чем разбор Description, потому что
+    Description часто содержит обрезанный ник ("Sintija Z"),
+    а полное имя ("Sintija Zalumska") — в Beneficiary name.
     """
-    for cand in (beneficiary, payer):
-        if cand:
-            c = str(cand).strip()
-            if c.lower() not in ('nan', 'none', 'n/a', '-', ''):
-                cleaned = _clean_counterparty_name(c, keep_full=True)
-                if cleaned and len(cleaned) >= 2:
-                    return cleaned
-
+    # 1) Beneficiary name
+    if beneficiary:
+        c = str(beneficiary).strip()
+        if c and c.lower() not in ('nan', 'none', 'n/a', '-'):
+            cleaned = _clean_counterparty_name(c, keep_full=True)
+            if cleaned and len(cleaned) >= 2:
+                return cleaned
+    # 2) Payer
+    if payer:
+        c = str(payer).strip()
+        if c and c.lower() not in ('nan', 'none', 'n/a', '-'):
+            cleaned = _clean_counterparty_name(c, keep_full=True)
+            if cleaned and len(cleaned) >= 2:
+                return cleaned
+    # 3) Только если полей нет — из Description
     if not desc:
         return ''
-
     s = str(desc).strip()
-    # "Money added from X | ..." или "Money added from X • ..."
     for prefix in ['Money added from ', 'Money received from ', 'Money sent to ',
                    'From ', 'To ']:
         if s.lower().startswith(prefix.lower()):
             rest = s[len(prefix):].strip()
-            # Отрезаем по разделителю
             for sep in [' | ', ' • ']:
                 if sep in rest:
                     rest = rest.split(sep, 1)[0].strip()
@@ -1754,8 +1945,7 @@ def _extract_revolut_name(desc: str,
             if cleaned and len(cleaned) >= 2:
                 return cleaned
 
-    # На случай, если описание начинается с чего-то другого, но содержит
-    # "Money added from X" не в начале
+    # Fallback: ищем в любом месте строки
     for prefix in ['Money added from ', 'Money received from ', 'Money sent to ']:
         m = re.search(re.escape(prefix) + r'(.+)$', s, re.IGNORECASE)
         if m:
@@ -1775,21 +1965,20 @@ def _extract_paysera_name(desc: str,
                            payer: str = '',
                            beneficiary: str = '') -> str:
     """
-    [FIX-COUNTERPARTY-FULL-V2]
-    Для Paysera: имя — это поле "Получатель / Плательщик" из таблицы.
-    Поле приходит как payer или beneficiary (в CSV/XLSX — из колонки;
-    в PDF — из разобранного блока).
+    [FIX-COUNTERPARTY-FULL-V4]
+    Для Paysera: имя из колонки "Получатель / Плательщик".
+    Убираем хвост (Код) ДО очистки, чтобы не потерять имя.
     """
     for cand in (beneficiary, payer):
         if cand:
             c = str(cand).strip()
             if c.lower() in ('nan', 'none', 'n/a', '-', ''):
                 continue
-            # Убираем хвост "(Код)" и "P12345"
-            c = re.sub(r'\([^)]*\)', ' ', c)
+            # Убираем хвост (Код) и P12345
+            c = re.sub(r'\(\s*[A-Z0-9]+\s*\)\s*$', '', c)
+            c = re.sub(r'\s+\(.*?\)\s*$', '', c)
             c = re.sub(r'\s+[A-Z]\d{4,}\s*$', '', c)
             c = re.sub(r'\s+', ' ', c).strip(' .,;:-')
-            # Не режем по ' | '
             cleaned = _clean_counterparty_name(c, keep_full=True)
             if cleaned and len(cleaned) >= 3:
                 return cleaned
@@ -1809,9 +1998,9 @@ def _extract_industra_name(desc: str,
                             payer: str = '',
                             beneficiary: str = '') -> str:
     """
-    [FIX-COUNTERPARTY-FULL-V2]
-    Для Industra: имя — поле "Получатель / Плательщик".
-    В XLS — колонка; в PDF — из фразы после типа операции.
+    [FIX-COUNTERPARTY-FULL-V4]
+    Для Industra: имя из колонки "Получатель / Плательщик".
+    В описании — "Исходящее перечисление, ИМЯ", "Зачисление входящего платежа на счет клиента, ИМЯ".
     """
     for cand in (beneficiary, payer):
         if cand:
@@ -2057,41 +2246,44 @@ def _extract_kapital_name(desc: str) -> str:
     return cleaned
 
 
-# ==================== [FIX-COUNTERPARTY-FULL-V2] ГЛАВНАЯ ФУНКЦИЯ ====================
+# ==================== [FIX-COUNTERPARTY-FULL-V4] ГЛАВНАЯ ФУНКЦИЯ ====================
 
 def extract_counterparty_smart(description: str,
                                 account_name: str = '',
                                 payer: str = '',
                                 beneficiary: str = '') -> Tuple[str, str]:
     """
-    [FIX-COUNTERPARTY-FULL-V2] Умное извлечение контрагента.
-    Приоритет:
-      1) Явные поля beneficiary / payer (полные имена из выписки).
-      2) Специфичные парсеры по банку (Revolut, Paysera, Industra, Pasha, MASHREQ, Kapital, WIO).
+    [FIX-COUNTERPARTY-FULL-V4]
+    Умное извлечение контрагента. Порядок:
+      1) Явные поля beneficiary / payer — ВСЕГДА приоритетны.
+      2) Спец-парсеры по банку.
       3) Шаблоны "from"/"to".
-      4) Эвристика: "To X | Y" → X; "From X | Y" → X.
+      4) Эвристика.
       5) Имя банка из account_name.
     """
     desc = (description or '').strip()
     acc_low = (account_name or '').lower()
 
-    # --- 1) Явные поля ---
-    # Только для тех банков, где поля реально содержат имя.
-    # Для Revolut/Paysera/Industra — приоритет повышен.
-    prefer_fields = ('revolut' in acc_low or 'paysera' in acc_low
-                     or 'industra' in acc_low or 'plavas' in acc_low
-                     or 'kl59' in acc_low)
+    # --- 1) Явные поля ВСЕГДА приоритетны ---
+    if beneficiary:
+        b = str(beneficiary).strip()
+        if b and b.lower() not in ('nan', 'none', 'n/a', '-'):
+            cleaned = _clean_counterparty_name(b, keep_full=True)
+            # Отрезаем (Код) и P12345
+            cleaned = re.sub(r'\(\s*[A-Z0-9]+\s*\)\s*$', '', cleaned).strip()
+            cleaned = re.sub(r'\s+[A-Z]\d{4,}\s*$', '', cleaned).strip()
+            if cleaned and len(cleaned) >= 2 and not _looks_like_bank_name(cleaned):
+                return (cleaned, desc)
+    if payer:
+        p = str(payer).strip()
+        if p and p.lower() not in ('nan', 'none', 'n/a', '-'):
+            cleaned = _clean_counterparty_name(p, keep_full=True)
+            cleaned = re.sub(r'\(\s*[A-Z0-9]+\s*\)\s*$', '', cleaned).strip()
+            cleaned = re.sub(r'\s+[A-Z]\d{4,}\s*$', '', cleaned).strip()
+            if cleaned and len(cleaned) >= 2 and not _looks_like_bank_name(cleaned):
+                return (cleaned, desc)
 
-    if prefer_fields:
-        for cand in (beneficiary, payer):
-            if cand:
-                c = str(cand).strip()
-                if c and c.lower() not in ('nan', 'none', 'n/a', '-'):
-                    cleaned = _clean_counterparty_name(c, keep_full=True)
-                    if cleaned and len(cleaned) >= 2 and not _looks_like_bank_name(cleaned):
-                        return (cleaned, desc)
-
-    # --- 2) Специфичные банки ---
+    # --- 2) Спец-парсеры по банку ---
     cp = ''
 
     if 'wise' in acc_low or 'saida wise' in acc_low:
@@ -2143,21 +2335,11 @@ def extract_counterparty_smart(description: str,
     if not cp and ('kapital' in acc_low or ('saida' in acc_low and 'azn' in acc_low)):
         cp = _extract_kapital_name(desc)
 
-    # --- 2.5) Fallback для полей, если спец-парсер не сработал ---
-    if not cp and not prefer_fields:
-        for cand in (beneficiary, payer):
-            if cand:
-                c = str(cand).strip()
-                if c and c.lower() not in ('nan', 'none', 'n/a', '-'):
-                    cleaned = _clean_counterparty_name(c, keep_full=True)
-                    if cleaned and len(cleaned) >= 2 and not _looks_like_bank_name(cleaned):
-                        return (cleaned, desc)
-
     # --- 3) Шаблоны ---
     if not cp:
         cp = _extract_name_by_patterns(desc)
 
-    # --- 4) Эвристика: "To X | Y" / "From X | Y" ---
+    # --- 4) Эвристика ---
     if not cp:
         m = re.match(r'^\s*To\s+([^|•]+)', desc, re.IGNORECASE)
         if m:
@@ -2166,9 +2348,6 @@ def extract_counterparty_smart(description: str,
             m = re.match(r'^\s*From\s+([^|•]+)', desc, re.IGNORECASE)
             if m:
                 cp = _clean_counterparty_name(m.group(1), keep_full=True)
-
-    # Если описание начинается с "To X | ...", но X похоже на служебное — 
-    # пробуем весь блок до ' | ' целиком
     if not cp:
         parts = re.split(r'[|•;]', desc)
         for p in parts:
@@ -2184,7 +2363,7 @@ def extract_counterparty_smart(description: str,
                 if cp:
                     break
 
-    # --- 5) Имя банка из account_name ---
+    # --- 5) Имя банка ---
     if not cp:
         m = re.search(
             r'\b(CSOB|UniCredit|Revolut|Tinkoff|Paysera|Wise|BluOr|Industra|Pasha|Mashreq|WIO|N26|MKB|FIO|Kapital|RAK|ČSOB)\b',
@@ -2489,7 +2668,7 @@ def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
                         description = val
                         break
             cp_final, _ = extract_counterparty_smart(
-                description, account_name, counterparty, ''
+                description, account_name, counterparty, counterparty
             )
             transactions.append({
                 'Дата': date, 'Сумма': amount,
@@ -3035,7 +3214,7 @@ def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict
                 continue
             cp = parts[2] if len(parts) > 2 else ''
             desc = ' '.join(parts[3:]) if len(parts) > 3 else ''
-            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, cp)
             if not cp_final:
                 cp_final = 'Česká spořitelna'
             result.append({
@@ -3247,7 +3426,7 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
             desc = parts[5] if len(parts) > 5 and parts[5] else (parts[6] if len(parts) > 6 else '')
             cp = parts[3] if len(parts) > 3 else ''
-            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, cp)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
@@ -3286,8 +3465,8 @@ def _read_xls_with_xlrd(file_content: bytes):
 
 def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    [FIX-COUNTERPARTY-FULL-V2] Industra XLS: имя из колонки "Получатель / Плательщик".
-    Если её нет — из фразы в описании.
+    [FIX-COUNTERPARTY-FULL-V4] Industra XLS/XLSX:
+    имя из колонки "Получатель / Плательщик", передаётся как beneficiary и payer.
     """
     result = []
     df = None
@@ -3375,7 +3554,7 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
                     if not desc and ttype:
                         desc = ttype
                     full_desc = f"{ttype}, {desc}" if ttype and desc else (desc or ttype)
-                    cp_final, _ = extract_counterparty_smart(full_desc, account_name, cp, '')
+                    cp_final, _ = extract_counterparty_smart(full_desc, account_name, cp, cp)
                     result.append({
                         'Дата': date, 'Сумма': amount,
                         'Контрагент': cp_final if cp_final else '',
@@ -3455,7 +3634,7 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
             if not desc and ttype:
                 desc = ttype
             full_desc = f"{ttype}, {desc}" if ttype and desc else (desc or ttype)
-            cp_final, _ = extract_counterparty_smart(full_desc, account_name, cp, '')
+            cp_final, _ = extract_counterparty_smart(full_desc, account_name, cp, cp)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
@@ -3481,7 +3660,7 @@ def parse_industra_kl59(file_content, account_name):
 
 def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    [FIX-COUNTERPARTY-FULL-V2] Industra PDF: имя из фразы после типа операции.
+    [FIX-COUNTERPARTY-FULL-V4] Industra PDF.
     """
     result = []
     full_text = pdf_all_text(file_content)
@@ -3597,7 +3776,7 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             amount = -abs(amount)
 
         combined = f"{op_type}, {desc}" if op_type else desc
-        cp_final, _ = extract_counterparty_smart(combined, account_name, cp, '')
+        cp_final, _ = extract_counterparty_smart(combined, account_name, cp, cp)
 
         result.append({
             'Дата': date,
@@ -4281,7 +4460,7 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                     ttype = safe_str(row.iloc[ci['type']]) if 'type' in ci and ci['type'] < len(row) else ''
                     if cp in ['N/A', 'n/a']:
                         cp = ''
-                    cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+                    cp_final, _ = extract_counterparty_smart(desc, account_name, cp, cp)
                     result.append({
                         'Дата': date, 'Сумма': amount,
                         'Контрагент': cp_final if cp_final else '',
@@ -4357,7 +4536,7 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
             ttype = parts[type_idx] if 0 <= type_idx < len(parts) else ''
             if cp in ['N/A', 'n/a']:
                 cp = ''
-            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, cp)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
@@ -4411,7 +4590,7 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 desc = row[ci.get('description', 11)] if ci.get('description', 11) < len(row) else ''
                 cp = row[ci.get('counterparty', 0)] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, cp)
                 result.append({
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
@@ -4527,8 +4706,8 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    [FIX-COUNTERPARTY-FULL-V2] Paysera XLSX: имя из колонки "Получатель / Плательщик".
-    Передаём его в extract_counterparty_smart как beneficiary, чтобы приоритет был выше.
+    [FIX-COUNTERPARTY-FULL-V4] Paysera XLSX: имя из колонки "Получатель / Плательщик".
+    Передаём его и как beneficiary, и как payer, чтобы приоритет был максимальным.
     """
     result = []
     df = read_xlsx(file_content, sheet_name='Worksheet')
@@ -4625,7 +4804,6 @@ def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
             elif ttype in ('К', 'C', 'Kredīts'):
                 amount = abs(amount)
             cp_raw = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-            # Убираем хвост "(Код)"
             cp_raw = re.sub(r'\([^)]*\)', ' ', cp_raw)
             cp_raw = re.sub(r'\s+', ' ', cp_raw).strip()
             desc = safe_str(row.iloc[ci['purpose']]) if 'purpose' in ci and ci['purpose'] < len(row) else ''
@@ -4754,7 +4932,7 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    [FIX-COUNTERPARTY-FULL-V2] Paysera PDF: имя из блока "Получатель / Плательщик".
+    [FIX-COUNTERPARTY-FULL-V4] Paysera PDF.
     """
     result = []
     full_text = pdf_all_text(file_content)
@@ -4813,7 +4991,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if amount is None or amount == 0.0:
             continue
 
-        # Ищем IBAN, перед ним — имя получателя
         cp = ''
         iban_match = re.search(r'([A-Z]{2}\d{2}[A-Z0-9]{10,30})', block_text)
         if iban_match:
@@ -4932,7 +5109,7 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    [FIX-COUNTERPARTY-FULL-V2] Revolut CSV:
+    [FIX-COUNTERPARTY-FULL-V4] Revolut CSV:
     полные имена из колонок Payer / Beneficiary name.
     """
     result = []
@@ -4970,10 +5147,12 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
             ci['state'] = i
         elif hl == 'type' and 'type' not in ci:
             ci['type'] = i
-        elif 'beneficiary name' in hl and 'beneficiary' not in ci:
+        elif 'beneficiary' in hl and 'name' in hl and 'beneficiary' not in ci:
             ci['beneficiary'] = i
         elif hl == 'beneficiary' and 'beneficiary' not in ci:
             ci['beneficiary'] = i
+        elif hl == 'sender name' and 'sender' not in ci:
+            ci['sender'] = i
     if 'date' not in ci:
         ci['date'] = 0
     if 'amount' not in ci:
@@ -5007,6 +5186,10 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = -abs(amount)
             payer = parts[ci['payer']] if 'payer' in ci and ci['payer'] < len(parts) else ''
             beneficiary = parts[ci['beneficiary']] if 'beneficiary' in ci and ci['beneficiary'] < len(parts) else ''
+            sender = parts[ci['sender']] if 'sender' in ci and ci['sender'] < len(parts) else ''
+            # Если beneficiary пуст, но есть sender — используем sender
+            if not beneficiary and sender:
+                beneficiary = sender
             desc = parts[ci['description']] if ci['description'] < len(parts) else ''
             reference = parts[ci['reference']] if 'reference' in ci and ci['reference'] < len(parts) else ''
 
@@ -5041,7 +5224,7 @@ def parse_revolut_plavas(file_content, account_name):
 
 def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    [FIX-COUNTERPARTY-FULL-V2] Revolut PDF.
+    [FIX-COUNTERPARTY-FULL-V4] Revolut PDF.
     """
     result = []
     full_text = pdf_all_text(file_content)
@@ -5217,7 +5400,7 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
                     if v and v != 'nan' and len(v) > 2 and not re.match(r'^[\d.,\-]+$', v) and not re.match(r'^\d{4}-\d{2}-\d{2}$', v):
                         desc = v
                         break
-            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, cp)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
@@ -5283,7 +5466,7 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 cp = row[ci.get('counterparty', 9)] if ci.get('counterparty', 9) < len(row) else ''
                 desc = row[ci.get('description', 13)] if ci.get('description', 13) < len(row) else ''
-                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, cp)
                 result.append({
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
@@ -6464,7 +6647,7 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
             continue
         if tx:
             for t in tx:
-                t['Наименование счета'] = account_name
+                t['Наименование банка'] = account_name
             return tx, f'{key} ({account_name}, real={real_type}, {len(tx)} операций)'
 
     msg = f'all_failed: {tried}'
@@ -6477,7 +6660,7 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
 
 def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     columns = [
-        "Наименование счета",
+        "Наименование банка",
         "Количество приходных операций",
         "Сумма приходных операций",
         "Количество расходных операций",
@@ -6488,12 +6671,13 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
 
     df = pd.DataFrame(rows)
-    if "Наименование счета" not in df.columns or "Сумма" not in df.columns:
+    bank_col = "Наименование банка" if "Наименование банка" in df.columns else "Наименование счета"
+    if bank_col not in df.columns or "Сумма" not in df.columns:
         return pd.DataFrame(columns=columns)
 
     df = df.copy()
     df["Сумма"] = df["Сумма"].map(to_float_amount)
-    df["Наименование счета"] = df["Наименование счета"].fillna("").astype(str)
+    df[bank_col] = df[bank_col].fillna("").astype(str)
 
     mask_reasonable = df["Сумма"].abs() < MAX_REASONABLE_AMOUNT
     df = df[mask_reasonable].copy()
@@ -6506,7 +6690,7 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     df["_income_sum"] = df["Сумма"].where(df["_income"], 0.0)
     df["_expense_sum"] = (-df["Сумма"]).where(df["_expense"], 0.0)
 
-    grouped = df.groupby("Наименование счета", dropna=False)
+    grouped = df.groupby(bank_col, dropna=False)
 
     summary = pd.DataFrame({
         "Количество приходных операций": grouped["_income"].sum().astype(int),
@@ -6514,13 +6698,14 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
         "Количество расходных операций": grouped["_expense"].sum().astype(int),
         "Сумма расходных операций": grouped["_expense_sum"].sum(),
     }).reset_index()
+    summary = summary.rename(columns={bank_col: "Наименование банка"})
 
     summary["Сальдо операций"] = (
         summary["Сумма приходных операций"].astype(float)
         - summary["Сумма расходных операций"].astype(float)
     )
 
-    summary = summary.sort_values("Наименование счета").reset_index(drop=True)
+    summary = summary.sort_values("Наименование банка").reset_index(drop=True)
 
     summary["Сумма приходных операций"] = summary["Сумма приходных операций"].astype(float).round(2)
     summary["Сумма расходных операций"] = summary["Сумма расходных операций"].astype(float).round(2)
@@ -6636,11 +6821,13 @@ def build_operations_excel(df_display: pd.DataFrame, df_numeric: pd.DataFrame) -
     ws = wb.active
     ws.title = 'Транзакции'
 
+    bank_series = df_numeric['Наименование банка'] if 'Наименование банка' in df_numeric.columns else df_numeric.get('Наименование счета', pd.Series([''] * len(df_numeric)))
+
     df_export = pd.DataFrame({
         'Дата': df_numeric['Дата'].astype(str),
         'Сумма': df_numeric['Сумма'].astype(float),
         'Контрагент': df_numeric['Контрагент'].astype(str),
-        'Наименование счета': df_numeric['Наименование счета'].astype(str),
+        'Наименование банка': bank_series.astype(str),
         'Описание': df_display['Описание'].astype(str) if 'Описание' in df_display.columns else df_numeric.get('Описание', pd.Series([''] * len(df_numeric))).astype(str),
     })
     _write_operations_sheet(ws, df_export)
@@ -6669,11 +6856,14 @@ def build_combined_excel(df_display: pd.DataFrame,
     wb = Workbook()
     ws1 = wb.active
     ws1.title = 'Транзакции'
+
+    bank_series = df_numeric['Наименование банка'] if 'Наименование банка' in df_numeric.columns else df_numeric.get('Наименование счета', pd.Series([''] * len(df_numeric)))
+
     df_export = pd.DataFrame({
         'Дата': df_numeric['Дата'].astype(str),
         'Сумма': df_numeric['Сумма'].astype(float),
         'Контрагент': df_numeric['Контрагент'].astype(str),
-        'Наименование счета': df_numeric['Наименование счета'].astype(str),
+        'Наименование банка': bank_series.astype(str),
         'Описание': df_display['Описание'].astype(str) if 'Описание' in df_display.columns else df_numeric.get('Описание', pd.Series([''] * len(df_numeric))).astype(str),
     })
     _write_operations_sheet(ws1, df_export)
@@ -6831,15 +7021,20 @@ def _render_results(result: Dict):
 
     df_raw = pd.DataFrame(all_tx)
     df_raw['Сумма_число'] = df_raw['Сумма'].map(to_float_amount)
+    # [FIX-RENAME-COLUMN-V4] Переименовываем в "Наименование банка"
+    if 'Наименование счета' in df_raw.columns:
+        df_raw = df_raw.rename(columns={'Наименование счета': 'Наименование банка'})
 
     income = float(df_raw['Сумма_число'][df_raw['Сумма_число'] > 0].sum())
     expense = float(abs(df_raw['Сумма_число'][df_raw['Сумма_число'] < 0].sum()))
+
+    bank_series = df_raw['Наименование банка'].astype(str) if 'Наименование банка' in df_raw.columns else ''
 
     df_numeric = pd.DataFrame({
         'Дата': df_raw['Дата'].astype(str),
         'Сумма': df_raw['Сумма_число'].astype(float),
         'Контрагент': df_raw['Контрагент'].astype(str) if 'Контрагент' in df_raw.columns else '',
-        'Наименование счета': df_raw['Наименование счета'].astype(str),
+        'Наименование банка': bank_series,
         'Описание': df_raw['Описание'].astype(str) if 'Описание' in df_raw.columns else '',
     })
 
@@ -6909,7 +7104,7 @@ def _render_results(result: Dict):
                 ai_rows.append({
                     'Дата': tx.get('Дата', ''),
                     'Сумма': tx.get('Сумма', 0),
-                    'Счёт': tx.get('Наименование счета', ''),
+                    'Банк': tx.get('Наименование банка', tx.get('Наименование счета', '')),
                     'Оригинал': tx.get('Описание', ''),
                     'Перевод AI': tx.get('_ai_translation', ''),
                     'Категория AI': tx.get('_ai_category', ''),
@@ -7075,7 +7270,7 @@ def _render_ai_assistant_tab():
         if st.button("📊 Анализ данных", key='quick_data'):
             quick_prompt = (
                 "У меня есть DataFrame с колонками: Дата, Сумма, Контрагент, "
-                "Наименование счета, Описание. Как найти аномалии и подозрительные операции?"
+                "Наименование банка, Описание. Как найти аномалии и подозрительные операции?"
             )
     with qc3:
         if st.button("🎨 Улучшить UI", key='quick_ui'):
@@ -7097,7 +7292,7 @@ def _render_ai_assistant_tab():
         "Revolut, Tinkoff, Kapital bank, MASHREQ, Pasha Bank, WIO, Paysera, MKB, BluOr и др.), "
         "сводит операции в единый DataFrame и экспортирует в Excel.",
         "Структура DataFrame: Дата (str), Сумма (float, + доход, - расход), Контрагент (str), "
-        "Наименование счета (str), Описание (str).",
+        "Наименование банка (str), Описание (str).",
         "Если пользователь спрашивает про код — давай конкретные фрагменты на Python.",
     ]
     df_numeric = st.session_state.get('df_numeric')
@@ -7106,7 +7301,8 @@ def _render_ai_assistant_tab():
             n = len(df_numeric)
             income = df_numeric[df_numeric['Сумма'] > 0]['Сумма'].sum()
             expense = df_numeric[df_numeric['Сумма'] < 0]['Сумма'].sum()
-            accounts = df_numeric['Наименование счета'].nunique()
+            bank_col = 'Наименование банка' if 'Наименование банка' in df_numeric.columns else 'Наименование счета'
+            accounts = df_numeric[bank_col].nunique()
             context_parts.append(
                 f"Текущие данные пользователя: {n} операций, "
                 f"доходы {income:.2f}, расходы {expense:.2f}, счетов: {accounts}."
