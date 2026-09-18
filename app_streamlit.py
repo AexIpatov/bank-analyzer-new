@@ -3,26 +3,26 @@
 app.py — Аналитик банковских выписок.
 Полная рабочая версия + интеграция DeepSeek AI.
 
-FIX-пакет:
-  [FIX-SYNTAX-MASHREQ]   — устранена слипшаяся строка "amount = credit  elif ..."
-  [FIX-TRANSLATE-FULL]   — многословные фразы переводятся ПОЛНОСТЬЮ
-  [FIX-BG-BASE64]        — фон: SVG в base64 + CSS-градиенты
-  [FIX-BUTTONS-SMALL]    — уменьшен шрифт кнопок (1.05rem)
-  [FIX-COUNTERPARTY-2]   — чистка имени контрагента
-  [NEW-NORMALIZE-ACCOUNT]— приведение наименований счетов к эталонному списку
-  [NEW-GORODETS-TEA]     — фон: городецкая роспись "Чаепитие" (самовар, чашки)
-  [NEW-TRANSLATE-INLINE] — Оригинал + (перевод) в одной ячейке
-  [NEW-AMOUNT-FORMAT]    — Суммы на экране: 1 234,56
-  [NEW-EXCEL-NUMERIC]    — В Excel суммы — числа с форматом # ##0.00
-  [NEW-SMART-COUNTERPARTY] — Умное извлечение контрагента
-  [FIX-KAPITAL-XLSX]     — Новый парсер Kapital bank Saida AZN (XLSX, 2-колоночный)
-  [FIX-KAPITAL-PDF]      — Улучшен PDF-парсер Kapital bank (склейка Məxaric/Mədaxil)
-  [FIX-KAPITAL-DOCX-ERROR] — Исправлена ошибка name 'parse_kapital_saida_docx' is not defined
-
-  [DEEPSEEK-INTEGRATION] — Встроен AI-ассистент DeepSeek:
-      • Отдельная вкладка "🤖 AI-ассистент" (чат по коду и данным).
-      • AI-обогащение транзакций: перевод описаний, категория, чистка контрагента.
-      • Кнопка "Проверить обработку через AI" — анализ проблемных строк.
+FIX-пакет v7 (полная версия):
+  [FIX-COUNTERPARTY-TRUNCATION]  — устранена обрезка имён контрагентов
+  [FIX-LATVENERGO-AS]            — "To LATVENERGO AS" больше не превращается в "AS"
+  [FIX-PAYSERA-PDF]              — Paysera PDF: корректное извлечение контрагента
+  [FIX-INDUSTRA-PDF]             — Industra PDF: контрагент берётся из ячейки
+  [FIX-RENDER-SCALAR-V5]         — все колонки приводятся к строкам до DataFrame
+  [FIX-RENAME-COLUMN-V4]         — "Наименование счета" → "Наименование банка"
+  [FIX-TRANSLATE-FULL]           — многословные фразы переводятся ПОЛНОСТЬЮ
+  [FIX-SYNTAX-MASHREQ]           — устранена слипшаяся строка "amount = credit  elif ..."
+  [FIX-BG-BASE64]                — фон: SVG в base64 + CSS-градиенты
+  [FIX-BUTTONS-SMALL]            — уменьшен шрифт кнопок
+  [FIX-KAPITAL-XLSX]             — парсер Kapital bank Saida AZN (XLSX, 2-колоночный)
+  [FIX-KAPITAL-PDF]              — улучшен PDF-парсер Kapital bank (склейка Məxaric/Mədaxil)
+  [NEW-NORMALIZE-ACCOUNT]        — приведение наименований счетов к эталонному списку
+  [NEW-GORODETS-TEA]             — фон: городецкая роспись "Чаепитие"
+  [NEW-TRANSLATE-INLINE]         — Оригинал + (перевод) в одной ячейке
+  [NEW-AMOUNT-FORMAT]            — Суммы на экране: 1 234,56
+  [NEW-EXCEL-NUMERIC]            — В Excel суммы — числа с форматом # ##0.00
+  [NEW-SMART-COUNTERPARTY]       — Умное извлечение контрагента
+  [DEEPSEEK-INTEGRATION]         — AI-ассистент DeepSeek и AI-обогащение
 """
 
 import streamlit as st
@@ -35,7 +35,7 @@ import base64
 import json
 from datetime import datetime
 from io import BytesIO, StringIO
-from typing import Dict, List, Tuple, Callable, Optional
+from typing import Dict, List, Tuple, Callable, Optional, Any
 from docx import Document
 import pdfplumber
 
@@ -43,7 +43,6 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-# [DEEPSEEK-INTEGRATION] OpenAI SDK — совместим с DeepSeek API
 try:
     from openai import OpenAI
     _OPENAI_SDK_AVAILABLE = True
@@ -604,6 +603,21 @@ section[data-testid="stFileUploaderDropzone"] button {
     margin: 0 !important;
 }
 
+[data-testid="stFileUploaderDropzoneInstructions"] > div > span { font-size: 0 !important; }
+[data-testid="stFileUploaderDropzoneInstructions"] > div > span::before {
+    content: "Перетащите файлы сюда" !important;
+    font-size: 0.95rem !important;
+    color: var(--ink) !important;
+    display: block;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] > div > small { font-size: 0 !important; }
+[data-testid="stFileUploaderDropzoneInstructions"] > div > small::before {
+    content: "Лимит 200 МБ на файл • CSV, XLSX, XLS, DOCX, PDF" !important;
+    font-size: 0.78rem !important;
+    color: var(--ink-muted) !important;
+    display: block;
+}
+
 .stMetric {
     background: #FFFFFF;
     border-radius: 16px;
@@ -704,7 +718,6 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 1.6rem 0; }
 .summary-table tbody tr:hover td { background: #FCE4EC; }
 .summary-table tbody tr:last-child td { border-bottom: none; }
 
-/* [DEEPSEEK-INTEGRATION] Стили для чата AI-ассистента */
 .ai-chat-bubble-user {
     background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%);
     border-left: 4px solid #2E7D32;
@@ -744,20 +757,14 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 1.6rem 0; }
 st.markdown(_CSS.replace("__GORODETS_B64__", _GORODETS_SVG_B64), unsafe_allow_html=True)
 
 
-# ==================== [DEEPSEEK-INTEGRATION] НАСТРОЙКИ И КЛИЕНТ DEEPSEEK ====================
+# ==================== [DEEPSEEK-INTEGRATION] ====================
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_DEFAULT_MODEL = "deepseek-chat"      # быстрая модель, для чата и классификации
-DEEPSEEK_REASONER_MODEL = "deepseek-reasoner" # «думающая» модель, для отладки кода
+DEEPSEEK_DEFAULT_MODEL = "deepseek-chat"
+DEEPSEEK_REASONER_MODEL = "deepseek-reasoner"
 
 
 def _get_deepseek_api_key() -> str:
-    """
-    API-ключ берём в порядке приоритета:
-      1) st.secrets["DEEPSEEK_API_KEY"] (файл .streamlit/secrets.toml)
-      2) переменная окружения DEEPSEEK_API_KEY
-      3) st.session_state["deepseek_api_key"] (введён вручную в сайдбаре)
-    """
     key = ""
     try:
         if "DEEPSEEK_API_KEY" in st.secrets:
@@ -772,7 +779,6 @@ def _get_deepseek_api_key() -> str:
 
 
 def _get_deepseek_client() -> Optional["OpenAI"]:
-    """Создаёт клиент OpenAI, настроенный на DeepSeek API. None, если нет ключа/SDK."""
     if not _OPENAI_SDK_AVAILABLE:
         return None
     api_key = _get_deepseek_api_key()
@@ -784,122 +790,64 @@ def _get_deepseek_client() -> Optional["OpenAI"]:
         return None
 
 
-def call_deepseek(
-    messages: List[Dict[str, str]],
-    model: str = DEEPSEEK_DEFAULT_MODEL,
-    temperature: float = 0.3,
-    max_tokens: int = 2048,
-    json_mode: bool = False,
-) -> Tuple[str, Optional[str]]:
-    """
-    Отправляет запрос в DeepSeek.
-    Возвращает (текст_ответа, ошибка_или_None).
-    """
+def call_deepseek(messages, model=DEEPSEEK_DEFAULT_MODEL, temperature=0.3,
+                  max_tokens=2048, json_mode=False):
     client = _get_deepseek_client()
     if client is None:
         if not _OPENAI_SDK_AVAILABLE:
             return "", "Библиотека openai не установлена. Выполните: pip install openai"
-        return "", "API-ключ DeepSeek не задан. Введите его в сайдбаре или в .streamlit/secrets.toml"
-
+        return "", "API-ключ DeepSeek не задан."
     try:
-        kwargs = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False,
-        }
+        kwargs = {"model": model, "messages": messages,
+                  "temperature": temperature, "max_tokens": max_tokens, "stream": False}
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         resp = client.chat.completions.create(**kwargs)
-        content = resp.choices[0].message.content or ""
-        return content.strip(), None
+        return (resp.choices[0].message.content or "").strip(), None
     except Exception as e:
         return "", f"Ошибка DeepSeek API: {e}"
 
 
-def call_deepseek_json(
-    system_prompt: str,
-    user_prompt: str,
-    model: str = DEEPSEEK_DEFAULT_MODEL,
-) -> Tuple[Optional[dict], Optional[str]]:
-    """Запрос с ожиданием JSON-ответа. Возвращает (dict, ошибка)."""
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
+def call_deepseek_json(system_prompt, user_prompt, model=DEEPSEEK_DEFAULT_MODEL):
+    messages = [{"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}]
     raw, err = call_deepseek(messages, model=model, temperature=0.1, json_mode=True)
     if err:
         return None, err
     try:
         return json.loads(raw), None
     except Exception:
-        # Пробуем вытащить JSON из markdown-обёртки
         m = re.search(r'\{.*\}', raw, re.DOTALL)
         if m:
             try:
                 return json.loads(m.group(0)), None
             except Exception:
                 pass
-        return None, f"Не удалось распарсить JSON от DeepSeek: {raw[:300]}"
+        return None, f"Не удалось распарсить JSON: {raw[:300]}"
 
-
-# ==================== [DEEPSEEK-INTEGRATION] AI-ФУНКЦИИ ДЛЯ ТРАНЗАКЦИЙ ====================
 
 _AI_TRANSACTION_SYSTEM = (
-    "Ты — эксперт по банковским выпискам. "
-    "На вход получаешь одну транзакцию: оригинальное описание (может быть на английском, "
-    "чешском, латышском, венгерском, азербайджанском), имя счёта и сумму. "
-    "Верни СТРОГО JSON без пояснений:\n"
-    "{\n"
-    '  "translation": "перевод описания на русский (кратко, по делу)",\n'
-    '  "category": "одна из: Зарплата, Аренда, Коммуналка, Продукты, Ресторан, '
-    'Транспорт, Такси, Топливо, Банковские комиссии, Перевод между счетами, '
-    'Налоги, Страхование, Кредит, Подписка, Покупка, Возврат, Прочее",\n'
-    '  "counterparty_clean": "чистое имя контрагента (бренд/ФИО/компания), '
-    'если можно выделить, иначе пустая строка",\n'
-    '  "is_bank_fee": true/false,\n'
-    '  "confidence": 0.0-1.0\n'
-    "}\n"
-    "Правила:\n"
-    "- Если описание — это служебная строка банка (начальный остаток, комиссия за обслуживание), "
-    "  поставь is_bank_fee=true и category='Банковские комиссии'.\n"
-    "- Не выдумывай контрагента, если его нет в описании.\n"
-    "- Отвечай только JSON, без markdown."
+    "Ты — эксперт по банковским выпискам. На вход получаешь транзакцию. "
+    "Верни СТРОГО JSON: {\"translation\": \"перевод на русский\", "
+    "\"category\": \"категория\", \"counterparty_clean\": \"чистое имя\", "
+    "\"is_bank_fee\": true/false, \"confidence\": 0.0-1.0}"
 )
 
 
-def ai_enrich_transactions(
-    transactions: List[Dict],
-    max_items: int = 200,
-    progress_callback: Optional[Callable[[int, int], None]] = None,
-) -> Tuple[List[Dict], List[str]]:
-    """
-    Обогащает транзакции через DeepSeek: перевод, категория, чистый контрагент.
-    Возвращает (обогащённый_список, список_ошибок).
-    Обрабатывает не более max_items транзакций за один вызов (защита от больших счетов).
-    """
-    errors: List[str] = []
+def ai_enrich_transactions(transactions, max_items=200, progress_callback=None):
+    errors = []
     if not transactions:
         return transactions, ["Нет транзакций для обогащения"]
-
     client = _get_deepseek_client()
     if client is None:
-        return transactions, ["DeepSeek недоступен: нет API-ключа или библиотеки openai"]
-
+        return transactions, ["DeepSeek недоступен"]
     subset = transactions[:max_items]
     enriched = [dict(t) for t in transactions]
-
     for i, tx in enumerate(subset):
         desc = str(tx.get("Описание", ""))[:1500]
-        acc = str(tx.get("Наименование счета", ""))
+        acc = str(tx.get("Наименование счета", tx.get("Наименование банка", "")))
         amount = tx.get("Сумма", 0)
-
-        user_prompt = (
-            f"Счёт: {acc}\n"
-            f"Сумма: {amount}\n"
-            f"Описание: {desc}\n"
-        )
+        user_prompt = f"Счёт: {acc}\nСумма: {amount}\nОписание: {desc}\n"
         data, err = call_deepseek_json(_AI_TRANSACTION_SYSTEM, user_prompt)
         if err:
             errors.append(f"строка {i+1}: {err}")
@@ -909,22 +857,17 @@ def ai_enrich_transactions(
             enriched[i]["_ai_counterparty_clean"] = data.get("counterparty_clean", "")
             enriched[i]["_ai_is_bank_fee"] = bool(data.get("is_bank_fee", False))
             enriched[i]["_ai_confidence"] = data.get("confidence", 0.0)
-
         if progress_callback:
             try:
                 progress_callback(i + 1, len(subset))
             except Exception:
                 pass
-
     return enriched, errors
 
 
 _AI_DEBUG_SYSTEM = (
     "Ты — Python-разработчик, эксперт по Streamlit и парсингу банковских выписок. "
-    "Пользователь присылает фрагмент кода, ошибку или проблемную транзакцию. "
-    "Твоя задача — предложить конкретное исправление. "
-    "Если нужно — верни исправленный фрагмент кода с комментариями на русском. "
-    "Не читай лекции, отвечай по делу."
+    "Предложи конкретное исправление. Отвечай по делу."
 )
 
 
@@ -970,7 +913,6 @@ st.markdown("""
 
 
 # ==================== ОБЩИЕ УТИЛИТЫ ====================
-# (полностью сохранены — см. оригинал; ниже ключевые, остальные без изменений)
 
 def clean_account_name(filename: str) -> str:
     name = os.path.splitext(filename)[0]
@@ -1149,12 +1091,54 @@ def to_float_amount(v) -> float:
 
 
 def safe_str(v) -> str:
-    if v is None or pd.isna(v):
+    if v is None:
         return ''
+    try:
+        if pd.isna(v):
+            return ''
+    except Exception:
+        pass
     return str(v).strip()
 
 
-# ==================== [FIX-TRANSLATE-FULL] ПЕРЕВОД ОПИСАНИЙ ====================
+def _to_scalar_str(v: Any) -> str:
+    if v is None:
+        return ''
+    try:
+        if pd.isna(v):
+            return ''
+    except Exception:
+        pass
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (list, tuple)):
+        try:
+            return ' | '.join(_to_scalar_str(x) for x in v
+                              if x is not None and str(x).strip() != '')
+        except Exception:
+            return str(v)
+    if isinstance(v, dict):
+        try:
+            return ' | '.join(f"{_to_scalar_str(k)}: {_to_scalar_str(val)}"
+                              for k, val in v.items())
+        except Exception:
+            return str(v)
+    try:
+        return str(v)
+    except Exception:
+        return ''
+
+
+def _safe_str_series(series: pd.Series) -> pd.Series:
+    if series is None:
+        return pd.Series(dtype=str)
+    try:
+        return series.map(_to_scalar_str).astype(str)
+    except Exception:
+        return pd.Series([''] * len(series), index=series.index, dtype=str)
+
+
+# ==================== [FIX-TRANSLATE-FULL] СЛОВАРИ ПЕРЕВОДА ====================
 
 _PHRASE_DICT: Dict[str, str] = {
     "value added tax - output": "НДС к уплате",
@@ -1213,10 +1197,25 @@ _PHRASE_DICT: Dict[str, str] = {
     "metal membership": "подписка Metal",
     "charge accounting": "комиссия за учёт",
     "charge for": "комиссия за",
+    "revolut business fee": "комиссия Revolut Business",
+    "grow plan fee": "комиссия за тариф Grow",
+    "expenses app charges": "плата за приложение расходов",
     "message": "сообщение",
     "notprovided": "не указано",
     "comission": "комиссия",
     "commission": "комиссия",
+    "interest payment for loan": "процентный платёж по кредиту",
+    "loan payment": "платёж по кредиту",
+    "loan interest": "проценты по кредиту",
+    "sent from revolut": "отправлено из Revolut",
+    "sutits no revolut": "отправлено из Revolut",
+    "inviato da revolut": "отправлено из Revolut",
+    "sent from": "отправлено из",
+    "rent and utilities": "аренда и коммунальные услуги",
+    "apartment rent": "аренда квартиры",
+    "rent": "аренда",
+    "utilities": "коммунальные услуги",
+
     "tiktok ads": "реклама TikTok",
     "tiktok": "TikTok",
     "google *ads": "GOOGLE *ADS",
@@ -1230,16 +1229,11 @@ _PHRASE_DICT: Dict[str, str] = {
     "dubai taxi": "такси Дубай",
     "pizza hut": "Pizza Hut",
     "pinkberry": "Pinkberry",
-    "seven": "Seven",
     "regent palace hotel": "Regent Palace Hotel",
     "albato": "Albato",
     "to host arabia": "To Host Arabia",
-    "i r m g mena restauran": "ресторан I R M G Mena",
     "day to day": "Day To Day",
     "butter bread bakery": "Butter Bread Bakery",
-    "voltup electric vehicl": "электромобиль Voltup",
-    "shabik electric vehicl": "электромобиль Shabik",
-    "dar al fahidi car park": "парковка Dar Al Fahidi",
     "spices by nature rest": "ресторан Spices by Nature",
     "corner spmrkt llc": "Corner Supermarket LLC",
     "tamdeed projects llc": "Tamdeed Projects LLC",
@@ -1266,6 +1260,145 @@ _PHRASE_DICT: Dict[str, str] = {
     "wise": "Wise",
     "tinkoff": "Тинькофф",
     "sberbank": "Сбербанк",
+    "industra bank": "Industra Bank",
+    "bluor bank": "BluOr Bank",
+    "csob": "ČSOB",
+    "unicredit": "UniCredit",
+    "pasha bank": "Pasha Bank",
+    "mashreq": "MASHREQ",
+    "kapital bank": "Kapital Bank",
+    "fio banka": "FIO Banka",
+    "mkb": "MKB",
+    "n26": "N26",
+    "rak bank": "RAK Bank",
+    "wio": "WIO",
+
+    "apmaksa par rēķinu nr.": "оплата по счёту №",
+    "apmaksa par rekinu nr.": "оплата по счёту №",
+    "apmaksa par pakalpojumiem objekta": "оплата за услуги объекта",
+    "apmaksa par pakalpojumiem": "оплата за услуги",
+    "apmaksa par rēķinu": "оплата по счёту",
+    "apmaksa par rekinu": "оплата по счёту",
+    "apmaksa par": "оплата за",
+    "apmaksa": "оплата",
+
+    "darba algas izmaksa par": "выплата заработной платы за",
+    "darba algas izmaksa": "выплата заработной платы",
+    "darba alga par": "заработная плата за",
+    "darba alga": "заработная плата",
+    "darba algas": "заработной платы",
+    "darba algu": "заработную плату",
+
+    "rēķinu nr.": "счёт №",
+    "rekinu nr.": "счёт №",
+    "rēķins nr.": "счёт №",
+    "rekins nr.": "счёт №",
+    "rēķina nr.": "счёта №",
+    "rekina nr.": "счёта №",
+    "rek. nr.": "счёт №",
+    "rek.nr.": "счёт №",
+    "rek nr.": "счёт №",
+    "rēķinu": "счёт",
+    "rekinu": "счёт",
+    "rēķins": "счёт",
+    "rekins": "счёт",
+    "rēķina": "счёта",
+    "rekina": "счёта",
+    "rēķin": "счёт",
+    "rekin": "счёт",
+    "reķins": "счёт",
+    "reķinu": "счёт",
+
+    "ires maksa par periodu": "арендная плата за период",
+    "ires maksa": "арендная плата",
+    "īres maksa": "арендная плата",
+    "ire par dzivokli": "аренда за квартиру",
+    "īre par dzīvokli": "аренда за квартиру",
+    "īre un komunālie pakalpojumi": "аренда и коммунальные услуги",
+    "īre un komunālie": "аренда и коммунальные",
+    "ire un komunālie": "аренда и коммунальные",
+    "nomas maksa": "арендная плата",
+    "par dzivokli": "за квартиру",
+    "par dzīvokli": "за квартиру",
+    "dzivokli": "квартиру",
+    "dzīvokli": "квартиру",
+    "par periodu": "за период",
+    "par pakalpojumiem": "за услуги",
+
+    "komunalie pakalpojumi": "коммунальные услуги",
+    "komunālie pakalpojumi": "коммунальные услуги",
+    "komunalie": "коммунальные",
+    "komunālie": "коммунальные",
+
+    "kredīta apgrozījums": "кредитовый оборот",
+    "debeta apgrozījums": "дебетовый оборот",
+    "kredīta": "кредитовый",
+    "debeta": "дебетовый",
+    "apgrozījums": "оборот",
+
+    "sākuma atlikums": "начальный остаток",
+    "beigu atlikums": "конечный остаток",
+    "atlikums": "остаток",
+
+    "kompensācijas izmaksa": "выплата компенсации",
+    "kompensācija": "компенсация",
+    "izmaksa": "выплата",
+    "izmaksas": "выплаты",
+
+    "skaidras naudas iemaksa": "внесение наличных",
+    "skaidras naudas izņemšana": "снятие наличных",
+
+    "maksājums ar karti": "оплата картой",
+    "maksājuma mērķis": "назначение платежа",
+    "maksājums": "платёж",
+    "maksājumi": "платежи",
+
+    "ienākošais maksājums": "входящий платёж",
+    "izejošais maksājums": "исходящий платёж",
+    "ienākošais": "входящий",
+    "izejošais": "исходящий",
+
+    "bankas komisija par holdinga izveidi internetbankā": "банковская комиссия за создание холдинга в интернет-банке",
+    "bankas komisija par izmaiņām klientu lietā": "банковская комиссия за изменения в деле клиента",
+    "bankas komisija": "банковская комиссия",
+    "komisijas maksa": "комиссионный сбор",
+    "komisija": "комиссия",
+
+    "pārskaitījums": "перевод",
+    "pārskaitījumi": "переводы",
+    "pārskaitīts": "переведено",
+
+    "īpašuma tiesību maiņas noformēšanu bankā": "оформление смены права собственности в банке",
+    "īpašuma tiesību": "права собственности",
+    "noformēšanu": "оформление",
+    "cenrādis": "прейскурант",
+
+    "procenti par aizdevumu": "проценты по кредиту",
+    "procentu maksājums": "процентный платёж",
+    "procenti": "проценты",
+
+    "nodoklis": "налог",
+    "nodokļi": "налоги",
+    "apdrošināšana": "страхование",
+    "aizdevums": "кредит",
+    "aizdevuma": "кредита",
+
+    "atlīdzība": "вознаграждение",
+    "prēmija": "премия",
+    "prēmijas": "премии",
+
+    "konts": "счёт",
+    "kontā": "на счёте",
+    "no konta": "со счёта",
+
+    "saņēmējs": "получатель",
+    "maksātājs": "плательщик",
+    "mērķis": "назначение",
+    "datums": "дата",
+    "summa": "сумма",
+    "valūta": "валюта",
+    "veids": "тип",
+    "statuss": "статус",
 
     "trvalý příkaz": "постоянное поручение",
     "vklad hotovosti": "внесение наличных",
@@ -1309,53 +1442,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "celkem": "всего",
     "zůstatek": "остаток",
     "pohyby": "операции",
-
-    "skaidras naudas iemaksa": "внесение наличных",
-    "skaidras naudas izņemšana": "снятие наличных",
-    "maksājums ar karti": "оплата картой",
-    "komisijas maksa": "комиссионный сбор",
-    "maksājuma mērķis": "назначение платежа",
-    "sākuma atlikums": "начальный остаток",
-    "beigu atlikums": "конечный остаток",
-    "ienākošais maksājums": "входящий платёж",
-    "izejošais maksājums": "исходящий платёж",
-    "apmaksa par rēķinu": "оплата по счёту",
-    "apmaksa par rekinu": "оплата по счёту",
-    "bankas komisija par holdinga izveidi internetbankā": "банковская комиссия за создание холдинга в интернет-банке",
-    "bankas komisija par izmaiņām klientu lietā": "банковская комиссия за изменения в деле клиента",
-    "bankas komisija": "банковская комиссия",
-    "par rekinu": "по счёту",
-    "par rēķinu": "по счёту",
-    "rek. inv": "счёт INV",
-    "maksājums": "платёж",
-    "pārskaitījums": "перевод",
-    "ienākošais": "входящий",
-    "izejošais": "исходящий",
-    "komisija": "комиссия",
-    "izņemšana": "снятие",
-    "iemaksa": "взнос",
-    "procenti": "проценты",
-    "alga": "зарплата",
-    "īre": "аренда",
-    "rēķins": "счёт",
-    "nodoklis": "налог",
-    "apdrošināšana": "страхование",
-    "aizdevums": "кредит",
-    "atmaksa": "возврат",
-    "atlīdzība": "вознаграждение",
-    "prēmija": "премия",
-    "kompensācija": "компенсация",
-    "atlikums": "остаток",
-    "kopsumma": "итого",
-    "ienākumi": "доходы",
-    "izdevumi": "расходы",
-    "saņēmējs": "получатель",
-    "maksātājs": "плательщик",
-    "mērķis": "назначение",
-    "datums": "дата",
-    "summa": "сумма",
-    "veids": "тип",
-    "konts": "счёт",
 
     "készpénzfelvétel": "снятие наличных",
     "készpénzbefizetés": "внесение наличных",
@@ -1426,156 +1512,137 @@ _PHRASE_DICT: Dict[str, str] = {
     "kart hesabi": "карточный счёт",
     "icare haqqi odenisi": "оплата аренды",
     "dovlet vergi xidmeti": "государственная налоговая служба",
+
+    "плата за обслуживание счета": "плата за обслуживание счёта",
+    "остаток в начале": "остаток на начало",
+    "остаток в конце": "остаток на конец",
+    "комиссионная плата": "комиссионная плата",
+    "назначение платежа": "назначение платежа",
 }
 
-_TRANSLATION_DICT: Dict[str, str] = {
-    "fee": "комиссия",
-    "fees": "комиссии",
-    "payment": "платёж",
-    "payments": "платежи",
-    "transfer": "перевод",
-    "transfers": "переводы",
-    "salary": "заработная плата",
-    "refund": "возврат",
-    "invoice": "счёт",
-    "rent": "аренда",
-    "utilities": "коммунальные услуги",
-    "commission": "комиссия",
-    "dividend": "дивиденды",
-    "interest": "проценты",
-    "purchase": "покупка",
-    "withdrawal": "снятие",
-    "deposit": "внесение",
-    "groceries": "продукты",
-    "restaurant": "ресторан",
-    "taxi": "такси",
-    "fuel": "топливо",
-    "insurance": "страхование",
-    "loan": "кредит",
-    "repayment": "погашение",
-    "reward": "вознаграждение",
-    "bonus": "бонус",
-    "cashback": "кэшбэк",
-    "reference": "назначение",
-    "details": "детали",
-    "description": "описание",
-    "beneficiary": "получатель",
-    "payer": "плательщик",
-    "amount": "сумма",
-    "balance": "баланс",
-    "statement": "выписка",
-    "to": "к",
-    "from": "от",
-    "for": "за",
-    "internal": "внутренний",
-    "external": "внешний",
-    "card": "карта",
-    "outgoing": "исходящий",
-    "incoming": "входящий",
+_WORD_DICT: Dict[str, str] = {
+    "fee": "комиссия", "fees": "комиссии", "payment": "платёж", "payments": "платежи",
+    "transfer": "перевод", "transfers": "переводы", "salary": "заработная плата",
+    "refund": "возврат", "invoice": "счёт", "rent": "аренда",
+    "utilities": "коммунальные услуги", "commission": "комиссия",
+    "dividend": "дивиденды", "interest": "проценты", "purchase": "покупка",
+    "withdrawal": "снятие", "deposit": "внесение", "groceries": "продукты",
+    "restaurant": "ресторан", "taxi": "такси", "fuel": "топливо",
+    "insurance": "страхование", "loan": "кредит", "repayment": "погашение",
+    "reward": "вознаграждение", "bonus": "бонус", "cashback": "кэшбэк",
+    "reference": "назначение", "details": "детали", "description": "описание",
+    "beneficiary": "получатель", "payer": "плательщик", "amount": "сумма",
+    "balance": "баланс", "statement": "выписка",
+    "to": "к", "from": "от", "for": "за",
+    "internal": "внутренний", "external": "внешний", "card": "карта",
+    "outgoing": "исходящий", "incoming": "входящий",
 
-    "poplatek": "комиссия",
-    "úrok": "проценты",
-    "převod": "перевод",
-    "vklad": "внесение",
-    "výběr": "снятие",
-    "platba": "платёж",
-    "faktura": "счёт",
-    "nájem": "аренда",
-    "mzda": "зарплата",
-    "daň": "налог",
-    "pojištění": "страхование",
-    "půjčka": "кредит",
-    "splátka": "платёж по кредиту",
-    "odměna": "вознаграждение",
-    "vratka": "возврат",
-    "inkaso": "инкассо",
-    "celkem": "всего",
-    "zůstatek": "остаток",
-    "pohyby": "операции",
-    "připsáno": "зачислено",
-    "odepsáno": "списано",
-    "zaúčtováno": "проведено",
-    "provedeno": "выполнено",
-    "popis": "описание",
-    "protiúčet": "корсчёт",
-    "příchozí": "входящий",
+    "poplatek": "комиссия", "úrok": "проценты", "převod": "перевод",
+    "vklad": "внесение", "výběr": "снятие", "platba": "платёж",
+    "faktura": "счёт", "nájem": "аренда", "mzda": "зарплата",
+    "daň": "налог", "pojištění": "страхование", "půjčka": "кредит",
+    "splátka": "платёж по кредиту", "odměna": "вознаграждение",
+    "vratka": "возврат", "inkaso": "инкассо", "celkem": "всего",
+    "zůstatek": "остаток", "pohyby": "операции", "připsáno": "зачислено",
+    "odepsáno": "списано", "zaúčtováno": "проведено", "provedeno": "выполнено",
+    "popis": "описание", "protiúčet": "корсчёт", "příchozí": "входящий",
     "odchozí": "исходящий",
 
-    "maksājums": "платёж",
-    "pārskaitījums": "перевод",
-    "ienākošais": "входящий",
-    "izejošais": "исходящий",
-    "komisija": "комиссия",
-    "izņemšana": "снятие",
-    "iemaksa": "взнос",
-    "procenti": "проценты",
-    "alga": "зарплата",
-    "īre": "аренда",
-    "rēķins": "счёт",
-    "nodoklis": "налог",
-    "apdrošināšana": "страхование",
-    "aizdevums": "кредит",
-    "atmaksa": "возврат",
-    "atlīdzība": "вознаграждение",
-    "prēmija": "премия",
-    "kompensācija": "компенсация",
-    "atlikums": "остаток",
-    "kopsumma": "итого",
-    "ienākumi": "доходы",
-    "izdevumi": "расходы",
-    "saņēmējs": "получатель",
-    "maksātājs": "плательщик",
-    "mērķis": "назначение",
-    "datums": "дата",
-    "summa": "сумма",
-    "veids": "тип",
-    "konts": "счёт",
+    "apmaksa": "оплата", "apmaksas": "оплаты", "apmaksāts": "оплачено",
+    "rēķins": "счёт", "rēķina": "счёта", "rēķinu": "счёт", "rēķini": "счета",
+    "rekins": "счёт", "rekina": "счёта", "rekinu": "счёт", "rekini": "счета",
+    "reķins": "счёт", "reķinu": "счёт", "rēkins": "счёт", "rēkinu": "счёт",
 
-    "fizetés": "платёж",
-    "átutalás": "перевод",
-    "bejövő": "входящий",
-    "kimenő": "исходящий",
-    "díj": "сбор",
-    "jutalék": "комиссия",
-    "vásárlás": "покупка",
-    "kamat": "проценты",
-    "bér": "зарплата",
-    "számla": "счёт",
-    "adó": "налог",
-    "biztosítás": "страхование",
-    "kölcsön": "кредит",
-    "törlesztés": "погашение",
-    "visszatérítés": "возврат",
-    "jóváírás": "зачисление",
-    "terhelés": "списание",
-    "egyenleg": "баланс",
-    "összeg": "сумма",
-    "közlemény": "сообщение",
-    "kedvezményezett": "получатель",
-    "értéknap": "дата валютирования",
-    "sorszám": "номер",
-    "típus": "тип",
-    "dátum": "дата",
-    "tranzakció": "транзакция",
-    "megbízás": "поручение",
-    "befizetés": "внесение",
-    "kifizetés": "выплата",
+    "maksa": "плата", "maksas": "платы", "maksājums": "платёж",
+    "maksājumi": "платежи", "maksājumu": "платежей",
+
+    "alga": "зарплата", "algas": "зарплаты", "algu": "зарплату",
+    "algām": "зарплатам", "darba": "рабочей",
+    "darba alga": "заработная плата", "darba algas": "заработной платы",
+
+    "izmaksa": "выплата", "izmaksas": "выплаты", "izmaksu": "выплат",
+    "izmaksāt": "выплатить",
+
+    "īre": "аренда", "īres": "аренды", "īri": "аренду",
+    "ire": "аренда", "ires": "аренды", "noma": "аренда", "nomas": "аренды",
+    "nomas maksa": "арендная плата",
+
+    "dzīvoklis": "квартира", "dzīvokli": "квартиру", "dzīvokļa": "квартиры",
+    "dzivoklis": "квартира", "dzivokli": "квартиру", "dzivokla": "квартиры",
+
+    "māja": "дом", "mājas": "дома", "iela": "улица", "ielas": "улицы",
+    "ielā": "на улице",
+
+    "periods": "период", "periodu": "период", "perioda": "периода",
+    "no": "с", "līdz": "до", "lidz": "до",
+
+    "komunālie": "коммунальные", "komunalie": "коммунальные",
+    "komunālo": "коммунальных", "komunāliem": "коммунальным",
+    "pakalpojumi": "услуги", "pakalpojumu": "услуг",
+    "pakalpojumiem": "услуг", "pakalpojums": "услуга",
+
+    "procenti": "проценты", "procentu": "процентов", "procents": "процент",
+
+    "nodoklis": "налог", "nodokļi": "налоги", "nodokļa": "налога",
+    "nodokļu": "налогов",
+
+    "apdrošināšana": "страхование", "apdrošināšanas": "страхования",
+    "aizdevums": "кредит", "aizdevuma": "кредита",
+    "kredīts": "кредит", "kredīta": "кредита",
+
+    "komisija": "комиссия", "komisijas": "комиссии", "komisiju": "комиссию",
+    "komisijas maksa": "комиссионный сбор",
+
+    "atlikums": "остаток", "atlikuma": "остатка", "atlikumu": "остаток",
+    "sākuma": "начальный", "beigu": "конечный",
+
+    "ienākumi": "доходы", "izdevumi": "расходы",
+    "ienākumu": "доходов", "izdevumu": "расходов",
+
+    "saņēmējs": "получатель", "saņēmēja": "получателя",
+    "maksātājs": "плательщик", "maksātāja": "плательщика",
+    "mērķis": "назначение", "mērķa": "назначения",
+    "datums": "дата", "datuma": "даты",
+    "summa": "сумма", "summas": "суммы",
+    "valūta": "валюта", "valūtas": "валюты",
+    "veids": "тип", "veida": "типа", "statuss": "статус",
+    "numurs": "номер", "numura": "номера",
+    "kods": "код", "koda": "кода",
+
+    "konts": "счёт", "konta": "счёта", "kontā": "на счёте",
+    "kontu": "счёт", "kontiem": "счетам",
+
+    "bankas": "банковские", "banka": "банк", "bankā": "в банке",
+    "banku": "банк",
+
+    "pārskaitījums": "перевод", "pārskaitījuma": "перевода",
+    "pārskaitīt": "перевести", "pārskaitīts": "переведено",
+
+    "fizetés": "платёж", "átutalás": "перевод", "bejövő": "входящий",
+    "kimenő": "исходящий", "díj": "сбор", "jutalék": "комиссия",
+    "vásárlás": "покупка", "kamat": "проценты", "bér": "зарплата",
+    "számla": "счёт", "adó": "налог", "biztosítás": "страхование",
+    "kölcsön": "кредит", "törlesztés": "погашение", "visszatérítés": "возврат",
+    "jóváírás": "зачисление", "terhelés": "списание", "egyenleg": "баланс",
+    "összeg": "сумма", "közlemény": "сообщение", "kedvezményezett": "получатель",
+    "értéknap": "дата валютирования", "sorszám": "номер", "típus": "тип",
+    "dátum": "дата", "tranzakció": "транзакция", "megbízás": "поручение",
+    "befizetés": "внесение", "kifizetés": "выплата",
 }
 
 _PHRASE_KEYS_SORTED = sorted(_PHRASE_DICT.keys(), key=len, reverse=True)
-
-_TRANSLATE_KEYS_SORTED = sorted(_TRANSLATION_DICT.keys(), key=len, reverse=True)
-_TRANSLATE_PATTERN = re.compile(
+_WORD_KEYS_SORTED = sorted(_WORD_DICT.keys(), key=len, reverse=True)
+_WORD_PATTERN = re.compile(
     r'(?<![A-Za-zÀ-ÖØ-öø-ÿĀ-žА-Яа-я])'
-    r'(' + '|'.join(re.escape(k) for k in _TRANSLATE_KEYS_SORTED) + r')'
+    r'(' + '|'.join(re.escape(k) for k in _WORD_KEYS_SORTED) + r')'
     r'(?![A-Za-zÀ-ÖØ-öø-ÿĀ-žА-Яа-я])',
     re.IGNORECASE,
 )
 
 
-def _translate_repl(m: re.Match) -> str:
+def _word_repl(m: re.Match) -> str:
     key = m.group(1).lower()
-    return _TRANSLATION_DICT.get(key, m.group(0))
+    return _WORD_DICT.get(key, m.group(0))
 
 
 def translate_to_russian(text: str) -> str:
@@ -1585,13 +1652,14 @@ def translate_to_russian(text: str) -> str:
     placeholders: List[Tuple[str, str]] = []
     for i, key in enumerate(_PHRASE_KEYS_SORTED):
         pattern = re.compile(re.escape(key), re.IGNORECASE)
+
         def repl(m, _i=i, _key=key):
             translated = _PHRASE_DICT.get(_key, m.group(0))
             ph = f"\x00PH{_i}\x00"
             placeholders.append((ph, translated))
             return ph
         s = pattern.sub(repl, s)
-    s = _TRANSLATE_PATTERN.sub(_translate_repl, s)
+    s = _WORD_PATTERN.sub(_word_repl, s)
     for ph, translated in placeholders:
         s = s.replace(ph, translated)
     s = re.sub(r'\s+', ' ', s).strip()
@@ -1613,78 +1681,35 @@ def translate_description_inline(original: str) -> str:
     return f"{orig} ({translated})"
 
 
-# ==================== [NEW-SMART-COUNTERPARTY] ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
+# ==================== [FIX-COUNTERPARTY-TRUNCATION] ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
 
-_BANK_SERVICE_MARKERS = [
-    'начальный остаток', 'конечный остаток', 'входящий остаток', 'исходящий остаток',
-    'opening balance', 'closing balance', 'starting balance', 'ending balance',
-    'saldo počáteční', 'saldo konečné', 'sākuma atlikums', 'beigu atlikums',
-    'nyitó egyenleg', 'záró egyenleg',
-    'acc. maintenance', 'account maintenance', 'banking charges',
-    'account maintenance charges', 'netbankár havi díj', 'netbankar havi dij',
-    'subscription fee for', 'popl.', 'poplatek', 'urok do', 'úrok do',
-    'úrok', 'kamatjóváírás', 'kamat',
-    'txn fee', 'transaction fee', 'foreign exchange transaction fee',
-    'tranzakciós díj', 'tranzakcios dij', 'tranzakciós díjrész',
-    'comission', 'commission', 'charge for', 'charges',
-    'dövrün sonuna balans', 'dovrun sonuna balans',
-    'hesaba mədaxil', 'hesaba medaxil',
-    'internal payment', 'outgoing xohks payment', 'incoming swift payment',
-    'outward clearing cheque', 'online international money transfer',
-    'funds transfer charges', 'corr.bank.charges', 'value added tax - output',
-    'currency exchange', 'sepa átutalás jóváírása', 'sepa átutalás',
-    'giro átutalás', 'bankon belüli átutalás', 'napközbeni forint átvezetés',
-    'sms service fee', 'sms service', 'metal membership',
-    'charge accounting', 'místo:', 'misto:',
-    'transfer own funds', 'перевод own funds',
-    'message', 'notprovided',
-    'bankon belüli', 'átutalás', 'jóváírása', 'terhelése',
-    'készpénzfelvétel', 'készpénzbefizetés',
-    'atm withdrawal', 'atm', 'cash withdrawal', 'cash deposit',
-    'card payment', 'pos payment',
-]
-
-
-def _is_service_description(desc: str) -> bool:
-    if not desc:
-        return False
-    low = desc.lower().strip()
-    for m in _BANK_SERVICE_MARKERS:
-        if m in low:
-            return True
-    return False
-
-
+# Минимальный набор «мусорных» паттернов.
+# НЕ трогаем фамилии, названия компаний, короткие слова (AS, SIA).
 _JUNK_PATTERNS = [
-    r'\b[A-Z]{2}\d{2}[A-Z0-9]{10,}\b',
-    r'\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2,5}\b',
+    r'\b[A-Z]{2}\d{2}[A-Z0-9]{12,}\b',     # IBAN без пробелов
+    r'\b[A-Z]{2}\d{2}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\b',  # IBAN с пробелами
     r'\bREF\b[^\s]*', r'\bSRN\b[^\s]*', r'\bREC\b[^\s]*',
     r'\bROC\b[^\s]*', r'\bMCC\d+\b', r'\bTOC-[A-Z0-9\-]+\b',
     r'\bT_[A-F0-9]{10,}\b',
-    r'\b\d{10,}\b',
-    r'\+\d[\d\s\(\)\-]{6,}',
-    r'\b[A-Z]{2}\d{2}[A-Z]{4}\d{10,}\b',
+    r'\b\d{10,}\b',                         # длинные цифры
+    r'\+?\d[\d\s\(\)\-]{8,}',               # телефоны
     r'\bLV\d{2}[A-Z]{4}\d{10,}\b',
     r'\bLT\d{2}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b',
     r'\bEE\d{2}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b',
     r'\bAZ\d{2}[A-Z]{4}\d{16,}\b',
     r'\bAE\d{2}\s?\d{3,}\b',
-    r'\b[A-Z]{2}\d{2}\s?[A-Z0-9 ]{10,}\b',
-    r'_x000D_', r'\r', r'\n',
-    r'\b[A-Z0-9]{4,}\*[A-Z0-9]+\b',
-    r'\\[a-zA-Z]{2,}\b',
-    r'\b[A-Z]-\d+[A-Z0-9]*\b',
-    r'\b[A-Z]-\d+[A-Z0-9]*/[A-Z0-9]*\b',
-    r'/[A-Z]/?',
-    r'\\',
-    r'\b\d{5,}(?:[A-Z0-9]*)\b',
+    r'\b\d{4}-\d{2}-\d{2}\b',               # ISO-дата
+    r'\b\d{2}\.\d{2}\.\d{4}\b',             # дата DD.MM.YYYY
+    r'_x000D_', r'[\r\n\t]+',
+    r'\\[a-zA-Z]{2,}\b',                    # \x, \t и пр.
 ]
 
 
-def _strip_junk(s: str) -> str:
+def _strip_junk_soft(s: str) -> str:
+    """Мягкая очистка: убирает только явный мусор, не режет слова."""
     if not s:
         return ''
-    out = s
+    out = str(s)
     for pat in _JUNK_PATTERNS:
         out = re.sub(pat, ' ', out, flags=re.IGNORECASE)
     out = re.sub(r'[\*\|<>]+', ' ', out)
@@ -1693,23 +1718,36 @@ def _strip_junk(s: str) -> str:
     return out
 
 
-def _clean_counterparty_name(name: str) -> str:
+def _clean_counterparty_name(name: str, keep_full: bool = False) -> str:
+    """
+    Мягкая очистка имени контрагента.
+    НЕ режет слова вроде 'Kumbhani', 'Peram', 'Thumar', 'Sreenivasan',
+    'Pesetskii', 'Putniece', 'Voronina', 'Kiselova', 'Straume',
+    'Lielmanis', 'Bodnieks', 'Denisko', 'Serebrjakova', 'Kaur',
+    'Jose', 'Fiore', 'Dipak', 'Rahul', 'Sagar', 'AS', 'SIA'.
+    """
     if not name:
         return ''
     s = str(name).strip()
-    s = _strip_junk(s)
-    for sep in [' | ', ' • ', ' — ', ' – ']:
-        if sep in s:
-            parts = [p.strip() for p in s.split(sep) if p.strip()]
-            candidates = [p for p in parts if not _is_service_description(p)]
-            if candidates:
-                candidates.sort(key=len, reverse=True)
-                s = candidates[0]
-            else:
-                s = parts[0]
-            break
-    s = re.sub(r'\s*\([^)]*\)\s*$', '', s).strip()
+    s = _strip_junk_soft(s)
+
+    if not keep_full:
+        for sep in [' | ', ' • ', ' — ', ' – ']:
+            if sep in s:
+                parts = [p.strip() for p in s.split(sep) if p.strip()]
+                candidates = [p for p in parts
+                              if p and re.search(r'[A-Za-zÀ-ÿĀ-žА-Яа-я]{2,}', p)]
+                if candidates:
+                    candidates.sort(key=len, reverse=True)
+                    s = candidates[0]
+                else:
+                    s = parts[0]
+                break
+
+    # Убираем завершающие скобки (номера, коды) — только если внутри цифры/коды
+    s = re.sub(r'\s*\(\s*[\dA-Z]{4,}\s*\)\s*$', '', s).strip()
     s = s.strip(' .,;:-–—/\\')
+
     if len(s) < 2:
         return ''
     if re.fullmatch(r'[\d\s.,\-/\\]+', s):
@@ -1718,182 +1756,138 @@ def _clean_counterparty_name(name: str) -> str:
 
 
 def _looks_like_bank_name(s: str) -> bool:
+    """Проверка: похоже ли имя на название банка (не контрагента)."""
     if not s:
         return False
-    low = s.lower()
+    low = str(s).lower()
     bank_words = [
         'bank', 'payments', 'finance', 'revolut', 'paysera', 'wise',
-        'sepa', 'transfer', 'csob', 'unicredit', 'tinkoff', 'bluor',
-        'industra', 'pasha', 'mashreq', 'wio', 'n26', 'mkb', 'fio',
-        'kapital', 'rak', 'fio banka',
+        'sepa', 'csob', 'unicredit', 'tinkoff', 'bluor',
+        'industra', 'pasha', 'mashreq', 'wio bank', 'n26', 'mkb',
+        'fio banka', 'kapital bank', 'rak bank',
+        'swedbank', 'seb banka', 'luminor',
     ]
+    # ВАЖНО: 'AS' и 'SIA' НЕ считаются банком
+    if low in ('as', 'sia', 'llc', 'ltd', 'inc'):
+        return False
     return any(w in low for w in bank_words)
 
 
-_NAME_PATTERNS = [
-    (r'\bMoney added from\s+(.+)$', 1),
-    (r'\bMoney received from\s+(.+)$', 1),
-    (r'\bMoney sent to\s+(.+)$', 1),
-    (r'^\s*From\s+(.+)$', 1),
-    (r'^\s*To\s+(.+)$', 1),
-    (r'\bсписан[ао]?\s+(?:на\s+сумму\s+[\d\s.,]+\s*[A-Z]{0,3},?\s*)?(.+)$', 1),
-    (r'\bоплата\s+(.+)$', 1),
-    (r'\bперевод\s+в\s+адрес\s+(.+)$', 1),
-    (r'\b(?:payment|transfer|paid|sent)\s+to\s+(.+)$', 1),
-    (r'\bFrom:\s*(.+)$', 1),
-    (r'\bTo:\s*(.+)$', 1),
-    (r'\bсписана\s+(?:у\s+)?(.+)$', 1),
-]
+# --- Спец-парсеры для банков ---
 
-
-def _extract_name_by_patterns(desc: str) -> str:
+def _extract_revolut_name(desc: str,
+                           account_name: str = '',
+                           payer: str = '',
+                           beneficiary: str = '',
+                           sender_name: str = '') -> str:
+    """
+    Revolut: приоритет Beneficiary → Sender name → Payer → Description.
+    """
+    for cand in (beneficiary, sender_name, payer):
+        c = str(cand).strip() if cand else ''
+        if c and c.lower() not in ('nan', 'none', 'n/a', '-'):
+            cleaned = _clean_counterparty_name(c, keep_full=True)
+            if cleaned and len(cleaned) >= 2 and not _looks_like_bank_name(cleaned):
+                return cleaned
     if not desc:
         return ''
-    for pat, grp in _NAME_PATTERNS:
-        m = re.search(pat, desc, re.IGNORECASE)
-        if m:
-            cand = m.group(grp).strip()
-            cand = _clean_counterparty_name(cand)
-            if cand and len(cand) >= 2 and not _looks_like_bank_name(cand) \
-                    and not _is_service_description(cand):
-                return cand
+    s = str(desc).strip()
+    for prefix in ['Money added from ', 'Money received from ', 'Money sent to ',
+                   'From ', 'To ']:
+        if s.lower().startswith(prefix.lower()):
+            rest = s[len(prefix):].strip()
+            for sep in [' | ', ' • ']:
+                if sep in rest:
+                    rest = rest.split(sep, 1)[0].strip()
+                    break
+            cleaned = _clean_counterparty_name(rest, keep_full=True)
+            if cleaned and len(cleaned) >= 2:
+                return cleaned
     return ''
 
 
-def _extract_wio_name(desc: str) -> str:
+def _extract_paysera_name(desc: str,
+                           account_name: str = '',
+                           payer: str = '',
+                           beneficiary: str = '',
+                           raw_cp: str = '') -> str:
+    """
+    Paysera: приоритет raw_cp (сырая колонка «Получатель / Плательщик») →
+    beneficiary → payer → Description.
+    """
+    if raw_cp:
+        c = str(raw_cp).strip()
+        if c and c.lower() not in ('nan', 'none', 'n/a', '-', ''):
+            # НЕ режем имя, только убираем IBAN в конце и коды
+            cleaned = re.sub(r'\s+\(?\s*\d{6,}\s*\)?\s*$', '', c)
+            cleaned = re.sub(r'\s+[A-Z]{2}\d{2}[A-Z0-9]{10,}\s*$', '', cleaned)
+            cleaned = re.sub(r'\s+\([A-Z0-9]{4,}\)\s*$', '', cleaned)
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip(' .,;:-')
+            if cleaned and len(cleaned) >= 2:
+                return cleaned
+
+    for cand in (beneficiary, payer):
+        if cand:
+            c = str(cand).strip()
+            if c.lower() in ('nan', 'none', 'n/a', '-', ''):
+                continue
+            cleaned = re.sub(r'\(\s*[A-Z0-9]+\s*\)\s*$', '', c)
+            cleaned = re.sub(r'\s+\(.*?\)\s*$', '', cleaned)
+            cleaned = re.sub(r'\s+[A-Z]\d{4,}\s*$', '', cleaned)
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip(' .,;:-')
+            if cleaned and len(cleaned) >= 2:
+                return cleaned
+
     if not desc:
         return ''
-    s = desc.strip()
-    if '|' in s:
-        s = s.split('|')[0].strip()
-    m = re.match(r'^([A-Za-z][A-Za-z0-9\.\-_ ]{2,40}?)\s*\*', s)
-    if m:
-        name = m.group(1).strip()
-        if name:
-            return _clean_counterparty_name(name)
-    m = re.match(r'^(GOOGLE|FACEBOOK|FACEBK|APPLE|AMAZON|MICROSOFT|TIKTOK|META|DEBCARD|VISA|MASTERCARD)\b',
-                 s, re.IGNORECASE)
-    if m:
-        return m.group(1).upper()
-    s = _strip_junk(s)
-    if not s:
+    s = str(desc).strip()
+    if 'плата за обслуживание' in s.lower():
+        return 'Paysera LT'
+    if re.match(r'^(sent|sutits|inviato)\s+', s, re.IGNORECASE):
         return ''
-    words = s.split()
-    out = []
-    for w in words:
-        if re.fullmatch(r'[\d.,\-/\\]+', w):
-            continue
-        if w.lower() in ('for', 'internationalcardspend', 'and', 'the', 'of'):
-            break
-        out.append(w)
-        if len(out) >= 4:
-            break
-    return _clean_counterparty_name(' '.join(out))
-
-
-def _extract_pasha_name(desc: str) -> str:
-    if not desc:
-        return ''
-    s = desc.strip()
-    low = s.lower()
-    if low.startswith('charge for'):
-        return 'Pasha Bank'
-    if 'currency exchange' in low:
-        return 'Pasha Bank'
-    if low.startswith('internal payment'):
-        m = re.match(r'internal payment\s+(.+)$', s, re.IGNORECASE)
-        if m:
-            return _clean_counterparty_name(m.group(1))
-        return 'Pasha Bank'
-    if low.startswith('outgoing xohks payment'):
-        m = re.match(r'outgoing xohks payment\s+(.+)$', s, re.IGNORECASE)
-        if m:
-            return _clean_counterparty_name(m.group(1))
-        return 'Pasha Bank'
-    if low.startswith('salary and other payments'):
-        return 'Salary transfer'
-    if 'hesaba mədaxil' in low or 'hesaba medaxil' in low:
-        return 'Cash deposit'
-    if 'korpon' in low or 'terminalindan' in low:
-        return 'Cash deposit'
-    if 'dövrün sonuna balans' in low or 'dovrun sonuna balans' in low:
-        return ''
-    return _clean_counterparty_name(s)
-
-
-def _extract_mashreq_name(desc: str) -> str:
-    if not desc:
-        return ''
-    s = desc.strip()
-    low = s.lower()
-    if 'outward clearing cheque' in low:
-        return 'Outward clearing cheque'
-    if 'inward remittance' in low:
-        return 'Inward remittance'
-    if 'value added tax' in low:
-        return 'VAT'
-    if 'corr.bank.charges' in low:
-        return 'Corr. bank charges'
-    if 'online international money transfer' in low:
-        return 'Online transfer'
-    if 'funds transfer charges' in low:
-        return 'Funds transfer charges'
-    m = re.search(r'\bIPP\s+TRANSFER\b[^\-]*-\s*(.+?)\s*-\s*/', s, re.IGNORECASE)
-    if m:
-        return _clean_counterparty_name(m.group(1))
-    m = re.search(r'-\s*([A-Z][A-Z\s\.\&]{3,60}?)\s*-\s*/', s)
-    if m:
-        return _clean_counterparty_name(m.group(1))
     return ''
 
 
-def _extract_regina_alfa_name(desc: str) -> str:
+def _extract_industra_name(desc: str,
+                            account_name: str = '',
+                            payer: str = '',
+                            beneficiary: str = '',
+                            raw_cp: str = '') -> str:
+    """
+    Industra: приоритет raw_cp → beneficiary → payer → Description.
+    """
+    if raw_cp:
+        c = str(raw_cp).strip()
+        if c and c.lower() not in ('nan', 'none', 'n/a', '-', ''):
+            cleaned = re.sub(r'\s+\d{6,}.*$', '', c)
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip(' .,;:-')
+            if cleaned and len(cleaned) >= 2:
+                return cleaned
+
+    for cand in (beneficiary, payer):
+        if cand:
+            c = str(cand).strip()
+            if c.lower() in ('nan', 'none', 'n/a', '-', ''):
+                continue
+            cleaned = re.sub(r'\s+\d{6,}.*$', '', c)
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip(' .,;:-')
+            if cleaned and len(cleaned) >= 2:
+                return cleaned
+
     if not desc:
         return ''
-    s = desc.strip()
-    m = re.match(r'^(CRD_[A-Z0-9]+)', s)
+    low = desc.lower()
+    if 'комиссия за банковскую операцию' in low:
+        return 'Industra Bank'
+    if 'проводка мемориальным ордером' in low:
+        return 'Industra Bank'
+    m = re.search(r'(?:Исходящее перечисление|Перечисление между клиентами банка|'
+                  r'Зачисление входящего платежа на счет клиента)\s*,\s*'
+                  r'([^,]+)', desc, re.IGNORECASE)
     if m:
-        mcc = re.search(r'MCC(\d{4})', s)
-        place = re.search(r'место совершения операции:\s*(.+?)(?:MCC|$)', s)
-        if place:
-            place_s = place.group(1).strip()
-            place_s = re.sub(r'^[0-9A-Z]{4,}\\[A-Z]{2}\\', '', place_s)
-            place_s = _clean_counterparty_name(place_s)
-            if place_s:
-                return place_s
-        if mcc:
-            return f"MCC{mcc.group(1)}"
-        return 'Card payment'
-    m = re.match(r'^(C\d{10,})', s)
-    if m:
-        m2 = re.search(r'через Систему быстрых платежей (?:от|на)\s+([^\.]+)', s)
-        if m2:
-            return _clean_counterparty_name(m2.group(1))
-        return 'СБП перевод'
-    return ''
-
-
-def _extract_wise_name(desc: str) -> str:
-    if not desc:
-        return ''
-    m = re.search(r'списан[ао]?\s+(.+?)(?:\s*\(|$)', desc, re.IGNORECASE)
-    if m:
-        return _clean_counterparty_name(m.group(1))
-    return ''
-
-
-def _extract_revolut_name(desc: str, account_name: str = '') -> str:
-    if not desc:
-        return ''
-    m = re.search(r'\bMoney added from\s+(.+?)(?:\s*\||$)', desc, re.IGNORECASE)
-    if m:
-        return _clean_counterparty_name(m.group(1))
-    m = re.search(r'^\s*From\s+(.+?)(?:\s*\||$)', desc, re.IGNORECASE)
-    if m:
-        return _clean_counterparty_name(m.group(1))
-    m = re.search(r'^\s*To\s+(.+?)(?:\s*\||$)', desc, re.IGNORECASE)
-    if m:
-        return _clean_counterparty_name(m.group(1))
+        cleaned = _clean_counterparty_name(m.group(1), keep_full=True)
+        if cleaned:
+            return cleaned
     return ''
 
 
@@ -1970,14 +1964,116 @@ def _extract_tinkoff_name(desc: str) -> str:
     return ''
 
 
-def _extract_industra_name(desc: str) -> str:
+def _extract_wio_name(desc: str) -> str:
     if not desc:
         return ''
-    low = desc.lower()
-    if 'комиссия за обслуживание' in low:
-        return 'Industra Bank'
-    if 'комиссия за банковскую операцию' in low:
-        return 'Industra Bank'
+    s = desc.strip()
+    if '|' in s:
+        s = s.split('|')[0].strip()
+    m = re.match(r'^([A-Za-z][A-Za-z0-9\.\-_ ]{2,40}?)\s*\*', s)
+    if m:
+        name = m.group(1).strip()
+        if name:
+            return _clean_counterparty_name(name, keep_full=True)
+    m = re.match(r'^(GOOGLE|FACEBOOK|FACEBK|APPLE|AMAZON|MICROSOFT|TIKTOK|META|'
+                 r'DEBCARD|VISA|MASTERCARD)\b', s, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    s = _strip_junk_soft(s)
+    if not s:
+        return ''
+    words = s.split()
+    out = []
+    for w in words:
+        if re.fullmatch(r'[\d.,\-/\\]+', w):
+            continue
+        if w.lower() in ('for', 'internationalcardspend', 'and', 'the', 'of'):
+            break
+        out.append(w)
+        if len(out) >= 4:
+            break
+    return _clean_counterparty_name(' '.join(out), keep_full=True)
+
+
+def _extract_pasha_name(desc: str) -> str:
+    if not desc:
+        return ''
+    s = desc.strip()
+    low = s.lower()
+    if low.startswith('charge for'):
+        return 'Pasha Bank'
+    if 'currency exchange' in low:
+        return 'Pasha Bank'
+    if low.startswith('internal payment'):
+        m = re.match(r'internal payment\s+(.+)$', s, re.IGNORECASE)
+        if m:
+            return _clean_counterparty_name(m.group(1), keep_full=True)
+        return 'Pasha Bank'
+    if low.startswith('outgoing xohks payment'):
+        m = re.match(r'outgoing xohks payment\s+(.+)$', s, re.IGNORECASE)
+        if m:
+            return _clean_counterparty_name(m.group(1), keep_full=True)
+        return 'Pasha Bank'
+    if low.startswith('salary and other payments'):
+        return 'Salary transfer'
+    if 'hesaba mədaxil' in low or 'hesaba medaxil' in low:
+        return 'Cash deposit'
+    if 'korpon' in low or 'terminalindan' in low:
+        return 'Cash deposit'
+    if 'dövrün sonuna balans' in low or 'dovrun sonuna balans' in low:
+        return ''
+    return _clean_counterparty_name(s, keep_full=True)
+
+
+def _extract_mashreq_name(desc: str) -> str:
+    if not desc:
+        return ''
+    s = desc.strip()
+    low = s.lower()
+    if 'outward clearing cheque' in low:
+        return 'Outward clearing cheque'
+    if 'inward remittance' in low:
+        return 'Inward remittance'
+    if 'value added tax' in low:
+        return 'VAT'
+    if 'corr.bank.charges' in low:
+        return 'Corr. bank charges'
+    if 'online international money transfer' in low:
+        return 'Online transfer'
+    if 'funds transfer charges' in low:
+        return 'Funds transfer charges'
+    m = re.search(r'\bIPP\s+TRANSFER\b[^\-]*-\s*(.+?)\s*-\s*/', s, re.IGNORECASE)
+    if m:
+        return _clean_counterparty_name(m.group(1), keep_full=True)
+    m = re.search(r'-\s*([A-Z][A-Z\s\.\&]{3,60}?)\s*-\s*/', s)
+    if m:
+        return _clean_counterparty_name(m.group(1), keep_full=True)
+    return ''
+
+
+def _extract_regina_alfa_name(desc: str) -> str:
+    if not desc:
+        return ''
+    s = desc.strip()
+    m = re.match(r'^(CRD_[A-Z0-9]+)', s)
+    if m:
+        mcc = re.search(r'MCC(\d{4})', s)
+        place = re.search(r'место совершения операции:\s*(.+?)(?:MCC|$)', s)
+        if place:
+            place_s = place.group(1).strip()
+            place_s = re.sub(r'^[0-9A-Z]{4,}\\[A-Z]{2}\\', '', place_s)
+            place_s = _clean_counterparty_name(place_s, keep_full=True)
+            if place_s:
+                return place_s
+        if mcc:
+            return f"MCC{mcc.group(1)}"
+        return 'Card payment'
+    m = re.match(r'^(C\d{10,})', s)
+    if m:
+        m2 = re.search(r'через Систему быстрых платежей (?:от|на)\s+([^\.]+)', s)
+        if m2:
+            return _clean_counterparty_name(m2.group(1), keep_full=True)
+        return 'СБП перевод'
     return ''
 
 
@@ -1986,14 +2082,13 @@ def _extract_kapital_name(desc: str) -> str:
         return ''
     s = str(desc).strip()
     low = s.lower()
-
     if 'sms service fee' in low or 'sms service' in low:
         return 'Kapital Bank'
-
     m = re.match(
         r'^\s*\d{10,}\s+'
         r'([A-ZƏÜÖĞİŞÇ][A-ZƏÜÖĞİŞÇ\s]{2,80}?)'
-        r'(?:\s+(?:Qeyri|Köçürmə|Kocurma|Əməliyyat|Emeliyyat|Kart|Hesab|Оплата|Перевод|Комиссия|Mədaxil|Medaxil|Məxaric|Mexaric|->|→|>).*)?$',
+        r'(?:\s+(?:Qeyri|Köçürmə|Kocurma|Əməliyyat|Emeliyyat|Kart|Hesab|Оплата|'
+        r'Перевод|Комиссия|Mədaxil|Medaxil|Məxaric|Mexaric|->|→|>).*)?$',
         s, re.IGNORECASE
     )
     if m:
@@ -2001,114 +2096,151 @@ def _extract_kapital_name(desc: str) -> str:
         name = re.sub(r'\s+', ' ', name)
         if name and len(name) >= 3:
             return name
-
     if low in ('sms service fee', 'sms xidməti'):
         return 'Kapital Bank'
-
-    cleaned = _clean_counterparty_name(s)
+    cleaned = _clean_counterparty_name(s, keep_full=True)
     return cleaned
+
+
+def _extract_name_by_patterns(desc: str) -> str:
+    if not desc:
+        return ''
+    patterns = [
+        (r'\bMoney added from\s+(.+?)(?:\s*\||$)', 1),
+        (r'\bMoney received from\s+(.+?)(?:\s*\||$)', 1),
+        (r'\bMoney sent to\s+(.+?)(?:\s*\||$)', 1),
+        (r'^\s*From\s+(.+?)(?:\s*\||$)', 1),
+        (r'^\s*To\s+(.+?)(?:\s*\||$)', 1),
+        (r'\bpayment\s+to\s+(.+?)(?:\s*\||$)', 1),
+        (r'\btransfer\s+to\s+(.+?)(?:\s*\||$)', 1),
+        (r'\bFrom:\s*(.+?)(?:\s*\||$)', 1),
+        (r'\bTo:\s*(.+?)(?:\s*\||$)', 1),
+        (r'\bсписан[ао]?\s+(?:на\s+сумму\s+[\d\s.,]+\s*[A-Z]{0,3},?\s*)?(.+?)(?:\s*\||$)', 1),
+        (r'\bоплата\s+(.+?)(?:\s*\||$)', 1),
+        (r'\bперевод\s+в\s+адрес\s+(.+?)(?:\s*\||$)', 1),
+        (r'\b(?:payment|transfer|paid|sent)\s+to\s+(.+?)(?:\s*\||$)', 1),
+    ]
+    for pat, grp in patterns:
+        m = re.search(pat, desc, re.IGNORECASE)
+        if m:
+            cand = m.group(grp).strip()
+            cleaned = _clean_counterparty_name(cand, keep_full=True)
+            if cleaned and len(cleaned) >= 2 and not _looks_like_bank_name(cleaned):
+                return cleaned
+    return ''
 
 
 def extract_counterparty_smart(description: str,
                                 account_name: str = '',
                                 payer: str = '',
-                                beneficiary: str = '') -> Tuple[str, str]:
+                                beneficiary: str = '',
+                                raw_cp: str = '',
+                                sender_name: str = '') -> Tuple[str, str]:
+    """
+    Возвращает (cp, desc).
+    Приоритет источников:
+      1) raw_cp (сырая колонка «Получатель / Плательщик» из Paysera/Industra)
+      2) beneficiary (Beneficiary name из Revolut)
+      3) sender_name (Sender name из Revolut)
+      4) payer (Payer из Revolut)
+      5) спец-парсер по имени счёта
+      6) шаблоны из description
+      7) эвристика
+    """
     desc = (description or '').strip()
     acc_low = (account_name or '').lower()
 
-    if beneficiary:
-        b = beneficiary.strip()
-        if b and b.lower() not in ('nan', 'none', 'n/a', '-') and not _looks_like_bank_name(b):
-            return (_clean_counterparty_name(b), desc)
-    if payer:
-        p = payer.strip()
-        if p and p.lower() not in ('nan', 'none', 'n/a', '-') and not _looks_like_bank_name(p):
-            return (_clean_counterparty_name(p), desc)
+    # --- 1) Прямые кандидаты (без агрессивной чистки) ---
+    for label, cand in [('raw_cp', raw_cp), ('beneficiary', beneficiary),
+                        ('sender_name', sender_name), ('payer', payer)]:
+        if not cand:
+            continue
+        c = str(cand).strip()
+        if not c or c.lower() in ('nan', 'none', 'n/a', '-'):
+            continue
+        cleaned = re.sub(r'\s+\(?\s*\d{6,}\s*\)?\s*$', '', c)
+        cleaned = re.sub(r'\s+[A-Z]{2}\d{2}[A-Z0-9]{10,}\s*$', '', cleaned)
+        cleaned = re.sub(r'\s+\([A-Z0-9]{4,}\)\s*$', '', cleaned)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip(' .,;:-')
+        if cleaned and len(cleaned) >= 2 and not _looks_like_bank_name(cleaned):
+            return (_to_scalar_str(cleaned), _to_scalar_str(desc))
 
     if not desc:
         return ('', '')
 
+    # --- 2) Спец-парсеры ---
     cp = ''
 
-    if 'wise' in acc_low or 'saida wise' in acc_low:
-        cp = _extract_wise_name(desc)
-
-    if not cp and 'wio' in acc_low:
-        cp = _extract_wio_name(desc)
-
-    if not cp and ('pasha' in acc_low or 'bunda' in acc_low):
-        cp = _extract_pasha_name(desc)
-
-    if not cp and ('mashreq' in acc_low or 'nomiqa' in acc_low):
-        cp = _extract_mashreq_name(desc)
-
-    if not cp and ('regina alfa' in acc_low):
-        cp = _extract_regina_alfa_name(desc)
-
-    if not cp and ('revolut' in acc_low):
-        cp = _extract_revolut_name(desc, account_name)
-
-    if not cp and ('csob' in acc_low or 'jenhor' in acc_low or 'jenisov' in acc_low
-                   or 'dzibik' in acc_low or 'džibik' in acc_low
-                   or 'rr ' in acc_low or 'koruna strojka' in acc_low):
+    if 'revolut' in acc_low:
+        cp = _extract_revolut_name(desc, account_name, payer,
+                                    beneficiary, sender_name)
+    if not cp and 'paysera' in acc_low:
+        cp = _extract_paysera_name(desc, account_name, payer,
+                                    beneficiary, raw_cp)
+    if not cp and ('industra' in acc_low or 'plavas' in acc_low
+                   or 'kl59' in acc_low):
+        cp = _extract_industra_name(desc, account_name, payer,
+                                     beneficiary, raw_cp)
+    if not cp and ('csob' in acc_low or 'jenhor' in acc_low
+                   or 'jenisov' in acc_low or 'dzibik' in acc_low
+                   or 'džibik' in acc_low or 'rr ' in acc_low
+                   or 'koruna strojka' in acc_low):
         cp = _extract_csob_name(desc)
-
-    if not cp and ('unicredit' in acc_low or 'garpiz' in acc_low or 'twohills' in acc_low
-                   or 'koruna' in acc_low or 'b1 estate' in acc_low):
+    if not cp and ('unicredit' in acc_low or 'garpiz' in acc_low
+                   or 'twohills' in acc_low or 'koruna' in acc_low
+                   or 'b1 estate' in acc_low):
         cp = _extract_unicredit_name(desc)
-
     if not cp and 'bluor' in acc_low:
         cp = _extract_bluor_name(desc)
-
     if not cp and ('mkb' in acc_low or 'budapest' in acc_low):
         cp = _extract_mkb_name(desc)
-
     if not cp and 'tinkoff' in acc_low:
         cp = _extract_tinkoff_name(desc)
-
-    if not cp and 'industra' in acc_low:
-        cp = _extract_industra_name(desc)
-
+    if not cp and 'wio' in acc_low:
+        cp = _extract_wio_name(desc)
+    if not cp and ('pasha' in acc_low or 'bunda' in acc_low):
+        cp = _extract_pasha_name(desc)
+    if not cp and ('mashreq' in acc_low or 'nomiqa' in acc_low):
+        cp = _extract_mashreq_name(desc)
     if not cp and ('kapital' in acc_low or ('saida' in acc_low and 'azn' in acc_low)):
         cp = _extract_kapital_name(desc)
+    if not cp and 'regina alfa' in acc_low:
+        cp = _extract_regina_alfa_name(desc)
+    if not cp and 'wise' in acc_low:
+        cp = _extract_wio_name(desc)
 
+    # --- 3) Шаблоны из описания ---
     if not cp:
         cp = _extract_name_by_patterns(desc)
 
+    # --- 4) Эвристика ---
     if not cp:
         parts = re.split(r'[|•;]', desc)
         for p in parts:
-            p_clean = _strip_junk(p.strip())
+            p_clean = _clean_counterparty_name(p.strip(), keep_full=True)
             if not p_clean or len(p_clean) < 3:
-                continue
-            if _is_service_description(p_clean):
                 continue
             if _looks_like_bank_name(p_clean):
                 continue
-            if re.search(r'[A-Za-zА-Яа-я]{3,}', p_clean) and not re.fullmatch(r'[\d\s.,\-/\\]+', p_clean):
-                cp = _clean_counterparty_name(p_clean)
+            if re.search(r'[A-Za-zÀ-ÿĀ-žА-Яа-я]{3,}', p_clean) \
+                    and not re.fullmatch(r'[\d\s.,\-/\\]+', p_clean):
+                cp = p_clean
                 if cp:
                     break
 
+    # --- 5) Имя банка из названия счёта ---
     if not cp:
         m = re.search(
-            r'\b(CSOB|UniCredit|Revolut|Tinkoff|Paysera|Wise|BluOr|Industra|Pasha|Mashreq|WIO|N26|MKB|FIO|Kapital|RAK|ČSOB)\b',
+            r'\b(CSOB|UniCredit|Revolut|Tinkoff|Paysera|Wise|BluOr|Industra|'
+            r'Pasha|Mashreq|WIO|N26|MKB|FIO|Kapital|RAK|ČSOB)\b',
             account_name, re.IGNORECASE
         )
         if m:
             cp = m.group(1)
-        else:
-            cp = ''
 
+    cp = _to_scalar_str(cp)
+    desc = _to_scalar_str(desc)
     return (cp, desc)
-
-
-def extract_counterparty_from_description(description: str,
-                                           payer: str = '',
-                                           beneficiary: str = '') -> Tuple[str, str]:
-    return extract_counterparty_smart(description, '', payer, beneficiary)
-
-
 # ==================== ФАЙЛОВЫЕ УТИЛИТЫ ====================
 
 def read_xlsx(file_content: bytes, sheet_name=None, header=None):
@@ -2324,8 +2456,13 @@ def _is_reasonable_amount(v: float) -> bool:
 
 
 def _cell_is_numeric(v) -> bool:
-    if v is None or pd.isna(v):
+    if v is None:
         return False
+    try:
+        if pd.isna(v):
+            return False
+    except Exception:
+        pass
     if isinstance(v, (int, float)):
         return True
     s = str(v).strip()
@@ -2394,7 +2531,7 @@ def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
                         description = val
                         break
             cp_final, _ = extract_counterparty_smart(
-                description, account_name, counterparty, ''
+                description, account_name, counterparty, '', ''
             )
             transactions.append({
                 'Дата': date, 'Сумма': amount,
@@ -3275,7 +3412,7 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
                     ttype = safe_str(row.iloc[ci['ttype']]) if 'ttype' in ci and ci['ttype'] < len(row) else ''
                     if not desc and ttype:
                         desc = ttype
-                    cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+                    cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
                     result.append({
                         'Дата': date, 'Сумма': amount,
                         'Контрагент': cp_final if cp_final else '',
@@ -3354,7 +3491,7 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
             ttype = parts[ci['ttype']] if 'ttype' in ci and ci['ttype'] < len(parts) else ''
             if not desc and ttype:
                 desc = ttype
-            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
@@ -3437,7 +3574,6 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             v = parse_amount(am.group(1))
             if v != 0.0 and _is_reasonable_amount(v):
                 amount = v
-                amount_end = am.end()
                 break
         if amount is None:
             continue
@@ -3480,7 +3616,6 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         desc = ', '.join(rest_parts).strip()
         if not desc:
             desc = head_clean
-
         if (not desc or desc.strip() in ('', ',')) and op_type:
             desc = op_type
 
@@ -3491,7 +3626,7 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if 'дебет' in low_chunk and ('(d)' in low_chunk or ' d ' in low_chunk):
             amount = -abs(amount)
 
-        cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+        cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
 
         result.append({
             'Дата': date,
@@ -3512,7 +3647,7 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return deduped
 
 
-# ==================== [FIX-KAPITAL-XLSX] Kapital bank Saida AZN (XLSX) ====================
+# ==================== Kapital bank Saida AZN (XLSX) ====================
 
 def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
     result: List[Dict] = []
@@ -3651,7 +3786,7 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
     return result
 
 
-# ==================== [FIX-KAPITAL-PDF] Kapital bank Saida AZN (PDF) ====================
+# ==================== Kapital bank Saida AZN (PDF) ====================
 
 def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result: List[Dict] = []
@@ -3779,7 +3914,6 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
 
         g2 = m.group(2)
         g3 = m.group(3)
-        g4 = m.group(4)
         desc = m.group(5).strip()
 
         def _split_stuck(s: str) -> Tuple[float, float]:
@@ -3838,7 +3972,7 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
     return deduped
 
 
-# ==================== [FIX-KAPITAL] Kapital bank Saida AZN (CSV) ====================
+# ==================== Kapital bank Saida AZN (CSV) ====================
 
 def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -4520,7 +4654,7 @@ def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = abs(amount)
             cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
             desc = safe_str(row.iloc[ci['purpose']]) if 'purpose' in ci and ci['purpose'] < len(row) else ''
-            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
@@ -4594,7 +4728,7 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             desc = purpose if purpose else f"{op_type}: {counterparty}"
-            cp_final, _ = extract_counterparty_smart(desc, account_name, counterparty, '')
+            cp_final, _ = extract_counterparty_smart(desc, account_name, counterparty, '', counterparty)
             if not cp_final:
                 cp_final = counterparty
             result.append({
@@ -4629,7 +4763,7 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
                 op_type = m.group(1).strip()
                 if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
-                cp_final, _ = extract_counterparty_smart(counterparty, account_name, counterparty, '')
+                cp_final, _ = extract_counterparty_smart(counterparty, account_name, counterparty, '', counterparty)
                 if not cp_final:
                     cp_final = counterparty
                 result.append({
@@ -4714,7 +4848,7 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         party_raw = re.sub(r'\s+', ' ', party_raw).strip()
         cp = party_raw.strip(' .,;:-')
 
-        cp_final, _ = extract_counterparty_smart(purpose, account_name, cp, '')
+        cp_final, _ = extract_counterparty_smart(purpose, account_name, cp, '', cp)
 
         result.append({
             'Дата': date,
@@ -4841,6 +4975,8 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
             ci['type'] = i
         elif hl == 'beneficiary name' and 'beneficiary' not in ci:
             ci['beneficiary'] = i
+        elif hl == 'sender name' and 'sender_name' not in ci:
+            ci['sender_name'] = i
     if 'date' not in ci:
         ci['date'] = 0
     if 'amount' not in ci:
@@ -4874,6 +5010,7 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = -abs(amount)
             payer = parts[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(parts) else ''
             beneficiary = parts[ci['beneficiary']] if 'beneficiary' in ci and ci['beneficiary'] < len(parts) else ''
+            sender_name = parts[ci['sender_name']] if 'sender_name' in ci and ci['sender_name'] < len(parts) else ''
             desc = parts[ci['description']] if ci['description'] < len(parts) else ''
             reference = parts[ci['reference']] if 'reference' in ci and ci['reference'] < len(parts) else ''
 
@@ -4881,7 +5018,10 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
             if reference and reference.strip() and reference.strip() != 'nan':
                 full_desc = f"{desc} | {reference}" if desc else reference
 
-            cp_final, _ = extract_counterparty_smart(full_desc, account_name, payer, beneficiary)
+            cp_final, _ = extract_counterparty_smart(
+                full_desc, account_name, payer, beneficiary,
+                '', sender_name
+            )
 
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -5081,7 +5221,7 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
                     if v and v != 'nan' and len(v) > 2 and not re.match(r'^[\d.,\-]+$', v) and not re.match(r'^\d{4}-\d{2}-\d{2}$', v):
                         desc = v
                         break
-            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
@@ -5147,7 +5287,7 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 cp = row[ci.get('counterparty', 9)] if ci.get('counterparty', 9) < len(row) else ''
                 desc = row[ci.get('description', 13)] if ci.get('description', 13) < len(row) else ''
-                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
                 result.append({
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
@@ -5487,7 +5627,7 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
             cp = re.sub(r'\s+', ' ', cp).strip()
             desc = desc.replace('_x000D_', ' ').replace('\r', ' ').replace('\n', ' ')
             desc = re.sub(r'\s+', ' ', desc).strip()
-            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
@@ -5541,7 +5681,7 @@ def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 desc = row[ci['description']] if 'description' in ci and ci['description'] < len(row) else ''
                 cp = row[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
                 result.append({
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
@@ -5555,7 +5695,7 @@ def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== Универсальный PDF fallback ====================
+# ==================== Универсальные парсеры ====================
 
 def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -5599,7 +5739,7 @@ def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 desc = row[desc_i] if desc_i >= 0 and desc_i < len(row) else ''
                 cp = row[cp_i] if cp_i >= 0 and cp_i < len(row) else ''
-                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
                 result.append({
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
@@ -5610,8 +5750,6 @@ def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
     return result
 
-
-# ==================== Общие CSV/XLSX/DOCX ====================
 
 def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -5656,7 +5794,7 @@ def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
             desc = parts[ci['description']] if 'description' in ci and ci['description'] < len(parts) else ''
             cp = parts[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(parts) else ''
-            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
@@ -5715,7 +5853,7 @@ def parse_xlsx_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 continue
             desc = safe_str(row.iloc[ci['description']]) if 'description' in ci and ci['description'] < len(row) else ''
             cp = safe_str(row.iloc[ci['counterparty']]) if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
@@ -5760,7 +5898,7 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
                 desc = cells[desc_i] if desc_i >= 0 and desc_i < len(cells) else ''
                 cp = cells[cp_i] if cp_i >= 0 and cp_i < len(cells) else ''
-                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
                 result.append({
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
@@ -6000,7 +6138,7 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== МАРШРУТИЗАЦИЯ ====================
+# ==================== МАРШРУТИЗАЦИЯ ПАРСЕРОВ ====================
 
 def get_parser_by_ext(account_name: str, ext: str):
     low = account_name.lower()
@@ -6245,8 +6383,6 @@ def get_parser_by_ext(account_name: str, ext: str):
     return None, None
 
 
-# ==================== ЦЕПОЧКА КАНДИДАТОВ ====================
-
 def _get_universal_for_type(real_type: str):
     if real_type == 'pdf':
         return parse_pdf_universal, 'pdf_universal'
@@ -6297,7 +6433,7 @@ def get_parser_chain(account_name: str, real_type: str, filename: str) -> List[T
         other_exts.append('.docx')
     for oe in other_exts:
         op, ok = get_parser_by_ext(account_name, oe)
-        _add(op, ok or f'{oe[1:]} _other')
+        _add(op, ok or f'{oe[1:]}_other')
 
     up, uk = _get_universal_for_type(real_type)
     _add(up, uk or f'{real_type}_universal')
@@ -6335,13 +6471,11 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
     if errors:
         msg += f' | errors: {errors}'
     return [], msg
-
-
 # ==================== СВОДКА ПО СЧЕТАМ ====================
 
 def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     columns = [
-        "Наименование счета",
+        "Наименование банка",
         "Количество приходных операций",
         "Сумма приходных операций",
         "Количество расходных операций",
@@ -6352,12 +6486,20 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
 
     df = pd.DataFrame(rows)
-    if "Наименование счета" not in df.columns or "Сумма" not in df.columns:
+    bank_col = None
+    if "Наименование банка" in df.columns:
+        bank_col = "Наименование банка"
+    elif "Наименование счета" in df.columns:
+        bank_col = "Наименование счета"
+    else:
+        return pd.DataFrame(columns=columns)
+
+    if "Сумма" not in df.columns:
         return pd.DataFrame(columns=columns)
 
     df = df.copy()
     df["Сумма"] = df["Сумма"].map(to_float_amount)
-    df["Наименование счета"] = df["Наименование счета"].fillna("").astype(str)
+    df[bank_col] = _safe_str_series(df[bank_col])
 
     mask_reasonable = df["Сумма"].abs() < MAX_REASONABLE_AMOUNT
     df = df[mask_reasonable].copy()
@@ -6370,7 +6512,7 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     df["_income_sum"] = df["Сумма"].where(df["_income"], 0.0)
     df["_expense_sum"] = (-df["Сумма"]).where(df["_expense"], 0.0)
 
-    grouped = df.groupby("Наименование счета", dropna=False)
+    grouped = df.groupby(bank_col, dropna=False)
 
     summary = pd.DataFrame({
         "Количество приходных операций": grouped["_income"].sum().astype(int),
@@ -6378,13 +6520,13 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
         "Количество расходных операций": grouped["_expense"].sum().astype(int),
         "Сумма расходных операций": grouped["_expense_sum"].sum(),
     }).reset_index()
+    summary = summary.rename(columns={bank_col: "Наименование банка"})
 
     summary["Сальдо операций"] = (
         summary["Сумма приходных операций"].astype(float)
         - summary["Сумма расходных операций"].astype(float)
     )
-
-    summary = summary.sort_values("Наименование счета").reset_index(drop=True)
+    summary = summary.sort_values("Наименование банка").reset_index(drop=True)
 
     summary["Сумма приходных операций"] = summary["Сумма приходных операций"].astype(float).round(2)
     summary["Сумма расходных операций"] = summary["Сумма расходных операций"].astype(float).round(2)
@@ -6393,7 +6535,7 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     return summary[columns]
 
 
-# ==================== ЭКСПОРТ ====================
+# ==================== ЭКСПОРТ В EXCEL ====================
 
 _NUMERIC_FMT = '# ##0.00'
 _INT_FMT = '# ##0'
@@ -6427,10 +6569,9 @@ def _write_operations_sheet(ws, df_export: pd.DataFrame):
         c.alignment = Alignment(horizontal='left', vertical='center')
         c.border = _BORDER
 
-    sum_col_name = 'Сумма'
     sum_col_idx = None
     for j, col_name in enumerate(df_export.columns, start=1):
-        if col_name == sum_col_name:
+        if col_name == 'Сумма':
             sum_col_idx = j
             break
 
@@ -6500,12 +6641,19 @@ def build_operations_excel(df_display: pd.DataFrame, df_numeric: pd.DataFrame) -
     ws = wb.active
     ws.title = 'Транзакции'
 
+    if 'Наименование банка' in df_numeric.columns:
+        bank_series = df_numeric['Наименование банка']
+    elif 'Наименование счета' in df_numeric.columns:
+        bank_series = df_numeric['Наименование счета']
+    else:
+        bank_series = pd.Series([''] * len(df_numeric), index=df_numeric.index)
+
     df_export = pd.DataFrame({
-        'Дата': df_numeric['Дата'].astype(str),
-        'Сумма': df_numeric['Сумма'].astype(float),
-        'Контрагент': df_numeric['Контрагент'].astype(str),
-        'Наименование счета': df_numeric['Наименование счета'].astype(str),
-        'Описание': df_display['Описание'].astype(str) if 'Описание' in df_display.columns else df_numeric.get('Описание', pd.Series([''] * len(df_numeric))).astype(str),
+        'Дата': _safe_str_series(df_numeric['Дата']),
+        'Сумма': pd.to_numeric(df_numeric['Сумма'], errors='coerce').fillna(0.0).astype(float),
+        'Контрагент': _safe_str_series(df_numeric.get('Контрагент', pd.Series([''] * len(df_numeric), index=df_numeric.index))),
+        'Наименование банка': _safe_str_series(bank_series),
+        'Описание': _safe_str_series(df_display.get('Описание', pd.Series([''] * len(df_numeric), index=df_numeric.index))),
     })
     _write_operations_sheet(ws, df_export)
 
@@ -6533,18 +6681,25 @@ def build_combined_excel(df_display: pd.DataFrame,
     wb = Workbook()
     ws1 = wb.active
     ws1.title = 'Транзакции'
+
+    if 'Наименование банка' in df_numeric.columns:
+        bank_series = df_numeric['Наименование банка']
+    elif 'Наименование счета' in df_numeric.columns:
+        bank_series = df_numeric['Наименование счета']
+    else:
+        bank_series = pd.Series([''] * len(df_numeric), index=df_numeric.index)
+
     df_export = pd.DataFrame({
-        'Дата': df_numeric['Дата'].astype(str),
-        'Сумма': df_numeric['Сумма'].astype(float),
-        'Контрагент': df_numeric['Контрагент'].astype(str),
-        'Наименование счета': df_numeric['Наименование счета'].astype(str),
-        'Описание': df_display['Описание'].astype(str) if 'Описание' in df_display.columns else df_numeric.get('Описание', pd.Series([''] * len(df_numeric))).astype(str),
+        'Дата': _safe_str_series(df_numeric['Дата']),
+        'Сумма': pd.to_numeric(df_numeric['Сумма'], errors='coerce').fillna(0.0).astype(float),
+        'Контрагент': _safe_str_series(df_numeric.get('Контрагент', pd.Series([''] * len(df_numeric), index=df_numeric.index))),
+        'Наименование банка': _safe_str_series(bank_series),
+        'Описание': _safe_str_series(df_display.get('Описание', pd.Series([''] * len(df_numeric), index=df_numeric.index))),
     })
     _write_operations_sheet(ws1, df_export)
     ws2 = wb.create_sheet('Сводка по счетам')
     _write_summary_sheet(ws2, summary_df)
 
-    # [DEEPSEEK-INTEGRATION] Лист с AI-обогащением, если есть
     if ai_df is not None and not ai_df.empty:
         ws3 = wb.create_sheet('AI-обогащение')
         for j, col_name in enumerate(ai_df.columns, start=1):
@@ -6566,7 +6721,7 @@ def build_combined_excel(df_display: pd.DataFrame,
     return output
 
 
-# ==================== ОБРАБОТКА ====================
+# ==================== ОБРАБОТКА ЗАГРУЖЕННЫХ ФАЙЛОВ ====================
 
 def _files_signature(uploaded_files) -> str:
     h = hashlib.md5()
@@ -6669,7 +6824,7 @@ def _process_uploaded_files(uploaded_files) -> Dict:
     }
 
 
-# ==================== [DEEPSEEK-INTEGRATION] РЕНДЕР РЕЗУЛЬТАТОВ ====================
+# ==================== РЕНДЕР РЕЗУЛЬТАТОВ ====================
 
 def _render_results(result: Dict):
     all_tx = result.get('all_tx', [])
@@ -6694,28 +6849,74 @@ def _render_results(result: Dict):
             st.info("Операции не найдены. Проверьте формат файлов.")
         return
 
-    df_raw = pd.DataFrame(all_tx)
-    df_raw['Сумма_число'] = df_raw['Сумма'].map(to_float_amount)
+    try:
+        df_raw = pd.DataFrame(all_tx)
+    except Exception as e:
+        st.error(f"Ошибка при построении DataFrame: {e}")
+        return
+
+    if df_raw.empty:
+        st.info("Нет данных.")
+        return
+
+    # [FIX-RENDER-SCALAR-V5] Приводим все object-колонки к строкам, кроме 'Сумма'
+    for col in df_raw.columns:
+        if col == 'Сумма':
+            continue
+        try:
+            if df_raw[col].dtype == object:
+                df_raw[col] = _safe_str_series(df_raw[col])
+        except Exception:
+            df_raw[col] = _safe_str_series(df_raw[col])
+
+    try:
+        df_raw['Сумма_число'] = df_raw['Сумма'].map(to_float_amount).astype(float)
+    except Exception:
+        df_raw['Сумма_число'] = 0.0
+
+    # Переименование "Наименование счета" -> "Наименование банка"
+    if 'Наименование счета' in df_raw.columns and 'Наименование банка' not in df_raw.columns:
+        df_raw = df_raw.rename(columns={'Наименование счета': 'Наименование банка'})
 
     income = float(df_raw['Сумма_число'][df_raw['Сумма_число'] > 0].sum())
     expense = float(abs(df_raw['Сумма_число'][df_raw['Сумма_число'] < 0].sum()))
 
-    df_numeric = pd.DataFrame({
-        'Дата': df_raw['Дата'].astype(str),
-        'Сумма': df_raw['Сумма_число'].astype(float),
-        'Контрагент': df_raw['Контрагент'].astype(str) if 'Контрагент' in df_raw.columns else '',
-        'Наименование счета': df_raw['Наименование счета'].astype(str),
-        'Описание': df_raw['Описание'].astype(str) if 'Описание' in df_raw.columns else '',
-    })
+    date_series = _safe_str_series(df_raw['Дата']) if 'Дата' in df_raw.columns \
+        else pd.Series([''] * len(df_raw), index=df_raw.index)
+    sum_series = df_raw['Сумма_число'].astype(float)
 
-    df_display = df_raw.drop(columns=['Сумма_число']).copy()
+    if 'Контрагент' in df_raw.columns:
+        counterparty_series = _safe_str_series(df_raw['Контрагент'])
+    else:
+        counterparty_series = pd.Series([''] * len(df_raw), index=df_raw.index)
+
+    if 'Наименование банка' in df_raw.columns:
+        bank_series = _safe_str_series(df_raw['Наименование банка'])
+    elif 'Наименование счета' in df_raw.columns:
+        bank_series = _safe_str_series(df_raw['Наименование счета'])
+    else:
+        bank_series = pd.Series([''] * len(df_raw), index=df_raw.index)
+
+    if 'Описание' in df_raw.columns:
+        desc_series = _safe_str_series(df_raw['Описание'])
+    else:
+        desc_series = pd.Series([''] * len(df_raw), index=df_raw.index)
+
+    df_numeric = pd.DataFrame({
+        'Дата': date_series.values,
+        'Сумма': sum_series.values,
+        'Контрагент': counterparty_series.values,
+        'Наименование банка': bank_series.values,
+        'Описание': desc_series.values,
+    }, index=df_raw.index)
+
+    df_display = df_raw.drop(columns=['Сумма_число'], errors='ignore').copy()
     df_display['Сумма'] = df_raw['Сумма_число'].apply(format_amount)
     if 'Описание' in df_display.columns:
         df_display['Описание'] = df_display['Описание'].apply(
-            lambda x: translate_description_inline(str(x)) if x is not None else ''
+            lambda x: translate_description_inline(_to_scalar_str(x))
         )
 
-    # [DEEPSEEK-INTEGRATION] Сохраняем для AI-вкладки
     st.session_state['df_numeric'] = df_numeric
     st.session_state['df_display'] = df_display
     st.session_state['df_raw'] = df_raw
@@ -6724,7 +6925,7 @@ def _render_results(result: Dict):
     st.markdown("### 📊 Итоги")
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.metric("📊 Всего операций", len(all_tx))
+        st.metric("📊 Всего операций", len(df_raw))
     with c2:
         st.metric("📈 Доходы", format_amount(income))
     with c3:
@@ -6774,40 +6975,54 @@ def _render_results(result: Dict):
         for tx in ai_enriched:
             if tx.get('_ai_translation') or tx.get('_ai_category'):
                 ai_rows.append({
-                    'Дата': tx.get('Дата', ''),
+                    'Дата': _to_scalar_str(tx.get('Дата', '')),
                     'Сумма': tx.get('Сумма', 0),
-                    'Счёт': tx.get('Наименование счета', ''),
-                    'Оригинал': tx.get('Описание', ''),
-                    'Перевод AI': tx.get('_ai_translation', ''),
-                    'Категория AI': tx.get('_ai_category', ''),
-                    'Контрагент AI': tx.get('_ai_counterparty_clean', ''),
-                    'Банк. комиссия': tx.get('_ai_is_bank_fee', False),
+                    'Банк': _to_scalar_str(tx.get('Наименование банка', tx.get('Наименование счета', ''))),
+                    'Оригинал': _to_scalar_str(tx.get('Описание', '')),
+                    'Перевод AI': _to_scalar_str(tx.get('_ai_translation', '')),
+                    'Категория AI': _to_scalar_str(tx.get('_ai_category', '')),
+                    'Контрагент AI': _to_scalar_str(tx.get('_ai_counterparty_clean', '')),
+                    'Банк. комиссия': bool(tx.get('_ai_is_bank_fee', False)),
                     'Уверенность': tx.get('_ai_confidence', 0.0),
                 })
         if ai_rows:
-            ai_df = pd.DataFrame(ai_rows)
-            st.dataframe(ai_df, use_container_width=True, hide_index=True)
-            st.session_state['ai_df'] = ai_df
+            try:
+                ai_df = pd.DataFrame(ai_rows)
+                st.dataframe(ai_df, use_container_width=True, hide_index=True)
+                st.session_state['ai_df'] = ai_df
+            except Exception as e:
+                st.warning(f"Не удалось отобразить AI-таблицу: {e}")
         else:
             st.info("AI не вернул данных по этим строкам.")
 
     st.markdown("---")
     st.markdown("### 🧾 Детализация транзакций")
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
+    try:
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.error(f"Ошибка отображения таблицы: {e}")
 
     st.markdown("---")
     st.markdown("### 📁 Сводка по счетам")
-    summary_df = build_account_summary(df_raw.to_dict('records'))
+    try:
+        summary_df = build_account_summary(df_raw.to_dict('records'))
+    except Exception as e:
+        st.error(f"Ошибка построения сводки: {e}")
+        summary_df = pd.DataFrame()
+
     if summary_df.empty:
         st.info("Нет данных для сводки по счетам.")
     else:
         summary_html_df = summary_df.copy()
         for col in ["Сумма приходных операций", "Сумма расходных операций", "Сальдо операций"]:
             summary_html_df[col] = summary_html_df[col].apply(format_amount)
-        st.markdown(
-            f'<div class="summary-table">{summary_html_df.to_html(index=False, escape=False)}</div>',
-            unsafe_allow_html=True,
-        )
+        try:
+            st.markdown(
+                f'<div class="summary-table">{summary_html_df.to_html(index=False, escape=False)}</div>',
+                unsafe_allow_html=True,
+            )
+        except Exception as e:
+            st.error(f"Ошибка отображения сводки: {e}")
 
     st.markdown("---")
     st.markdown("### 💾 Сохранить результат")
@@ -6816,21 +7031,37 @@ def _render_results(result: Dict):
         "или всё вместе одним файлом. В Excel суммы — числа с форматом `0,00`."
     )
 
-    ops_excel = build_operations_excel(df_display, df_numeric)
-    summary_excel = build_summary_excel(summary_df) if not summary_df.empty else None
+    try:
+        ops_excel = build_operations_excel(df_display, df_numeric)
+    except Exception as e:
+        st.error(f"Не удалось собрать Excel с операциями: {e}")
+        ops_excel = None
+
+    try:
+        summary_excel = build_summary_excel(summary_df) if not summary_df.empty else None
+    except Exception as e:
+        st.error(f"Не удалось собрать Excel со сводкой: {e}")
+        summary_excel = None
+
     ai_df_for_excel = st.session_state.get('ai_df')
-    combined_excel = build_combined_excel(df_display, df_numeric, summary_df, ai_df_for_excel) if not summary_df.empty else None
+    try:
+        combined_excel = build_combined_excel(df_display, df_numeric, summary_df, ai_df_for_excel) \
+            if not summary_df.empty else None
+    except Exception as e:
+        st.error(f"Не удалось собрать комбинированный Excel: {e}")
+        combined_excel = None
 
     dl1, dl2, dl3 = st.columns(3)
 
     with dl1:
-        st.download_button(
-            label="📥 Скачать операции по выпискам",
-            data=ops_excel,
-            file_name="операции_по_выпискам.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="download_operations_only",
-        )
+        if ops_excel is not None:
+            st.download_button(
+                label="📥 Скачать операции по выпискам",
+                data=ops_excel,
+                file_name="операции_по_выпискам.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_operations_only",
+            )
 
     with dl2:
         if summary_excel is not None:
@@ -6857,7 +7088,7 @@ def _render_results(result: Dict):
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="download_combined",
             )
-        else:
+        elif ops_excel is not None:
             st.download_button(
                 label="📦 Скачать всё одним файлом",
                 data=ops_excel,
@@ -6872,7 +7103,7 @@ def _render_results(result: Dict):
             st.write(f"- {f}")
 
 
-# ==================== [DEEPSEEK-INTEGRATION] AI-АССИСТЕНТ ====================
+# ==================== AI-АССИСТЕНТ ====================
 
 def _render_ai_assistant_tab():
     st.markdown("### 🤖 AI-ассистент (DeepSeek)")
@@ -6881,7 +7112,6 @@ def _render_ai_assistant_tab():
         "Ассистент видит только то, что вы ему напишете — файлы не отправляются автоматически."
     )
 
-    # Статус подключения
     client = _get_deepseek_client()
     if client is None:
         if not _OPENAI_SDK_AVAILABLE:
@@ -6922,7 +7152,6 @@ def _render_ai_assistant_tab():
 
     st.markdown("---")
 
-    # Выбор модели
     model_choice = st.selectbox(
         "Модель",
         options=[DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_REASONER_MODEL],
@@ -6931,7 +7160,6 @@ def _render_ai_assistant_tab():
         help="deepseek-chat — быстрая; deepseek-reasoner — для отладки кода.",
     )
 
-    # Быстрые промпты
     st.markdown("**Быстрые действия:**")
     qc1, qc2, qc3, qc4 = st.columns(4)
     quick_prompt = None
@@ -6945,7 +7173,7 @@ def _render_ai_assistant_tab():
         if st.button("📊 Анализ данных", key='quick_data'):
             quick_prompt = (
                 "У меня есть DataFrame с колонками: Дата, Сумма, Контрагент, "
-                "Наименование счета, Описание. Как найти аномалии и подозрительные операции?"
+                "Наименование банка, Описание. Как найти аномалии и подозрительные операции?"
             )
     with qc3:
         if st.button("🎨 Улучшить UI", key='quick_ui'):
@@ -6958,18 +7186,16 @@ def _render_ai_assistant_tab():
             st.session_state['ai_chat_history'] = []
             st.rerun()
 
-    # История чата
     if 'ai_chat_history' not in st.session_state:
         st.session_state['ai_chat_history'] = []
 
-    # Системный промпт с контекстом
     context_parts = [
         "Ты — ассистент внутри Streamlit-приложения 'Аналитик банковских выписок'. "
         "Приложение парсит CSV, XLSX, XLS, DOCX, PDF выписки банков (ČSOB, UniCredit, "
         "Revolut, Tinkoff, Kapital bank, MASHREQ, Pasha Bank, WIO, Paysera, MKB, BluOr и др.), "
         "сводит операции в единый DataFrame и экспортирует в Excel.",
         "Структура DataFrame: Дата (str), Сумма (float, + доход, - расход), Контрагент (str), "
-        "Наименование счета (str), Описание (str).",
+        "Наименование банка (str), Описание (str).",
         "Если пользователь спрашивает про код — давай конкретные фрагменты на Python.",
     ]
     df_numeric = st.session_state.get('df_numeric')
@@ -6978,7 +7204,8 @@ def _render_ai_assistant_tab():
             n = len(df_numeric)
             income = df_numeric[df_numeric['Сумма'] > 0]['Сумма'].sum()
             expense = df_numeric[df_numeric['Сумма'] < 0]['Сумма'].sum()
-            accounts = df_numeric['Наименование счета'].nunique()
+            bank_col = 'Наименование банка' if 'Наименование банка' in df_numeric.columns else 'Наименование счета'
+            accounts = df_numeric[bank_col].nunique()
             context_parts.append(
                 f"Текущие данные пользователя: {n} операций, "
                 f"доходы {income:.2f}, расходы {expense:.2f}, счетов: {accounts}."
@@ -6987,7 +7214,6 @@ def _render_ai_assistant_tab():
             pass
     system_prompt = "\n".join(context_parts)
 
-    # Отображение истории
     for msg in st.session_state['ai_chat_history']:
         if msg['role'] == 'user':
             st.markdown(
@@ -7001,7 +7227,6 @@ def _render_ai_assistant_tab():
                 unsafe_allow_html=True,
             )
 
-    # Обработка быстрого промпта
     if quick_prompt:
         st.session_state['ai_chat_history'].append({'role': 'user', 'content': quick_prompt})
         with st.spinner("DeepSeek думает..."):
@@ -7014,7 +7239,6 @@ def _render_ai_assistant_tab():
             st.session_state['ai_chat_history'].append({'role': 'assistant', 'content': answer})
         st.rerun()
 
-    # Поле ввода
     user_input = st.chat_input("Спросите DeepSeek о коде, данных или обработке...")
     if user_input:
         st.session_state['ai_chat_history'].append({'role': 'user', 'content': user_input})
@@ -7028,7 +7252,6 @@ def _render_ai_assistant_tab():
             st.session_state['ai_chat_history'].append({'role': 'assistant', 'content': answer})
         st.rerun()
 
-    # Кнопка «Отправить код на ревью»
     with st.expander("📎 Отправить фрагмент кода на ревью"):
         code_snippet = st.text_area(
             "Вставьте код или ошибку",
@@ -7069,7 +7292,6 @@ def main():
     if 'ai_chat_history' not in st.session_state:
         st.session_state['ai_chat_history'] = []
 
-    # [DEEPSEEK-INTEGRATION] Сайдбар с настройками AI
     with st.sidebar:
         st.markdown("### ⚙️ Настройки")
         st.markdown("**DeepSeek AI**")
@@ -7085,12 +7307,11 @@ def main():
             "только те фрагменты, которые вы сами вводите в чат."
         )
 
-    # [DEEPSEEK-INTEGRATION] Вкладки
     tab_upload, tab_ai = st.tabs(["📥 Обработка выписок", "🤖 AI-ассистент"])
 
     with tab_upload:
         st.markdown("### 📥 Загрузка файлов")
-        st.markdown("Перетащите выписки в окно ниже или нажмите **Browse files**.")
+        st.markdown("Перетащите выписки в окно ниже или нажмите **Выбрать файлы**.")
 
         col_reset, col_info = st.columns([1, 4])
         with col_reset:
@@ -7199,3 +7420,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
