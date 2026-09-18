@@ -3,26 +3,26 @@
 app.py — Аналитик банковских выписок.
 Полная рабочая версия + интеграция DeepSeek AI.
 
-FIX-пакет:
-  [FIX-SYNTAX-MASHREQ]   — устранена слипшаяся строка "amount = credit  elif ..."
-  [FIX-TRANSLATE-FULL]   — многословные фразы переводятся ПОЛНОСТЬЮ
-  [FIX-BG-BASE64]        — фон: SVG в base64 + CSS-градиенты
-  [FIX-BUTTONS-SMALL]    — уменьшен шрифт кнопок (1.05rem)
-  [FIX-COUNTERPARTY-2]   — чистка имени контрагента
-  [NEW-NORMALIZE-ACCOUNT]— приведение наименований счетов к эталонному списку
-  [NEW-GORODETS-TEA]     — фон: городецкая роспись "Чаепитие" (самовар, чашки)
-  [NEW-TRANSLATE-INLINE] — Оригинал + (перевод) в одной ячейке
-  [NEW-AMOUNT-FORMAT]    — Суммы на экране: 1 234,56
-  [NEW-EXCEL-NUMERIC]    — В Excel суммы — числа с форматом # ##0.00
-  [NEW-SMART-COUNTERPARTY] — Умное извлечение контрагента
-  [FIX-KAPITAL-XLSX]     — Новый парсер Kapital bank Saida AZN (XLSX, 2-колоночный)
-  [FIX-KAPITAL-PDF]      — Улучшен PDF-парсер Kapital bank (склейка Məxaric/Mədaxil)
-  [FIX-KAPITAL-DOCX-ERROR] — Исправлена ошибка name 'parse_kapital_saida_docx' is not defined
-
-  [DEEPSEEK-INTEGRATION] — Встроен AI-ассистент DeepSeek:
-      • Отдельная вкладка "🤖 AI-ассистент" (чат по коду и данным).
-      • AI-обогащение транзакций: перевод описаний, категория, чистка контрагента.
-      • Кнопка "Проверить обработку через AI" — анализ проблемных строк.
+FIX-пакет v2:
+  [FIX-SYNTAX-MASHREQ]      — устранена слипшаяся строка "amount = credit  elif ..."
+  [FIX-TRANSLATE-FULL]      — многословные фразы переводятся ПОЛНОСТЬЮ
+  [FIX-TRANSLATE-WORDBOUND] — перевод слов только по границам слова (algas ≠ alga+s)
+  [FIX-BG-BASE64]           — фон: SVG в base64 + CSS-градиенты
+  [FIX-BUTTONS-SMALL]       — уменьшен шрифт кнопок (1.05rem)
+  [FIX-COUNTERPARTY-2]      — чистка имени контрагента
+  [NEW-NORMALIZE-ACCOUNT]   — приведение наименований счетов к эталонному списку
+  [NEW-GORODETS-TEA]        — фон: городецкая роспись "Чаепитие"
+  [NEW-TRANSLATE-INLINE]    — Оригинал + (перевод) в одной ячейке
+  [NEW-AMOUNT-FORMAT]       — Суммы на экране: 1 234,56
+  [NEW-EXCEL-NUMERIC]       — В Excel суммы — числа с форматом # ##0.00
+  [NEW-SMART-COUNTERPARTY]  — Умное извлечение контрагента
+  [FIX-KAPITAL-XLSX]        — Новый парсер Kapital bank Saida AZN (XLSX)
+  [FIX-KAPITAL-PDF]         — Улучшен PDF-парсер Kapital bank
+  [FIX-KAPITAL-DOCX-ERROR]  — Исправлена ошибка name 'parse_kapital_saida_docx' is not defined
+  [FIX-COUNTERPARTY-FULL]   — Полные имена контрагентов (Revolut, Paysera, Industra)
+  [FIX-TRANSLATE-CLEAN]     — Перевод не попадает внутрь оригинала, "зарплата" не влезает в "algas"
+  [FIX-UI-RUSSIAN]          — Русский текст везде: file_uploader, chat_input, кнопки
+  [DEEPSEEK-INTEGRATION]    — AI-ассистент DeepSeek
 """
 
 import streamlit as st
@@ -33,6 +33,7 @@ import hashlib
 import csv
 import base64
 import json
+import streamlit.components.v1 as components
 from datetime import datetime
 from io import BytesIO, StringIO
 from typing import Dict, List, Tuple, Callable, Optional
@@ -62,140 +63,46 @@ st.set_page_config(
 )
 
 
-# ==================== [NEW-GORODETS-TEA] ФОН: ГОРОДЕЦКАЯ РОСПИСЬ "ЧАЕПИТИЕ" ====================
+# ==================== [NEW-GORODETS-TEA] ФОН ====================
 
 _GORODETS_SVG = (
     "<svg xmlns='http://www.w3.org/2000/svg' width='520' height='460'>"
     "<defs><pattern id='gorodets' x='0' y='0' width='520' height='460' "
     "patternUnits='userSpaceOnUse'>"
     "<g opacity='0.55'>"
-
     "<g fill='none' stroke='#2C3E50' stroke-width='2' stroke-linecap='round'>"
     "<path d='M10 380 Q120 320 240 360 Q360 400 510 340'/>"
     "<path d='M5 120 Q90 70 190 100 Q290 130 390 90 Q470 55 520 85'/>"
     "<path d='M60 250 Q160 210 260 245 Q360 280 460 240'/>"
     "<path d='M0 445 Q130 415 260 440 Q400 465 520 430'/>"
     "</g>"
-
     "<g fill='#43A047' stroke='#1B5E20' stroke-width='1.6'>"
     "<path d='M120 350 q18 -28 46 -18 q-4 26 -24 34 q-24 10 -22 -16 z'/>"
-    "<path d='M120 350 q22 -10 46 -18' fill='none' stroke='#1B5E20' stroke-width='1.3'/>"
     "<path d='M340 365 q20 -26 50 -16 q-4 26 -26 34 q-26 10 -24 -18 z'/>"
-    "<path d='M340 365 q24 -10 50 -16' fill='none' stroke='#1B5E20' stroke-width='1.3'/>"
     "<path d='M180 80 q16 -22 40 -12 q-4 22 -22 30 q-22 8 -18 -18 z'/>"
-    "<path d='M420 70 q20 -22 44 -12 q-4 22 -24 30 q-24 8 -20 -18 z'/>"
     "</g>"
     "<g fill='#26A69A' stroke='#00695C' stroke-width='1.6'>"
     "<path d='M260 320 q18 -24 44 -14 q-4 22 -24 30 q-24 8 -20 -16 z'/>"
     "<path d='M460 330 q16 -22 40 -12 q-4 22 -22 30 q-22 8 -18 -18 z'/>"
-    "<path d='M70 210 q16 -20 40 -10 q-4 22 -24 30 q-24 8 -16 -20 z'/>"
     "</g>"
-
     "<g transform='translate(260,360)'>"
     "<ellipse cx='0' cy='0' rx='170' ry='34' fill='#8D6E63' stroke='#4E342E' stroke-width='2'/>"
     "<ellipse cx='0' cy='-6' rx='170' ry='30' fill='#A1887F' stroke='#4E342E' stroke-width='1.6'/>"
     "<ellipse cx='0' cy='-12' rx='160' ry='24' fill='#D7CCC8' stroke='#4E342E' stroke-width='1.2'/>"
-    "<ellipse cx='0' cy='-14' rx='90' ry='16' fill='#FFFFFF' opacity='0.6' stroke='#BCAAA4' stroke-width='1'/>"
     "</g>"
-
     "<g transform='translate(260,300)'>"
     "<path d='M-30 0 q-8 -55 30 -60 q38 5 30 60 z' fill='#FBC02D' stroke='#F57F17' stroke-width='2'/>"
     "<ellipse cx='0' cy='-60' rx='30' ry='8' fill='#FDD835' stroke='#F57F17' stroke-width='1.8'/>"
-    "<path d='M-30 -20 l-18 -6 l18 -6 z' fill='#FBC02D' stroke='#F57F17' stroke-width='1.6'/>"
     "<path d='M30 -30 q14 10 0 20' fill='none' stroke='#F57F17' stroke-width='3'/>"
-    "<path d='M-30 -30 q-14 10 0 20' fill='none' stroke='#F57F17' stroke-width='3'/>"
-    "<rect x='-4' y='0' width='8' height='14' fill='#F57F17'/>"
-    "<ellipse cx='0' cy='14' rx='14' ry='4' fill='#FDD835' stroke='#F57F17' stroke-width='1.4'/>"
-    "<path d='M-15 -50 q0 -6 6 -6' fill='none' stroke='#FFF9C4' stroke-width='2'/>"
     "</g>"
-
     "<g transform='translate(180,340)'>"
     "<ellipse cx='0' cy='0' rx='24' ry='7' fill='#FFFFFF' stroke='#1565C0' stroke-width='1.6'/>"
     "<path d='M-20 -2 q0 -18 20 -18 q20 0 20 18 z' fill='#FFFFFF' stroke='#1565C0' stroke-width='1.8'/>"
-    "<path d='M20 -14 q12 4 0 12' fill='none' stroke='#1565C0' stroke-width='2'/>"
-    "<circle cx='-4' cy='-8' r='3' fill='#E91E63' stroke='#880E4F' stroke-width='1'/>"
-    "<circle cx='4' cy='-8' r='3' fill='#E91E63' stroke='#880E4F' stroke-width='1'/>"
-    "<circle cx='0' cy='-3' r='2.4' fill='#FBC02D' stroke='#F57F17' stroke-width='1'/>"
     "</g>"
-
     "<g transform='translate(340,340)'>"
     "<ellipse cx='0' cy='0' rx='24' ry='7' fill='#FFFFFF' stroke='#C62828' stroke-width='1.6'/>"
     "<path d='M-20 -2 q0 -18 20 -18 q20 0 20 18 z' fill='#FFFFFF' stroke='#C62828' stroke-width='1.8'/>"
-    "<path d='M20 -14 q12 4 0 12' fill='none' stroke='#C62828' stroke-width='2'/>"
-    "<circle cx='-4' cy='-8' r='3' fill='#1E88E5' stroke='#0D47A1' stroke-width='1'/>"
-    "<circle cx='4' cy='-8' r='3' fill='#1E88E5' stroke='#0D47A1' stroke-width='1'/>"
-    "<circle cx='0' cy='-3' r='2.4' fill='#FBC02D' stroke='#F57F17' stroke-width='1'/>"
     "</g>"
-
-    "<g transform='translate(260,335)'>"
-    "<ellipse cx='0' cy='0' rx='22' ry='6' fill='#FFFFFF' stroke='#7E57C2' stroke-width='1.4'/>"
-    "<circle cx='-6' cy='-4' r='5' fill='#FFB74D' stroke='#E65100' stroke-width='1'/>"
-    "<circle cx='4' cy='-4' r='5' fill='#FFB74D' stroke='#E65100' stroke-width='1'/>"
-    "</g>"
-
-    "<g transform='translate(90,150)'>"
-    "<circle r='34' fill='#E91E63' stroke='#880E4F' stroke-width='2.2'/>"
-    "<circle r='24' fill='#F48FB1' stroke='#C2185B' stroke-width='1.8'/>"
-    "<circle r='14' fill='#FBC02D' stroke='#F57F17' stroke-width='1.6'/>"
-    "<circle r='6' fill='#E53935' stroke='#B71C1C' stroke-width='1.4'/>"
-    "<g fill='#FFFFFF' opacity='0.98'>"
-    "<circle cx='-20' cy='-10' r='3'/><circle cx='-22' cy='8' r='3'/>"
-    "<circle cx='-8' cy='-20' r='3'/><circle cx='10' cy='-20' r='3'/>"
-    "<circle cx='20' cy='-8' r='3'/><circle cx='22' cy='10' r='3'/>"
-    "<circle cx='8' cy='22' r='3'/><circle cx='-10' cy='22' r='3'/>"
-    "</g>"
-    "</g>"
-
-    "<g transform='translate(430,170)'>"
-    "<path d='M-30 8 q0 -32 30 -44 q30 12 30 44 q0 32 -30 44 q-30 -12 -30 -44 z' "
-    "fill='#1E88E5' stroke='#0D47A1' stroke-width='2.2'/>"
-    "<path d='M-18 4 q0 -20 18 -28 q18 8 18 28 q0 20 -18 28 q-18 -8 -18 -28 z' "
-    "fill='#90CAF9' stroke='#1565C0' stroke-width='1.8'/>"
-    "<circle cy='-8' r='9' fill='#FBC02D' stroke='#F57F17' stroke-width='1.4'/>"
-    "<g fill='#FFFFFF' opacity='0.98'>"
-    "<circle cx='-12' cy='8' r='2.6'/><circle cx='12' cy='8' r='2.6'/>"
-    "<circle cx='-5' cy='24' r='2.6'/><circle cx='5' cy='24' r='2.6'/>"
-    "<circle cy='-22' r='2.6'/>"
-    "</g>"
-    "</g>"
-
-    "<g transform='translate(340,120)'>"
-    "<path d='M-16 5 q0 -20 16 -27 q16 7 16 27 q0 20 -16 27 q-16 -7 -16 -27 z' "
-    "fill='#F06292' stroke='#AD1457' stroke-width='1.8'/>"
-    "<circle cy='-7' r='6' fill='#FBC02D' stroke='#F57F17' stroke-width='1.4'/>"
-    "<g fill='#FFFFFF' opacity='0.98'>"
-    "<circle cx='-7' cy='9' r='2.2'/><circle cx='7' cy='9' r='2.2'/>"
-    "</g>"
-    "</g>"
-
-    "<g transform='translate(200,210)'>"
-    "<path d='M-14 5 q0 -18 14 -24 q14 6 14 24 q0 18 -14 24 q-14 -6 -14 -24 z' "
-    "fill='#26A69A' stroke='#00695C' stroke-width='1.8'/>"
-    "<circle cy='-5' r='5' fill='#FBC02D' stroke='#F57F17' stroke-width='1.4'/>"
-    "<g fill='#FFFFFF' opacity='0.98'>"
-    "<circle cx='-6' cy='8' r='1.8'/><circle cx='6' cy='8' r='1.8'/>"
-    "</g>"
-    "</g>"
-
-    "<g fill='#E53935' stroke='#B71C1C' stroke-width='1.2'>"
-    "<circle cx='160' cy='60' r='4.5'/><circle cx='172' cy='66' r='4.5'/>"
-    "<circle cx='166' cy='74' r='4.5'/>"
-    "<circle cx='360' cy='420' r='4.5'/><circle cx='372' cy='414' r='4.5'/>"
-    "<circle cx='366' cy='404' r='4.5'/>"
-    "</g>"
-    "<g fill='#FBC02D' stroke='#F57F17' stroke-width='1.2'>"
-    "<circle cx='80' cy='420' r='4'/><circle cx='92' cy='414' r='4'/>"
-    "<circle cx='440' cy='65' r='4'/><circle cx='452' cy='60' r='4'/>"
-    "<circle cx='300' cy='270' r='4'/><circle cx='312' cy='264' r='4'/>"
-    "</g>"
-
-    "<g fill='none' stroke='#2C3E50' stroke-width='1.8' stroke-linecap='round'>"
-    "<path d='M220 180 q-24 10 -30 34 q-4 22 16 32'/>"
-    "<path d='M340 220 q24 10 30 34 q4 22 -16 32'/>"
-    "<path d='M60 280 q-20 8 -24 28'/>"
-    "<path d='M460 130 q20 8 24 28'/>"
-    "</g>"
-
     "</g></pattern></defs>"
     "<rect width='100%' height='100%' fill='url(%23gorodets)'/></svg>"
 )
@@ -604,6 +511,26 @@ section[data-testid="stFileUploaderDropzone"] button {
     margin: 0 !important;
 }
 
+/* [FIX-UI-RUSSIAN] Скрываем английские надписи Streamlit */
+[data-testid="stFileUploaderDropzoneInstructions"] > div > span {
+    font-size: 0 !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] > div > span::before {
+    content: "Перетащите файлы сюда" !important;
+    font-size: 0.95rem !important;
+    color: var(--ink) !important;
+    display: block;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] > div > small {
+    font-size: 0 !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] > div > small::before {
+    content: "Лимит 200 МБ на файл • CSV, XLSX, XLS, DOCX, PDF" !important;
+    font-size: 0.78rem !important;
+    color: var(--ink-muted) !important;
+    display: block;
+}
+
 .stMetric {
     background: #FFFFFF;
     border-radius: 16px;
@@ -704,7 +631,6 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 1.6rem 0; }
 .summary-table tbody tr:hover td { background: #FCE4EC; }
 .summary-table tbody tr:last-child td { border-bottom: none; }
 
-/* [DEEPSEEK-INTEGRATION] Стили для чата AI-ассистента */
 .ai-chat-bubble-user {
     background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%);
     border-left: 4px solid #2E7D32;
@@ -744,20 +670,93 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 1.6rem 0; }
 st.markdown(_CSS.replace("__GORODETS_B64__", _GORODETS_SVG_B64), unsafe_allow_html=True)
 
 
-# ==================== [DEEPSEEK-INTEGRATION] НАСТРОЙКИ И КЛИЕНТ DEEPSEEK ====================
+# [FIX-UI-RUSSIAN] Локализация английских надписей Streamlit через JS
+_RU_TRANSLATIONS_JS = """
+<script>
+(function() {
+    const translations = {
+        "Browse files": "Выбрать файлы",
+        "Drag and drop file here": "Перетащите файлы сюда",
+        "Drag and drop files here": "Перетащите файлы сюда",
+        "Limit 200MB per file": "Лимит 200 МБ на файл",
+        "Press Enter to submit": "Нажмите Enter для отправки",
+        "Press Enter to apply": "Нажмите Enter для применения",
+        "Clear": "Очистить",
+        "Select all": "Выбрать все",
+        "Deselect all": "Снять выделение",
+        "Search": "Поиск",
+        "Sort": "Сортировать",
+        "Show fullscreen": "На весь экран",
+        "Hide": "Скрыть",
+        "Fullscreen": "Во весь экран",
+        "Download as CSV": "Скачать CSV",
+        "Running": "Выполняется",
+        "Stop": "Остановить",
+        "Rerun": "Перезапустить",
+        "Deploy": "Развернуть",
+        "Settings": "Настройки",
+        "Print": "Печать",
+        "Copy": "Копировать",
+        "Copied": "Скопировано",
+        "Show more": "Показать больше",
+        "Show less": "Показать меньше",
+        "Add row": "Добавить строку",
+        "Delete row": "Удалить строку",
+        "Use fullscreen": "На весь экран",
+        "Exit fullscreen": "Выйти из полноэкранного режима"
+    };
+
+    function applyTranslations() {
+        const walker = document.createTreeWalker(
+            document.body,
+            NodeFilter.SHOW_TEXT,
+            null,
+            false
+        );
+        let node;
+        const nodes = [];
+        while (node = walker.nextNode()) {
+            nodes.push(node);
+        }
+        nodes.forEach(function(n) {
+            const text = n.nodeValue.trim();
+            if (translations[text]) {
+                n.nodeValue = n.nodeValue.replace(text, translations[text]);
+            }
+        });
+        // Атрибуты placeholder / title / aria-label
+        document.querySelectorAll('[placeholder]').forEach(function(el) {
+            const p = el.getAttribute('placeholder');
+            if (translations[p]) el.setAttribute('placeholder', translations[p]);
+        });
+        document.querySelectorAll('[title]').forEach(function(el) {
+            const t = el.getAttribute('title');
+            if (translations[t]) el.setAttribute('title', translations[t]);
+        });
+        document.querySelectorAll('[aria-label]').forEach(function(el) {
+            const a = el.getAttribute('aria-label');
+            if (translations[a]) el.setAttribute('aria-label', translations[a]);
+        });
+    }
+
+    applyTranslations();
+    const observer = new MutationObserver(applyTranslations);
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+})();
+</script>
+"""
+
+components.html(_RU_TRANSLATIONS_JS, height=0, width=0)
+
+
+# ==================== [DEEPSEEK-INTEGRATION] НАСТРОЙКИ DEEPSEEK ====================
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_DEFAULT_MODEL = "deepseek-chat"      # быстрая модель, для чата и классификации
-DEEPSEEK_REASONER_MODEL = "deepseek-reasoner" # «думающая» модель, для отладки кода
+DEEPSEEK_DEFAULT_MODEL = "deepseek-chat"
+DEEPSEEK_REASONER_MODEL = "deepseek-reasoner"
 
 
 def _get_deepseek_api_key() -> str:
-    """
-    API-ключ берём в порядке приоритета:
-      1) st.secrets["DEEPSEEK_API_KEY"] (файл .streamlit/secrets.toml)
-      2) переменная окружения DEEPSEEK_API_KEY
-      3) st.session_state["deepseek_api_key"] (введён вручную в сайдбаре)
-    """
     key = ""
     try:
         if "DEEPSEEK_API_KEY" in st.secrets:
@@ -772,7 +771,6 @@ def _get_deepseek_api_key() -> str:
 
 
 def _get_deepseek_client() -> Optional["OpenAI"]:
-    """Создаёт клиент OpenAI, настроенный на DeepSeek API. None, если нет ключа/SDK."""
     if not _OPENAI_SDK_AVAILABLE:
         return None
     api_key = _get_deepseek_api_key()
@@ -791,10 +789,6 @@ def call_deepseek(
     max_tokens: int = 2048,
     json_mode: bool = False,
 ) -> Tuple[str, Optional[str]]:
-    """
-    Отправляет запрос в DeepSeek.
-    Возвращает (текст_ответа, ошибка_или_None).
-    """
     client = _get_deepseek_client()
     if client is None:
         if not _OPENAI_SDK_AVAILABLE:
@@ -823,7 +817,6 @@ def call_deepseek_json(
     user_prompt: str,
     model: str = DEEPSEEK_DEFAULT_MODEL,
 ) -> Tuple[Optional[dict], Optional[str]]:
-    """Запрос с ожиданием JSON-ответа. Возвращает (dict, ошибка)."""
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
@@ -834,7 +827,6 @@ def call_deepseek_json(
     try:
         return json.loads(raw), None
     except Exception:
-        # Пробуем вытащить JSON из markdown-обёртки
         m = re.search(r'\{.*\}', raw, re.DOTALL)
         if m:
             try:
@@ -843,8 +835,6 @@ def call_deepseek_json(
                 pass
         return None, f"Не удалось распарсить JSON от DeepSeek: {raw[:300]}"
 
-
-# ==================== [DEEPSEEK-INTEGRATION] AI-ФУНКЦИИ ДЛЯ ТРАНЗАКЦИЙ ====================
 
 _AI_TRANSACTION_SYSTEM = (
     "Ты — эксперт по банковским выпискам. "
@@ -874,11 +864,6 @@ def ai_enrich_transactions(
     max_items: int = 200,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> Tuple[List[Dict], List[str]]:
-    """
-    Обогащает транзакции через DeepSeek: перевод, категория, чистый контрагент.
-    Возвращает (обогащённый_список, список_ошибок).
-    Обрабатывает не более max_items транзакций за один вызов (защита от больших счетов).
-    """
     errors: List[str] = []
     if not transactions:
         return transactions, ["Нет транзакций для обогащения"]
@@ -970,7 +955,6 @@ st.markdown("""
 
 
 # ==================== ОБЩИЕ УТИЛИТЫ ====================
-# (полностью сохранены — см. оригинал; ниже ключевые, остальные без изменений)
 
 def clean_account_name(filename: str) -> str:
     name = os.path.splitext(filename)[0]
@@ -1155,8 +1139,11 @@ def safe_str(v) -> str:
 
 
 # ==================== [FIX-TRANSLATE-FULL] ПЕРЕВОД ОПИСАНИЙ ====================
+# ВАЖНО: ключи должны быть в нижнем регистре, словарь применяется к тексту в нижнем регистре
+# по границам слов. Порядок применения — от длинных фраз к коротким.
 
 _PHRASE_DICT: Dict[str, str] = {
+    # === Английский: банковские термины ===
     "value added tax - output": "НДС к уплате",
     "value added tax - input": "НДС к возмещению",
     "value added tax": "НДС",
@@ -1213,10 +1200,15 @@ _PHRASE_DICT: Dict[str, str] = {
     "metal membership": "подписка Metal",
     "charge accounting": "комиссия за учёт",
     "charge for": "комиссия за",
+    "revolut business fee": "комиссия Revolut Business",
+    "grow plan fee": "комиссия за тариф Grow",
+    "expenses app charges": "плата за приложение расходов",
     "message": "сообщение",
     "notprovided": "не указано",
     "comission": "комиссия",
     "commission": "комиссия",
+
+    # === Бренды (не переводим) ===
     "tiktok ads": "реклама TikTok",
     "tiktok": "TikTok",
     "google *ads": "GOOGLE *ADS",
@@ -1230,16 +1222,11 @@ _PHRASE_DICT: Dict[str, str] = {
     "dubai taxi": "такси Дубай",
     "pizza hut": "Pizza Hut",
     "pinkberry": "Pinkberry",
-    "seven": "Seven",
     "regent palace hotel": "Regent Palace Hotel",
     "albato": "Albato",
     "to host arabia": "To Host Arabia",
-    "i r m g mena restauran": "ресторан I R M G Mena",
     "day to day": "Day To Day",
     "butter bread bakery": "Butter Bread Bakery",
-    "voltup electric vehicl": "электромобиль Voltup",
-    "shabik electric vehicl": "электромобиль Shabik",
-    "dar al fahidi car park": "парковка Dar Al Fahidi",
     "spices by nature rest": "ресторан Spices by Nature",
     "corner spmrkt llc": "Corner Supermarket LLC",
     "tamdeed projects llc": "Tamdeed Projects LLC",
@@ -1266,7 +1253,121 @@ _PHRASE_DICT: Dict[str, str] = {
     "wise": "Wise",
     "tinkoff": "Тинькофф",
     "sberbank": "Сбербанк",
+    "industra bank": "Industra Bank",
+    "industra": "Industra",
+    "bluor bank": "BluOr Bank",
+    "bluor": "BluOr",
+    "csob": "ČSOB",
+    "unicredit": "UniCredit",
+    "pasha bank": "Pasha Bank",
+    "mashreq": "MASHREQ",
+    "kapital bank": "Kapital Bank",
+    "fio banka": "FIO Banka",
+    "fio": "FIO",
+    "mkb": "MKB",
+    "n26": "N26",
+    "rak bank": "RAK Bank",
+    "wio": "WIO",
 
+    # === Латышский ===
+    "darba algas izmaksa": "выплата заработной платы",
+    "darba alga par": "заработная плата за",
+    "darba alga": "заработная плата",
+    "darba algas": "заработной платы",
+    "apmaksa par rēķinu": "оплата по счёту",
+    "apmaksa par rekinu": "оплата по счёту",
+    "apmaksa par rēķinu nr.": "оплата по счёту №",
+    "apmaksa par rekinu nr.": "оплата по счёту №",
+    "apmaksa par pakalpojumiem": "оплата за услуги",
+    "apmaksa par": "оплата за",
+    "apmaksa": "оплата",
+    "rēķinu": "счёт",
+    "rekinu": "счёт",
+    "rēķins": "счёт",
+    "rekins": "счёт",
+    "rēķina": "счёта",
+    "rekina": "счёта",
+    "rēķins nr.": "счёт №",
+    "rekins nr.": "счёт №",
+    "rēķina nr.": "счёта №",
+    "rekina nr.": "счёта №",
+    "rek. nr.": "счёт №",
+    "rek.nr.": "счёт №",
+    "rek nr.": "счёт №",
+    "rekins": "счёт",
+    "rēķins": "счёт",
+    "skaidras naudas iemaksa": "внесение наличных",
+    "skaidras naudas izņemšana": "снятие наличных",
+    "maksājums ar karti": "оплата картой",
+    "komisijas maksa": "комиссионный сбор",
+    "maksājuma mērķis": "назначение платежа",
+    "sākuma atlikums": "начальный остаток",
+    "beigu atlikums": "конечный остаток",
+    "ienākošais maksājums": "входящий платёж",
+    "izejošais maksājums": "исходящий платёж",
+    "apmaksa par rēķinu": "оплата по счёту",
+    "bankas komisija par holdinga izveidi internetbankā": "банковская комиссия за создание холдинга в интернет-банке",
+    "bankas komisija par izmaiņām klientu lietā": "банковская комиссия за изменения в деле клиента",
+    "bankas komisija": "банковская комиссия",
+    "par rekinu": "по счёту",
+    "par rēķinu": "по счёту",
+    "rek. inv": "счёт INV",
+    "maksājums": "платёж",
+    "pārskaitījums": "перевод",
+    "ienākošais": "входящий",
+    "izejošais": "исходящий",
+    "komisija": "комиссия",
+    "izņemšana": "снятие",
+    "iemaksa": "взнос",
+    "procenti": "проценты",
+    "alga": "зарплата",
+    "algas": "зарплаты",
+    "algu": "зарплату",
+    "īre": "аренда",
+    "ires maksa": "арендная плата",
+    "ire par dzivokli": "аренда за квартиру",
+    "īre par dzīvokli": "аренда за квартиру",
+    "par dzivokli": "за квартиру",
+    "par dzīvokli": "за квартиру",
+    "dzivokli": "квартиру",
+    "dzīvokli": "квартиру",
+    "nomas maksa": "арендная плата",
+    "komunalie pakalpojumi": "коммунальные услуги",
+    "komunālie": "коммунальные",
+    "komunalie": "коммунальные",
+    "rēķins": "счёт",
+    "nodoklis": "налог",
+    "apdrošināšana": "страхование",
+    "aizdevums": "кредит",
+    "atmaksa": "возврат",
+    "atlīdzība": "вознаграждение",
+    "prēmija": "премия",
+    "kompensācija": "компенсация",
+    "kompensācijas izmaksa": "выплата компенсации",
+    "atlikums": "остаток",
+    "kopsumma": "итого",
+    "ienākumi": "доходы",
+    "izdevumi": "расходы",
+    "saņēmējs": "получатель",
+    "maksātājs": "плательщик",
+    "mērķis": "назначение",
+    "datums": "дата",
+    "summa": "сумма",
+    "veids": "тип",
+    "konts": "счёт",
+    "sent from revolut": "отправлено из Revolut",
+    "sutits no revolut": "отправлено из Revolut",
+    "inviato da revolut": "отправлено из Revolut",
+    "rent and utilities": "аренда и коммунальные услуги",
+    "apartment rent": "аренда квартиры",
+    "rent": "аренда",
+    "sent from": "отправлено из",
+    "no.8wskhgrd7uw63ddm/id.12135980": "№8wskhGrd7UW63dDm/ID.12135980",
+    "no.xshf4r4vzdrzlxl/id.12135980": "№XSHf4r4vZrDRzlxI/ID.12135980",
+    "no.kfdp4scibzlinroz/id.12135980": "№KFdP4ScIBzLINROz/ID.12135980",
+    "interest payment for loan": "процентный платёж по кредиту",
+
+    # === Чешский ===
     "trvalý příkaz": "постоянное поручение",
     "vklad hotovosti": "внесение наличных",
     "výběr hotovosti": "снятие наличных",
@@ -1310,53 +1411,7 @@ _PHRASE_DICT: Dict[str, str] = {
     "zůstatek": "остаток",
     "pohyby": "операции",
 
-    "skaidras naudas iemaksa": "внесение наличных",
-    "skaidras naudas izņemšana": "снятие наличных",
-    "maksājums ar karti": "оплата картой",
-    "komisijas maksa": "комиссионный сбор",
-    "maksājuma mērķis": "назначение платежа",
-    "sākuma atlikums": "начальный остаток",
-    "beigu atlikums": "конечный остаток",
-    "ienākošais maksājums": "входящий платёж",
-    "izejošais maksājums": "исходящий платёж",
-    "apmaksa par rēķinu": "оплата по счёту",
-    "apmaksa par rekinu": "оплата по счёту",
-    "bankas komisija par holdinga izveidi internetbankā": "банковская комиссия за создание холдинга в интернет-банке",
-    "bankas komisija par izmaiņām klientu lietā": "банковская комиссия за изменения в деле клиента",
-    "bankas komisija": "банковская комиссия",
-    "par rekinu": "по счёту",
-    "par rēķinu": "по счёту",
-    "rek. inv": "счёт INV",
-    "maksājums": "платёж",
-    "pārskaitījums": "перевод",
-    "ienākošais": "входящий",
-    "izejošais": "исходящий",
-    "komisija": "комиссия",
-    "izņemšana": "снятие",
-    "iemaksa": "взнос",
-    "procenti": "проценты",
-    "alga": "зарплата",
-    "īre": "аренда",
-    "rēķins": "счёт",
-    "nodoklis": "налог",
-    "apdrošināšana": "страхование",
-    "aizdevums": "кредит",
-    "atmaksa": "возврат",
-    "atlīdzība": "вознаграждение",
-    "prēmija": "премия",
-    "kompensācija": "компенсация",
-    "atlikums": "остаток",
-    "kopsumma": "итого",
-    "ienākumi": "доходы",
-    "izdevumi": "расходы",
-    "saņēmējs": "получатель",
-    "maksātājs": "плательщик",
-    "mērķis": "назначение",
-    "datums": "дата",
-    "summa": "сумма",
-    "veids": "тип",
-    "konts": "счёт",
-
+    # === Венгерский ===
     "készpénzfelvétel": "снятие наличных",
     "készpénzbefizetés": "внесение наличных",
     "kártyás fizetés": "оплата картой",
@@ -1411,6 +1466,7 @@ _PHRASE_DICT: Dict[str, str] = {
     "befizetés": "внесение",
     "kifizetés": "выплата",
 
+    # === Азербайджанский ===
     "hesaba mədaxil": "зачисление на счёт",
     "hesaba medaxil": "зачисление на счёт",
     "dövrün sonuna balans": "остаток на конец периода",
@@ -1428,177 +1484,127 @@ _PHRASE_DICT: Dict[str, str] = {
     "dovlet vergi xidmeti": "государственная налоговая служба",
 }
 
-_TRANSLATION_DICT: Dict[str, str] = {
-    "fee": "комиссия",
-    "fees": "комиссии",
-    "payment": "платёж",
-    "payments": "платежи",
-    "transfer": "перевод",
-    "transfers": "переводы",
-    "salary": "заработная плата",
-    "refund": "возврат",
-    "invoice": "счёт",
-    "rent": "аренда",
-    "utilities": "коммунальные услуги",
-    "commission": "комиссия",
-    "dividend": "дивиденды",
-    "interest": "проценты",
-    "purchase": "покупка",
-    "withdrawal": "снятие",
-    "deposit": "внесение",
-    "groceries": "продукты",
-    "restaurant": "ресторан",
-    "taxi": "такси",
-    "fuel": "топливо",
-    "insurance": "страхование",
-    "loan": "кредит",
-    "repayment": "погашение",
-    "reward": "вознаграждение",
-    "bonus": "бонус",
-    "cashback": "кэшбэк",
-    "reference": "назначение",
-    "details": "детали",
-    "description": "описание",
-    "beneficiary": "получатель",
-    "payer": "плательщик",
-    "amount": "сумма",
-    "balance": "баланс",
-    "statement": "выписка",
-    "to": "к",
-    "from": "от",
-    "for": "за",
-    "internal": "внутренний",
-    "external": "внешний",
-    "card": "карта",
-    "outgoing": "исходящий",
-    "incoming": "входящий",
-
-    "poplatek": "комиссия",
-    "úrok": "проценты",
-    "převod": "перевод",
-    "vklad": "внесение",
-    "výběr": "снятие",
-    "platba": "платёж",
-    "faktura": "счёт",
-    "nájem": "аренда",
-    "mzda": "зарплата",
-    "daň": "налог",
-    "pojištění": "страхование",
-    "půjčka": "кредит",
-    "splátka": "платёж по кредиту",
-    "odměna": "вознаграждение",
-    "vratka": "возврат",
-    "inkaso": "инкассо",
-    "celkem": "всего",
-    "zůstatek": "остаток",
-    "pohyby": "операции",
-    "připsáno": "зачислено",
-    "odepsáno": "списано",
-    "zaúčtováno": "проведено",
-    "provedeno": "выполнено",
-    "popis": "описание",
-    "protiúčet": "корсчёт",
-    "příchozí": "входящий",
+# [FIX-TRANSLATE-WORDBOUND] Дополнительный словарь одиночных слов (для пословного перевода)
+_WORD_DICT: Dict[str, str] = {
+    # Английский
+    "fee": "комиссия", "fees": "комиссии", "payment": "платёж", "payments": "платежи",
+    "transfer": "перевод", "transfers": "переводы", "salary": "заработная плата",
+    "refund": "возврат", "invoice": "счёт", "rent": "аренда",
+    "utilities": "коммунальные услуги", "commission": "комиссия",
+    "dividend": "дивиденды", "interest": "проценты", "purchase": "покупка",
+    "withdrawal": "снятие", "deposit": "внесение", "groceries": "продукты",
+    "restaurant": "ресторан", "taxi": "такси", "fuel": "топливо",
+    "insurance": "страхование", "loan": "кредит", "repayment": "погашение",
+    "reward": "вознаграждение", "bonus": "бонус", "cashback": "кэшбэк",
+    "reference": "назначение", "details": "детали", "description": "описание",
+    "beneficiary": "получатель", "payer": "плательщик", "amount": "сумма",
+    "balance": "баланс", "statement": "выписка",
+    "to": "к", "from": "от", "for": "за",
+    "internal": "внутренний", "external": "внешний", "card": "карта",
+    "outgoing": "исходящий", "incoming": "входящий",
+    # Чешский
+    "poplatek": "комиссия", "úrok": "проценты", "převod": "перевод",
+    "vklad": "внесение", "výběr": "снятие", "platba": "платёж",
+    "faktura": "счёт", "nájem": "аренда", "mzda": "зарплата",
+    "daň": "налог", "pojištění": "страхование", "půjčka": "кредит",
+    "splátka": "платёж по кредиту", "odměna": "вознаграждение",
+    "vratka": "возврат", "inkaso": "инкассо", "celkem": "всего",
+    "zůstatek": "остаток", "pohyby": "операции", "připsáno": "зачислено",
+    "odepsáno": "списано", "zaúčtováno": "проведено", "provedeno": "выполнено",
+    "popis": "описание", "protiúčet": "корсчёт", "příchozí": "входящий",
     "odchozí": "исходящий",
-
-    "maksājums": "платёж",
-    "pārskaitījums": "перевод",
-    "ienākošais": "входящий",
-    "izejošais": "исходящий",
-    "komisija": "комиссия",
-    "izņemšana": "снятие",
-    "iemaksa": "взнос",
-    "procenti": "проценты",
-    "alga": "зарплата",
-    "īre": "аренда",
-    "rēķins": "счёт",
-    "nodoklis": "налог",
-    "apdrošināšana": "страхование",
-    "aizdevums": "кредит",
-    "atmaksa": "возврат",
-    "atlīdzība": "вознаграждение",
-    "prēmija": "премия",
-    "kompensācija": "компенсация",
-    "atlikums": "остаток",
-    "kopsumma": "итого",
-    "ienākumi": "доходы",
-    "izdevumi": "расходы",
-    "saņēmējs": "получатель",
-    "maksātājs": "плательщик",
-    "mērķis": "назначение",
-    "datums": "дата",
-    "summa": "сумма",
-    "veids": "тип",
-    "konts": "счёт",
-
-    "fizetés": "платёж",
-    "átutalás": "перевод",
-    "bejövő": "входящий",
-    "kimenő": "исходящий",
-    "díj": "сбор",
-    "jutalék": "комиссия",
-    "vásárlás": "покупка",
-    "kamat": "проценты",
-    "bér": "зарплата",
-    "számla": "счёт",
-    "adó": "налог",
-    "biztosítás": "страхование",
-    "kölcsön": "кредит",
-    "törlesztés": "погашение",
-    "visszatérítés": "возврат",
-    "jóváírás": "зачисление",
-    "terhelés": "списание",
-    "egyenleg": "баланс",
-    "összeg": "сумма",
-    "közlemény": "сообщение",
-    "kedvezményezett": "получатель",
-    "értéknap": "дата валютирования",
-    "sorszám": "номер",
-    "típus": "тип",
-    "dátum": "дата",
-    "tranzakció": "транзакция",
-    "megbízás": "поручение",
-    "befizetés": "внесение",
-    "kifizetés": "выплата",
+    # Латышский
+    "maksājums": "платёж", "pārskaitījums": "перевод", "ienākošais": "входящий",
+    "izejošais": "исходящий", "komisija": "комиссия", "izņemšana": "снятие",
+    "iemaksa": "взнос", "procenti": "проценты", "alga": "зарплата",
+    "algas": "зарплаты", "algu": "зарплату", "īre": "аренда",
+    "rēķins": "счёт", "rekins": "счёт", "nodoklis": "налог",
+    "apdrošināšana": "страхование", "aizdevums": "кредит", "atmaksa": "возврат",
+    "atlīdzība": "вознаграждение", "prēmija": "премия", "kompensācija": "компенсация",
+    "atlikums": "остаток", "kopsumma": "итого", "ienākumi": "доходы",
+    "izdevumi": "расходы", "saņēmējs": "получатель", "maksātājs": "плательщик",
+    "mērķis": "назначение", "datums": "дата", "summa": "сумма",
+    "veids": "тип", "konts": "счёт", "izmaksa": "выплата",
+    "darba": "рабочей", "darba algas": "заработной платы",
+    # Венгерский
+    "fizetés": "платёж", "átutalás": "перевод", "bejövő": "входящий",
+    "kimenő": "исходящий", "díj": "сбор", "jutalék": "комиссия",
+    "vásárlás": "покупка", "kamat": "проценты", "bér": "зарплата",
+    "számla": "счёт", "adó": "налог", "biztosítás": "страхование",
+    "kölcsön": "кредит", "törlesztés": "погашение", "visszatérítés": "возврат",
+    "jóváírás": "зачисление", "terhelés": "списание", "egyenleg": "баланс",
+    "összeg": "сумма", "közlemény": "сообщение", "kedvezményezett": "получатель",
+    "értéknap": "дата валютирования", "sorszám": "номер", "típus": "тип",
+    "dátum": "дата", "tranzakció": "транзакция", "megbízás": "поручение",
+    "befizetés": "внесение", "kifizetés": "выплата",
 }
 
-_PHRASE_KEYS_SORTED = sorted(_PHRASE_DICT.keys(), key=len, reverse=True)
 
-_TRANSLATE_KEYS_SORTED = sorted(_TRANSLATION_DICT.keys(), key=len, reverse=True)
-_TRANSLATE_PATTERN = re.compile(
-    r'(?<![A-Za-zÀ-ÖØ-öø-ÿĀ-žА-Яа-я])'
-    r'(' + '|'.join(re.escape(k) for k in _TRANSLATE_KEYS_SORTED) + r')'
-    r'(?![A-Za-zÀ-ÖØ-öø-ÿĀ-žА-Яа-я])',
-    re.IGNORECASE,
-)
+def _build_translation_patterns():
+    """
+    [FIX-TRANSLATE-WORDBOUND] Строим паттерны для фраз и слов.
+    Фразы — от длинных к коротким. Слова — только по границам слова.
+    """
+    phrase_patterns = []
+    for key in sorted(_PHRASE_DICT.keys(), key=len, reverse=True):
+        # Ключ может содержать точки и пробелы — экранируем
+        esc = re.escape(key)
+        # Разрешаем любое количество пробелов/переводов строк вместо одиночного пробела
+        esc = esc.replace(r'\ ', r'\s+')
+        pattern = re.compile(
+            r'(?<![A-Za-zÀ-ÖØ-öø-ÿĀ-žА-Яа-я])'
+            + esc +
+            r'(?![A-Za-zÀ-ÖØ-öø-ÿĀ-žА-Яа-я])',
+            re.IGNORECASE
+        )
+        phrase_patterns.append((pattern, key))
+
+    word_patterns = []
+    for key in sorted(_WORD_DICT.keys(), key=len, reverse=True):
+        pattern = re.compile(
+            r'(?<![A-Za-zÀ-ÖØ-öø-ÿĀ-žА-Яа-я])'
+            + re.escape(key) +
+            r'(?![A-Za-zÀ-ÖØ-öø-ÿĀ-žА-Яа-я])',
+            re.IGNORECASE
+        )
+        word_patterns.append((pattern, key))
+
+    return phrase_patterns, word_patterns
 
 
-def _translate_repl(m: re.Match) -> str:
-    key = m.group(1).lower()
-    return _TRANSLATION_DICT.get(key, m.group(0))
+_PHRASE_PATTERNS, _WORD_PATTERNS = _build_translation_patterns()
 
 
 def translate_to_russian(text: str) -> str:
+    """
+    [FIX-TRANSLATE-CLEAN] Перевод описания на русский.
+    - Сначала многословные фразы (от длинных к коротким).
+    - Потом отдельные слова — строго по границам слова (algas ≠ alga+s).
+    - Перевод не вставляется внутрь слова.
+    """
     if not text:
         return text
     s = str(text)
-    placeholders: List[Tuple[str, str]] = []
-    for i, key in enumerate(_PHRASE_KEYS_SORTED):
-        pattern = re.compile(re.escape(key), re.IGNORECASE)
-        def repl(m, _i=i, _key=key):
-            translated = _PHRASE_DICT.get(_key, m.group(0))
-            ph = f"\x00PH{_i}\x00"
-            placeholders.append((ph, translated))
-            return ph
-        s = pattern.sub(repl, s)
-    s = _TRANSLATE_PATTERN.sub(_translate_repl, s)
-    for ph, translated in placeholders:
-        s = s.replace(ph, translated)
+
+    # 1. Фразы
+    for pattern, key in _PHRASE_PATTERNS:
+        translated = _PHRASE_DICT.get(key, key)
+        s = pattern.sub(translated, s)
+
+    # 2. Отдельные слова
+    for pattern, key in _WORD_PATTERNS:
+        translated = _WORD_DICT.get(key, key)
+        s = pattern.sub(translated, s)
+
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 
 def translate_description_inline(original: str) -> str:
+    """
+    [NEW-TRANSLATE-INLINE] Формат: "ОРИГИНАЛ (перевод)".
+    Если перевод совпадает с оригиналом или пуст — возвращаем оригинал без скобок.
+    """
     if original is None:
         return ""
     orig = str(original).strip()
@@ -1613,7 +1619,7 @@ def translate_description_inline(original: str) -> str:
     return f"{orig} ({translated})"
 
 
-# ==================== [NEW-SMART-COUNTERPARTY] ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
+# ==================== [FIX-COUNTERPARTY-FULL] ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
 
 _BANK_SERVICE_MARKERS = [
     'начальный остаток', 'конечный остаток', 'входящий остаток', 'исходящий остаток',
@@ -1642,6 +1648,8 @@ _BANK_SERVICE_MARKERS = [
     'készpénzfelvétel', 'készpénzbefizetés',
     'atm withdrawal', 'atm', 'cash withdrawal', 'cash deposit',
     'card payment', 'pos payment',
+    'grow plan fee', 'expenses app charges', 'revolut business fee',
+    'interest payment for loan',
 ]
 
 
@@ -1730,6 +1738,9 @@ def _looks_like_bank_name(s: str) -> bool:
     return any(w in low for w in bank_words)
 
 
+# [FIX-COUNTERPARTY-FULL] Раньше здесь были очень узкие regex — теперь
+# используем более полные, учитывающие и полное имя после "from"/"to".
+
 _NAME_PATTERNS = [
     (r'\bMoney added from\s+(.+)$', 1),
     (r'\bMoney received from\s+(.+)$', 1),
@@ -1757,6 +1768,118 @@ def _extract_name_by_patterns(desc: str) -> str:
             if cand and len(cand) >= 2 and not _looks_like_bank_name(cand) \
                     and not _is_service_description(cand):
                 return cand
+    return ''
+
+
+# ==================== [FIX-COUNTERPARTY-FULL] ПОЛНЫЕ ИМЕНА ПО БАНКАМ ====================
+
+def _extract_revolut_name(desc: str,
+                           account_name: str = '',
+                           payer: str = '',
+                           beneficiary: str = '') -> str:
+    """
+    [FIX-COUNTERPARTY-FULL] Для Revolut:
+      - если есть поле beneficiary (Beneficiary name) — это чистое полное имя получателя.
+      - если есть поле payer (Payer) — это чистое полное имя плательщика.
+      - иначе берём из Description после "from"/"to" до разделителя ' • ' или '|'.
+    """
+    if beneficiary:
+        b = _clean_counterparty_name(beneficiary)
+        if b and len(b) >= 2:
+            return b
+    if payer:
+        p = _clean_counterparty_name(payer)
+        if p and len(p) >= 2:
+            return p
+
+    if not desc:
+        return ''
+
+    s = str(desc).strip()
+    # Сначала — из Description
+    m = re.match(r'^\s*Money added from\s+(.+?)(?:\s*[•|]\s*|$)', s, re.IGNORECASE)
+    if m:
+        name = m.group(1).strip()
+        # убираем возможные хвосты "Revolut Business Fee" и т.п.
+        name = re.sub(r'\s+Revolut Business Fee.*$', '', name, flags=re.IGNORECASE)
+        name = _clean_counterparty_name(name)
+        if name:
+            return name
+    m = re.match(r'^\s*Money sent to\s+(.+?)(?:\s*[•|]\s*|$)', s, re.IGNORECASE)
+    if m:
+        return _clean_counterparty_name(m.group(1).strip())
+    m = re.match(r'^\s*From\s+(.+?)(?:\s*[•|]\s*|$)', s, re.IGNORECASE)
+    if m:
+        return _clean_counterparty_name(m.group(1).strip())
+    m = re.match(r'^\s*To\s+(.+?)(?:\s*[•|]\s*|$)', s, re.IGNORECASE)
+    if m:
+        return _clean_counterparty_name(m.group(1).strip())
+    return ''
+
+
+def _extract_paysera_name(desc: str,
+                           account_name: str = '',
+                           payer: str = '',
+                           beneficiary: str = '') -> str:
+    """
+    [FIX-COUNTERPARTY-FULL] Для Paysera — полное имя получателя/плательщика.
+    В PDF — из блока "Получатель / Плательщик"; в XLSX — из колонки.
+    """
+    for candidate in (beneficiary, payer):
+        if candidate:
+            c = _clean_counterparty_name(candidate)
+            # убираем хвосты "(Код)" и "P12345"
+            c = re.sub(r'\([^)]*\)', ' ', c)
+            c = re.sub(r'\s+[A-Z]\d{4,}\s*$', '', c)
+            c = re.sub(r'\s+', ' ', c).strip(' .,;:-')
+            if c and len(c) >= 3:
+                return c
+
+    if not desc:
+        return ''
+    s = str(desc).strip()
+    # "Sent from Revolut" — это не контрагент, а банк
+    if re.match(r'^(sent|sutits|inviato)\s+', s, re.IGNORECASE):
+        return ''
+    # "Плата за обслуживание счета." — это банк
+    if 'плата за обслуживание' in s.lower():
+        return 'Paysera LT'
+    return ''
+
+
+def _extract_industra_name(desc: str,
+                            account_name: str = '',
+                            payer: str = '',
+                            beneficiary: str = '') -> str:
+    """
+    [FIX-COUNTERPARTY-FULL] Для Industra — полное имя из поля
+    "Получатель / Плательщик" или из описания.
+    """
+    for candidate in (beneficiary, payer):
+        if candidate:
+            c = _clean_counterparty_name(candidate)
+            c = re.sub(r'\s+\d{6,}.*$', '', c)  # убираем рег.номер
+            c = re.sub(r'\s+', ' ', c).strip(' .,;:-')
+            if c and len(c) >= 3:
+                return c
+
+    if not desc:
+        return ''
+    low = desc.lower()
+    if 'комиссия за банковскую операцию' in low:
+        return 'Industra Bank'
+    if 'проводка мемориальным ордером' in low:
+        return 'Industra Bank'
+    if 'перечисление между клиентами банка' in low:
+        m = re.search(r'Перечисление между клиентами банка,\s*([^,]+)', desc, re.IGNORECASE)
+        if m:
+            return _clean_counterparty_name(m.group(1))
+    m = re.search(r'Исходящее перечисление,\s*([^,]+)', desc, re.IGNORECASE)
+    if m:
+        return _clean_counterparty_name(m.group(1))
+    m = re.search(r'Зачисление входящего платежа на счет клиента,\s*([^,]+)', desc, re.IGNORECASE)
+    if m:
+        return _clean_counterparty_name(m.group(1))
     return ''
 
 
@@ -1873,30 +1996,6 @@ def _extract_regina_alfa_name(desc: str) -> str:
     return ''
 
 
-def _extract_wise_name(desc: str) -> str:
-    if not desc:
-        return ''
-    m = re.search(r'списан[ао]?\s+(.+?)(?:\s*\(|$)', desc, re.IGNORECASE)
-    if m:
-        return _clean_counterparty_name(m.group(1))
-    return ''
-
-
-def _extract_revolut_name(desc: str, account_name: str = '') -> str:
-    if not desc:
-        return ''
-    m = re.search(r'\bMoney added from\s+(.+?)(?:\s*\||$)', desc, re.IGNORECASE)
-    if m:
-        return _clean_counterparty_name(m.group(1))
-    m = re.search(r'^\s*From\s+(.+?)(?:\s*\||$)', desc, re.IGNORECASE)
-    if m:
-        return _clean_counterparty_name(m.group(1))
-    m = re.search(r'^\s*To\s+(.+?)(?:\s*\||$)', desc, re.IGNORECASE)
-    if m:
-        return _clean_counterparty_name(m.group(1))
-    return ''
-
-
 def _extract_csob_name(desc: str) -> str:
     if not desc:
         return ''
@@ -1970,17 +2069,6 @@ def _extract_tinkoff_name(desc: str) -> str:
     return ''
 
 
-def _extract_industra_name(desc: str) -> str:
-    if not desc:
-        return ''
-    low = desc.lower()
-    if 'комиссия за обслуживание' in low:
-        return 'Industra Bank'
-    if 'комиссия за банковскую операцию' in low:
-        return 'Industra Bank'
-    return ''
-
-
 def _extract_kapital_name(desc: str) -> str:
     if not desc:
         return ''
@@ -2013,25 +2101,41 @@ def extract_counterparty_smart(description: str,
                                 account_name: str = '',
                                 payer: str = '',
                                 beneficiary: str = '') -> Tuple[str, str]:
+    """
+    [FIX-COUNTERPARTY-FULL] Умное извлечение контрагента.
+    Приоритет:
+      1) Явные поля beneficiary / payer (полные имена из выписки).
+      2) Специфичные парсеры по банку (Revolut, Paysera, Industra, Pasha, MASHREQ, Kapital, WIO).
+      3) Шаблоны "from"/"to".
+      4) Эвристика по частям описания.
+      5) Имя банка из account_name.
+    """
     desc = (description or '').strip()
     acc_low = (account_name or '').lower()
 
+    # --- 1) Явные поля ---
     if beneficiary:
         b = beneficiary.strip()
         if b and b.lower() not in ('nan', 'none', 'n/a', '-') and not _looks_like_bank_name(b):
-            return (_clean_counterparty_name(b), desc)
+            cleaned = _clean_counterparty_name(b)
+            if cleaned and len(cleaned) >= 2:
+                return (cleaned, desc)
     if payer:
         p = payer.strip()
         if p and p.lower() not in ('nan', 'none', 'n/a', '-') and not _looks_like_bank_name(p):
-            return (_clean_counterparty_name(p), desc)
+            cleaned = _clean_counterparty_name(p)
+            if cleaned and len(cleaned) >= 2:
+                return (cleaned, desc)
 
-    if not desc:
-        return ('', '')
-
+    # --- 2) Специфичные банки ---
     cp = ''
 
     if 'wise' in acc_low or 'saida wise' in acc_low:
-        cp = _extract_wise_name(desc)
+        cp = _extract_wio_name(desc)
+        if not cp:
+            m = re.search(r'списан[ао]?\s+(.+?)(?:\s*\(|$)', desc, re.IGNORECASE)
+            if m:
+                cp = _clean_counterparty_name(m.group(1))
 
     if not cp and 'wio' in acc_low:
         cp = _extract_wio_name(desc)
@@ -2046,7 +2150,13 @@ def extract_counterparty_smart(description: str,
         cp = _extract_regina_alfa_name(desc)
 
     if not cp and ('revolut' in acc_low):
-        cp = _extract_revolut_name(desc, account_name)
+        cp = _extract_revolut_name(desc, account_name, payer, beneficiary)
+
+    if not cp and ('paysera' in acc_low):
+        cp = _extract_paysera_name(desc, account_name, payer, beneficiary)
+
+    if not cp and ('industra' in acc_low or 'plavas' in acc_low or 'kl59' in acc_low):
+        cp = _extract_industra_name(desc, account_name, payer, beneficiary)
 
     if not cp and ('csob' in acc_low or 'jenhor' in acc_low or 'jenisov' in acc_low
                    or 'dzibik' in acc_low or 'džibik' in acc_low
@@ -2066,15 +2176,23 @@ def extract_counterparty_smart(description: str,
     if not cp and 'tinkoff' in acc_low:
         cp = _extract_tinkoff_name(desc)
 
-    if not cp and 'industra' in acc_low:
-        cp = _extract_industra_name(desc)
-
     if not cp and ('kapital' in acc_low or ('saida' in acc_low and 'azn' in acc_low)):
         cp = _extract_kapital_name(desc)
 
+    # --- 3) Шаблоны ---
     if not cp:
         cp = _extract_name_by_patterns(desc)
 
+    # --- 4) Эвристика: ищем часть с именем ---
+    if not cp:
+        # "To X | Y" — берём X
+        m = re.match(r'^\s*To\s+([^|•]+)', desc, re.IGNORECASE)
+        if m:
+            cp = _clean_counterparty_name(m.group(1))
+        if not cp:
+            m = re.match(r'^\s*From\s+([^|•]+)', desc, re.IGNORECASE)
+            if m:
+                cp = _clean_counterparty_name(m.group(1))
     if not cp:
         parts = re.split(r'[|•;]', desc)
         for p in parts:
@@ -2090,6 +2208,7 @@ def extract_counterparty_smart(description: str,
                 if cp:
                     break
 
+    # --- 5) Имя банка из account_name ---
     if not cp:
         m = re.search(
             r'\b(CSOB|UniCredit|Revolut|Tinkoff|Paysera|Wise|BluOr|Industra|Pasha|Mashreq|WIO|N26|MKB|FIO|Kapital|RAK|ČSOB)\b',
@@ -3190,6 +3309,10 @@ def _read_xls_with_xlrd(file_content: bytes):
 
 
 def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    [FIX-COUNTERPARTY-FULL] Industra: полное имя из колонки
+    "Получатель / Плательщик" или из описания.
+    """
     result = []
     df = None
     if _is_real_xls(file_content):
@@ -3275,12 +3398,14 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
                     ttype = safe_str(row.iloc[ci['ttype']]) if 'ttype' in ci and ci['ttype'] < len(row) else ''
                     if not desc and ttype:
                         desc = ttype
-                    cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+                    # Объединяем тип + описание, чтобы _extract_industra_name мог найти имя
+                    full_desc = f"{ttype}, {desc}" if ttype and desc else (desc or ttype)
+                    cp_final, _ = extract_counterparty_smart(full_desc, account_name, cp, '')
                     result.append({
                         'Дата': date, 'Сумма': amount,
                         'Контрагент': cp_final if cp_final else '',
                         'Наименование счета': account_name,
-                        'Описание': desc
+                        'Описание': full_desc
                     })
                 except Exception:
                     continue
@@ -3354,12 +3479,13 @@ def _parse_industra_generic(file_content: bytes, account_name: str) -> List[Dict
             ttype = parts[ci['ttype']] if 'ttype' in ci and ci['ttype'] < len(parts) else ''
             if not desc and ttype:
                 desc = ttype
-            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            full_desc = f"{ttype}, {desc}" if ttype and desc else (desc or ttype)
+            cp_final, _ = extract_counterparty_smart(full_desc, account_name, cp, '')
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': full_desc
             })
         except Exception:
             continue
@@ -3379,6 +3505,10 @@ def parse_industra_kl59(file_content, account_name):
 
 
 def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    [FIX-COUNTERPARTY-FULL] Industra PDF: имя из фраз
+    "Исходящее перечисление, ИМЯ, ...", "Зачисление входящего платежа на счет клиента, ИМЯ, ..."
+    """
     result = []
     full_text = pdf_all_text(file_content)
     if not full_text:
@@ -3452,7 +3582,7 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         for idx_p, p in enumerate(parts):
             if idx_p == 0 and any(w in p.lower() for w in [
                 'исходящее', 'зачисление', 'проводка', 'комиссия', 'перевод',
-                'мемориальн'
+                'мемориальн', 'перечисление'
             ]):
                 op_type = p
                 continue
@@ -3486,19 +3616,22 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
         if op_type.lower().startswith('комиссия') or 'комиссия за банковскую операцию' in low_block:
             desc = 'Комиссия за банковскую операцию'
+            cp = 'Industra Bank'
 
         low_chunk = block_text.lower()
         if 'дебет' in low_chunk and ('(d)' in low_chunk or ' d ' in low_chunk):
             amount = -abs(amount)
 
-        cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+        # [FIX-COUNTERPARTY-FULL] Пытаемся достать имя из фразы
+        combined = f"{op_type}, {desc}" if op_type else desc
+        cp_final, _ = extract_counterparty_smart(combined, account_name, cp, '')
 
         result.append({
             'Дата': date,
             'Сумма': amount,
             'Контрагент': cp_final,
             'Наименование счета': account_name,
-            'Описание': desc
+            'Описание': combined
         })
 
     seen = set()
@@ -3651,7 +3784,7 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
     return result
 
 
-# ==================== [FIX-KAPITAL-PDF] Kapital bank Saida AZN (PDF) ====================
+# ==================== [FIX-KAPITAL-PDF] ====================
 
 def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result: List[Dict] = []
@@ -4644,6 +4777,10 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    [FIX-COUNTERPARTY-FULL] Paysera PDF: имя в блоке "Получатель / Плательщик".
+    Строки таблицы содержат: Тип, Дата, Номер, Получатель, EVP/IBAN, Сумма, Остаток, Назначение.
+    """
     result = []
     full_text = pdf_all_text(file_content)
     if not full_text:
@@ -4659,6 +4796,8 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if 'назначение' in norm and 'платежа' in norm:
             blocks.append(current_lines)
             current_lines = []
+    if current_lines:
+        blocks.append(current_lines)
 
     date_time_re = re.compile(r'(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})')
     amount_re = re.compile(r'(-?\d[\d\s\u00a0]*[.,]\d{2})\s*EUR')
@@ -4699,20 +4838,49 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if amount is None or amount == 0.0:
             continue
 
-        first_amt_pos = amount_matches[0].start()
-        party_raw = block_text[:first_amt_pos]
-        party_raw = re.sub(r'\+\d{4}', ' ', party_raw)
-        party_raw = re.sub(r'\b\d{6,}\b', ' ', party_raw)
-        party_raw = re.sub(r'\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b', ' ', party_raw)
-        party_raw = re.sub(r'\(\s*\d+\s*\)', ' ', party_raw)
-        party_raw = re.sub(
-            r'\b(Перевод|Комиссионная\s+плата|Тип|Номер|Дата\s+и\s+время|выписки|'
-            r'перевода|Получатель\s*/\s*Плательщик|EVP\s*/\s*IBAN|'
-            r'Сумма\s+и\s+валюта|Остаток|Назначение\s+платежа)\b',
-            ' ', party_raw, flags=re.IGNORECASE
+        # Ищем имя получателя/плательщика
+        # Оно находится между последним номером перевода и IBAN/EVP
+        cp = ''
+        iban_match = re.search(
+            r'([A-Z]{2}\d{2}[A-Z0-9]{10,30})',
+            block_text
         )
-        party_raw = re.sub(r'\s+', ' ', party_raw).strip()
-        cp = party_raw.strip(' .,;:-')
+        if iban_match:
+            before_iban = block_text[:iban_match.start()]
+            # Убираем всё до последнего числа-номера перевода (9+ цифр)
+            m_num = None
+            for m in re.finditer(r'\b\d{9,}\b', before_iban):
+                m_num = m
+            if m_num:
+                name_part = before_iban[m_num.end():].strip()
+            else:
+                name_part = before_iban
+            name_part = re.sub(r'\b\d{4}-\d{2}-\d{2}\b', ' ', name_part)
+            name_part = re.sub(r'\b\d{2}:\d{2}:\d{2}\b', ' ', name_part)
+            name_part = re.sub(r'\+\d{4}', ' ', name_part)
+            name_part = re.sub(r'\b(Paysera LT|Комиссионная плата|Перевод)\b', ' ', name_part, flags=re.IGNORECASE)
+            name_part = re.sub(r'\(\s*\d+\s*\)', ' ', name_part)
+            name_part = re.sub(r'\s+', ' ', name_part).strip(' .,;:-')
+            # Убираем возможный хвост "P12345" (персональный код)
+            name_part = re.sub(r'\s+[A-Z]\d{4,}\s*$', '', name_part)
+            if name_part and len(name_part) >= 3 and not _looks_like_bank_name(name_part):
+                cp = name_part
+
+        if not cp:
+            # Fallback: берём из блока всё, что похоже на имя
+            for line in block:
+                ln = line.strip()
+                if not ln:
+                    continue
+                if re.match(r'^\d{4}-\d{2}-\d{2}', ln):
+                    continue
+                if 'назначение' in ln.lower():
+                    continue
+                if re.match(r'^(Перевод|Комиссионная)', ln):
+                    continue
+                if 'Плата за обслуживание' in ln:
+                    cp = 'Paysera LT'
+                    break
 
         cp_final, _ = extract_counterparty_smart(purpose, account_name, cp, '')
 
@@ -4794,16 +4962,10 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 # ==================== Revolut ====================
 
-def _extract_after_to(desc: str) -> str:
-    if not desc:
-        return ''
-    m = re.match(r'^\s*To\s+(.+)$', desc.strip(), flags=re.IGNORECASE | re.DOTALL)
-    if m:
-        return m.group(1).strip()
-    return ''
-
-
 def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    [FIX-COUNTERPARTY-FULL] Revolut CSV: полные имена из Payer / Beneficiary name.
+    """
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -4833,8 +4995,8 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
             ci['description'] = i
         elif hl == 'reference' and 'reference' not in ci:
             ci['reference'] = i
-        elif hl == 'payer' and 'counterparty' not in ci:
-            ci['counterparty'] = i
+        elif hl == 'payer' and 'payer' not in ci:
+            ci['payer'] = i
         elif hl == 'state' and 'state' not in ci:
             ci['state'] = i
         elif hl == 'type' and 'type' not in ci:
@@ -4872,7 +5034,7 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 amount = abs(amount)
             elif ttype == 'FEE':
                 amount = -abs(amount)
-            payer = parts[ci['counterparty']] if 'counterparty' in ci and ci['counterparty'] < len(parts) else ''
+            payer = parts[ci['payer']] if 'payer' in ci and ci['payer'] < len(parts) else ''
             beneficiary = parts[ci['beneficiary']] if 'beneficiary' in ci and ci['beneficiary'] < len(parts) else ''
             desc = parts[ci['description']] if ci['description'] < len(parts) else ''
             reference = parts[ci['reference']] if 'reference' in ci and ci['reference'] < len(parts) else ''
@@ -4907,6 +5069,10 @@ def parse_revolut_plavas(file_content, account_name):
 
 
 def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    [FIX-COUNTERPARTY-FULL] Revolut PDF: полное имя после "Money added from"/"To"/"From"
+    до разделителя ' • '.
+    """
     result = []
     full_text = pdf_all_text(file_content)
     if not full_text:
@@ -6544,7 +6710,6 @@ def build_combined_excel(df_display: pd.DataFrame,
     ws2 = wb.create_sheet('Сводка по счетам')
     _write_summary_sheet(ws2, summary_df)
 
-    # [DEEPSEEK-INTEGRATION] Лист с AI-обогащением, если есть
     if ai_df is not None and not ai_df.empty:
         ws3 = wb.create_sheet('AI-обогащение')
         for j, col_name in enumerate(ai_df.columns, start=1):
@@ -6669,7 +6834,7 @@ def _process_uploaded_files(uploaded_files) -> Dict:
     }
 
 
-# ==================== [DEEPSEEK-INTEGRATION] РЕНДЕР РЕЗУЛЬТАТОВ ====================
+# ==================== РЕНДЕР РЕЗУЛЬТАТОВ ====================
 
 def _render_results(result: Dict):
     all_tx = result.get('all_tx', [])
@@ -6715,7 +6880,6 @@ def _render_results(result: Dict):
             lambda x: translate_description_inline(str(x)) if x is not None else ''
         )
 
-    # [DEEPSEEK-INTEGRATION] Сохраняем для AI-вкладки
     st.session_state['df_numeric'] = df_numeric
     st.session_state['df_display'] = df_display
     st.session_state['df_raw'] = df_raw
@@ -6730,7 +6894,6 @@ def _render_results(result: Dict):
     with c3:
         st.metric("📉 Расходы", format_amount(expense))
 
-    # [DEEPSEEK-INTEGRATION] AI-обогащение
     st.markdown("---")
     st.markdown("### 🤖 AI-обогащение транзакций (DeepSeek)")
     st.caption(
@@ -6872,16 +7035,15 @@ def _render_results(result: Dict):
             st.write(f"- {f}")
 
 
-# ==================== [DEEPSEEK-INTEGRATION] AI-АССИСТЕНТ ====================
+# ==================== AI-АССИСТЕНТ ====================
 
 def _render_ai_assistant_tab():
     st.markdown("### 🤖 AI-ассистент (DeepSeek)")
     st.caption(
         "Задавайте вопросы по коду, данным и обработке выписок. "
-        "Ассистент видит только то, что вы ему напишете — файлы не отправляются автоматически."
+        "Ассистент видит только то, что вы ему напишите — файлы не отправляются автоматически."
     )
 
-    # Статус подключения
     client = _get_deepseek_client()
     if client is None:
         if not _OPENAI_SDK_AVAILABLE:
@@ -6922,7 +7084,6 @@ def _render_ai_assistant_tab():
 
     st.markdown("---")
 
-    # Выбор модели
     model_choice = st.selectbox(
         "Модель",
         options=[DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_REASONER_MODEL],
@@ -6931,7 +7092,6 @@ def _render_ai_assistant_tab():
         help="deepseek-chat — быстрая; deepseek-reasoner — для отладки кода.",
     )
 
-    # Быстрые промпты
     st.markdown("**Быстрые действия:**")
     qc1, qc2, qc3, qc4 = st.columns(4)
     quick_prompt = None
@@ -6958,11 +7118,9 @@ def _render_ai_assistant_tab():
             st.session_state['ai_chat_history'] = []
             st.rerun()
 
-    # История чата
     if 'ai_chat_history' not in st.session_state:
         st.session_state['ai_chat_history'] = []
 
-    # Системный промпт с контекстом
     context_parts = [
         "Ты — ассистент внутри Streamlit-приложения 'Аналитик банковских выписок'. "
         "Приложение парсит CSV, XLSX, XLS, DOCX, PDF выписки банков (ČSOB, UniCredit, "
@@ -6987,7 +7145,6 @@ def _render_ai_assistant_tab():
             pass
     system_prompt = "\n".join(context_parts)
 
-    # Отображение истории
     for msg in st.session_state['ai_chat_history']:
         if msg['role'] == 'user':
             st.markdown(
@@ -7001,7 +7158,6 @@ def _render_ai_assistant_tab():
                 unsafe_allow_html=True,
             )
 
-    # Обработка быстрого промпта
     if quick_prompt:
         st.session_state['ai_chat_history'].append({'role': 'user', 'content': quick_prompt})
         with st.spinner("DeepSeek думает..."):
@@ -7014,7 +7170,6 @@ def _render_ai_assistant_tab():
             st.session_state['ai_chat_history'].append({'role': 'assistant', 'content': answer})
         st.rerun()
 
-    # Поле ввода
     user_input = st.chat_input("Спросите DeepSeek о коде, данных или обработке...")
     if user_input:
         st.session_state['ai_chat_history'].append({'role': 'user', 'content': user_input})
@@ -7028,7 +7183,6 @@ def _render_ai_assistant_tab():
             st.session_state['ai_chat_history'].append({'role': 'assistant', 'content': answer})
         st.rerun()
 
-    # Кнопка «Отправить код на ревью»
     with st.expander("📎 Отправить фрагмент кода на ревью"):
         code_snippet = st.text_area(
             "Вставьте код или ошибку",
@@ -7069,7 +7223,6 @@ def main():
     if 'ai_chat_history' not in st.session_state:
         st.session_state['ai_chat_history'] = []
 
-    # [DEEPSEEK-INTEGRATION] Сайдбар с настройками AI
     with st.sidebar:
         st.markdown("### ⚙️ Настройки")
         st.markdown("**DeepSeek AI**")
@@ -7085,12 +7238,11 @@ def main():
             "только те фрагменты, которые вы сами вводите в чат."
         )
 
-    # [DEEPSEEK-INTEGRATION] Вкладки
     tab_upload, tab_ai = st.tabs(["📥 Обработка выписок", "🤖 AI-ассистент"])
 
     with tab_upload:
         st.markdown("### 📥 Загрузка файлов")
-        st.markdown("Перетащите выписки в окно ниже или нажмите **Browse files**.")
+        st.markdown("Перетащите выписки в окно ниже или нажмите **Выбрать файлы**.")
 
         col_reset, col_info = st.columns([1, 4])
         with col_reset:
