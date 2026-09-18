@@ -5,3 +5,4 @@ chardet
 xlrd
 python-docx
 pdfplumber
+openai
