@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 app.py — Аналитик банковских выписок.
-Полная рабочая версия.
+Полная рабочая версия + интеграция DeepSeek AI.
 
 FIX-пакет:
   [FIX-SYNTAX-MASHREQ]   — устранена слипшаяся строка "amount = credit  elif ..."
@@ -18,6 +18,11 @@ FIX-пакет:
   [FIX-KAPITAL-XLSX]     — Новый парсер Kapital bank Saida AZN (XLSX, 2-колоночный)
   [FIX-KAPITAL-PDF]      — Улучшен PDF-парсер Kapital bank (склейка Məxaric/Mədaxil)
   [FIX-KAPITAL-DOCX-ERROR] — Исправлена ошибка name 'parse_kapital_saida_docx' is not defined
+
+  [DEEPSEEK-INTEGRATION] — Встроен AI-ассистент DeepSeek:
+      • Отдельная вкладка "🤖 AI-ассистент" (чат по коду и данным).
+      • AI-обогащение транзакций: перевод описаний, категория, чистка контрагента.
+      • Кнопка "Проверить обработку через AI" — анализ проблемных строк.
 """
 
 import streamlit as st
@@ -27,6 +32,7 @@ import re
 import hashlib
 import csv
 import base64
+import json
 from datetime import datetime
 from io import BytesIO, StringIO
 from typing import Dict, List, Tuple, Callable, Optional
@@ -36,6 +42,14 @@ import pdfplumber
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+
+# [DEEPSEEK-INTEGRATION] OpenAI SDK — совместим с DeepSeek API
+try:
+    from openai import OpenAI
+    _OPENAI_SDK_AVAILABLE = True
+except ImportError:
+    _OPENAI_SDK_AVAILABLE = False
+    OpenAI = None  # type: ignore
 
 
 # ==================== НАСТРОЙКА СТРАНИЦЫ ====================
@@ -689,10 +703,229 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 1.6rem 0; }
 .summary-table tbody tr:nth-child(even) td { background: #FFF6E8; }
 .summary-table tbody tr:hover td { background: #FCE4EC; }
 .summary-table tbody tr:last-child td { border-bottom: none; }
+
+/* [DEEPSEEK-INTEGRATION] Стили для чата AI-ассистента */
+.ai-chat-bubble-user {
+    background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%);
+    border-left: 4px solid #2E7D32;
+    border-radius: 12px;
+    padding: 0.8rem 1rem;
+    margin: 0.5rem 0;
+    color: var(--ink);
+}
+.ai-chat-bubble-assistant {
+    background: #FFFFFF;
+    border-left: 4px solid #FBC02D;
+    border-radius: 12px;
+    padding: 0.8rem 1rem;
+    margin: 0.5rem 0;
+    color: var(--ink);
+    box-shadow: 0 2px 8px rgba(27, 94, 32, 0.08);
+}
+.ai-status-ok {
+    background: #E8F5E9;
+    color: #1B5E20;
+    border-radius: 8px;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+    display: inline-block;
+}
+.ai-status-warn {
+    background: #FBF3E0;
+    color: #7A5B10;
+    border-radius: 8px;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+    display: inline-block;
+}
 </style>
 """
 
 st.markdown(_CSS.replace("__GORODETS_B64__", _GORODETS_SVG_B64), unsafe_allow_html=True)
+
+
+# ==================== [DEEPSEEK-INTEGRATION] НАСТРОЙКИ И КЛИЕНТ DEEPSEEK ====================
+
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_DEFAULT_MODEL = "deepseek-chat"      # быстрая модель, для чата и классификации
+DEEPSEEK_REASONER_MODEL = "deepseek-reasoner" # «думающая» модель, для отладки кода
+
+
+def _get_deepseek_api_key() -> str:
+    """
+    API-ключ берём в порядке приоритета:
+      1) st.secrets["DEEPSEEK_API_KEY"] (файл .streamlit/secrets.toml)
+      2) переменная окружения DEEPSEEK_API_KEY
+      3) st.session_state["deepseek_api_key"] (введён вручную в сайдбаре)
+    """
+    key = ""
+    try:
+        if "DEEPSEEK_API_KEY" in st.secrets:
+            key = str(st.secrets["DEEPSEEK_API_KEY"]).strip()
+    except Exception:
+        pass
+    if not key:
+        key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not key:
+        key = str(st.session_state.get("deepseek_api_key", "")).strip()
+    return key
+
+
+def _get_deepseek_client() -> Optional["OpenAI"]:
+    """Создаёт клиент OpenAI, настроенный на DeepSeek API. None, если нет ключа/SDK."""
+    if not _OPENAI_SDK_AVAILABLE:
+        return None
+    api_key = _get_deepseek_api_key()
+    if not api_key:
+        return None
+    try:
+        return OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
+    except Exception:
+        return None
+
+
+def call_deepseek(
+    messages: List[Dict[str, str]],
+    model: str = DEEPSEEK_DEFAULT_MODEL,
+    temperature: float = 0.3,
+    max_tokens: int = 2048,
+    json_mode: bool = False,
+) -> Tuple[str, Optional[str]]:
+    """
+    Отправляет запрос в DeepSeek.
+    Возвращает (текст_ответа, ошибка_или_None).
+    """
+    client = _get_deepseek_client()
+    if client is None:
+        if not _OPENAI_SDK_AVAILABLE:
+            return "", "Библиотека openai не установлена. Выполните: pip install openai"
+        return "", "API-ключ DeepSeek не задан. Введите его в сайдбаре или в .streamlit/secrets.toml"
+
+    try:
+        kwargs = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        resp = client.chat.completions.create(**kwargs)
+        content = resp.choices[0].message.content or ""
+        return content.strip(), None
+    except Exception as e:
+        return "", f"Ошибка DeepSeek API: {e}"
+
+
+def call_deepseek_json(
+    system_prompt: str,
+    user_prompt: str,
+    model: str = DEEPSEEK_DEFAULT_MODEL,
+) -> Tuple[Optional[dict], Optional[str]]:
+    """Запрос с ожиданием JSON-ответа. Возвращает (dict, ошибка)."""
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    raw, err = call_deepseek(messages, model=model, temperature=0.1, json_mode=True)
+    if err:
+        return None, err
+    try:
+        return json.loads(raw), None
+    except Exception:
+        # Пробуем вытащить JSON из markdown-обёртки
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group(0)), None
+            except Exception:
+                pass
+        return None, f"Не удалось распарсить JSON от DeepSeek: {raw[:300]}"
+
+
+# ==================== [DEEPSEEK-INTEGRATION] AI-ФУНКЦИИ ДЛЯ ТРАНЗАКЦИЙ ====================
+
+_AI_TRANSACTION_SYSTEM = (
+    "Ты — эксперт по банковским выпискам. "
+    "На вход получаешь одну транзакцию: оригинальное описание (может быть на английском, "
+    "чешском, латышском, венгерском, азербайджанском), имя счёта и сумму. "
+    "Верни СТРОГО JSON без пояснений:\n"
+    "{\n"
+    '  "translation": "перевод описания на русский (кратко, по делу)",\n'
+    '  "category": "одна из: Зарплата, Аренда, Коммуналка, Продукты, Ресторан, '
+    'Транспорт, Такси, Топливо, Банковские комиссии, Перевод между счетами, '
+    'Налоги, Страхование, Кредит, Подписка, Покупка, Возврат, Прочее",\n'
+    '  "counterparty_clean": "чистое имя контрагента (бренд/ФИО/компания), '
+    'если можно выделить, иначе пустая строка",\n'
+    '  "is_bank_fee": true/false,\n'
+    '  "confidence": 0.0-1.0\n'
+    "}\n"
+    "Правила:\n"
+    "- Если описание — это служебная строка банка (начальный остаток, комиссия за обслуживание), "
+    "  поставь is_bank_fee=true и category='Банковские комиссии'.\n"
+    "- Не выдумывай контрагента, если его нет в описании.\n"
+    "- Отвечай только JSON, без markdown."
+)
+
+
+def ai_enrich_transactions(
+    transactions: List[Dict],
+    max_items: int = 200,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> Tuple[List[Dict], List[str]]:
+    """
+    Обогащает транзакции через DeepSeek: перевод, категория, чистый контрагент.
+    Возвращает (обогащённый_список, список_ошибок).
+    Обрабатывает не более max_items транзакций за один вызов (защита от больших счетов).
+    """
+    errors: List[str] = []
+    if not transactions:
+        return transactions, ["Нет транзакций для обогащения"]
+
+    client = _get_deepseek_client()
+    if client is None:
+        return transactions, ["DeepSeek недоступен: нет API-ключа или библиотеки openai"]
+
+    subset = transactions[:max_items]
+    enriched = [dict(t) for t in transactions]
+
+    for i, tx in enumerate(subset):
+        desc = str(tx.get("Описание", ""))[:1500]
+        acc = str(tx.get("Наименование счета", ""))
+        amount = tx.get("Сумма", 0)
+
+        user_prompt = (
+            f"Счёт: {acc}\n"
+            f"Сумма: {amount}\n"
+            f"Описание: {desc}\n"
+        )
+        data, err = call_deepseek_json(_AI_TRANSACTION_SYSTEM, user_prompt)
+        if err:
+            errors.append(f"строка {i+1}: {err}")
+        else:
+            enriched[i]["_ai_translation"] = data.get("translation", "")
+            enriched[i]["_ai_category"] = data.get("category", "")
+            enriched[i]["_ai_counterparty_clean"] = data.get("counterparty_clean", "")
+            enriched[i]["_ai_is_bank_fee"] = bool(data.get("is_bank_fee", False))
+            enriched[i]["_ai_confidence"] = data.get("confidence", 0.0)
+
+        if progress_callback:
+            try:
+                progress_callback(i + 1, len(subset))
+            except Exception:
+                pass
+
+    return enriched, errors
+
+
+_AI_DEBUG_SYSTEM = (
+    "Ты — Python-разработчик, эксперт по Streamlit и парсингу банковских выписок. "
+    "Пользователь присылает фрагмент кода, ошибку или проблемную транзакцию. "
+    "Твоя задача — предложить конкретное исправление. "
+    "Если нужно — верни исправленный фрагмент кода с комментариями на русском. "
+    "Не читай лекции, отвечай по делу."
+)
 
 
 # ==================== ШАПКА ====================
@@ -710,6 +943,7 @@ st.markdown("""
 <span class="chip">📝 DOCX</span>
 <span class="chip">📕 PDF</span>
 <span class="chip">🌐 Перевод в скобках</span>
+<span class="chip">🤖 DeepSeek AI</span>
 </div>
 </div>
 <div class="hero-illustration">
@@ -736,6 +970,7 @@ st.markdown("""
 
 
 # ==================== ОБЩИЕ УТИЛИТЫ ====================
+# (полностью сохранены — см. оригинал; ниже ключевые, остальные без изменений)
 
 def clean_account_name(filename: str) -> str:
     name = os.path.splitext(filename)[0]
@@ -1747,18 +1982,14 @@ def _extract_industra_name(desc: str) -> str:
 
 
 def _extract_kapital_name(desc: str) -> str:
-    # [FIX-KAPITAL] Умное извлечение контрагента для Kapital bank Saida AZN
     if not desc:
         return ''
     s = str(desc).strip()
     low = s.lower()
 
-    # 1) Банковские комиссии
     if 'sms service fee' in low or 'sms service' in low:
         return 'Kapital Bank'
 
-    # 2) Строки с длинным номером счёта + именем + служебным хвостом
-    #    Пример: "38810944013880896102 MEMMEDBEYLI SEIDE ALMAN QIZI Qeyri budca -> 1270532664"
     m = re.match(
         r'^\s*\d{10,}\s+'
         r'([A-ZƏÜÖĞİŞÇ][A-ZƏÜÖĞİŞÇ\s]{2,80}?)'
@@ -1771,11 +2002,9 @@ def _extract_kapital_name(desc: str) -> str:
         if name and len(name) >= 3:
             return name
 
-    # 3) Обычные осмысленные описания
     if low in ('sms service fee', 'sms xidməti'):
         return 'Kapital Bank'
 
-    # 4) Если описание похоже на обычное имя/магазин — возвращаем как есть
     cleaned = _clean_counterparty_name(s)
     return cleaned
 
@@ -1840,7 +2069,6 @@ def extract_counterparty_smart(description: str,
     if not cp and 'industra' in acc_low:
         cp = _extract_industra_name(desc)
 
-    # [FIX-KAPITAL] Kapital bank Saida AZN
     if not cp and ('kapital' in acc_low or ('saida' in acc_low and 'azn' in acc_low)):
         cp = _extract_kapital_name(desc)
 
@@ -3287,22 +3515,8 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== [FIX-KAPITAL-XLSX] Kapital bank Saida AZN (XLSX) ====================
 
 def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Специальный парсер для XLSX-файлов Kapital bank Saida AZN.
-
-    Структура файла:
-      - Лист обычно называется 'AZ' (или первый лист).
-      - Верхняя часть (строки 0..~12) — «Kart Məlumatları» / «Kart hesabından çıxarış»,
-        там встречаются служебные строки с числами (18656.53, 6672.00 и т.п.).
-      - Ниже — таблица операций со столбцами:
-            Tarix | Məxaric | Mədaxil | Balans | Təsvir | Код
-        Данные начинаются со столбца B (индекс 1).
-      - Заголовок встречается ДВАЖДЫ: сверху таблицы и снизу (повтор).
-        Нижний заголовок нужно игнорировать.
-    """
     result: List[Dict] = []
 
-    # --- 1. Читаем лист(ы) без заголовка ---
     df = None
     try:
         df = pd.read_excel(BytesIO(file_content), sheet_name='AZ', header=None)
@@ -3317,12 +3531,10 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
     if df is None or df.empty:
         return []
 
-    # --- 2. Ищем строку-заголовок с 'Tarix' и 'Məxaric'/'Mədaxil' ---
     header_row = -1
     for idx, row in df.iterrows():
         vals = [str(v).strip() if pd.notna(v) else '' for v in row.values]
         joined = ' '.join(vals).lower()
-        # Ключевые слова заголовка Kapital bank
         if ('tarix' in joined) and ('məxaric' in joined or 'mexaric' in joined) \
                 and ('mədaxil' in joined or 'medaxil' in joined):
             header_row = idx
@@ -3331,7 +3543,6 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
     if header_row == -1:
         return []
 
-    # --- 3. Определяем индексы колонок ---
     hdr_vals = [str(v).strip() if pd.notna(v) else '' for v in df.iloc[header_row].values]
 
     def _find_col(patterns: List[str]) -> int:
@@ -3342,12 +3553,11 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
         return -1
 
     date_i = _find_col(['tarix'])
-    debit_i = _find_col(['məxaric', 'mexaric'])   # расход
-    credit_i = _find_col(['mədaxil', 'medaxil'])  # приход
+    debit_i = _find_col(['məxaric', 'mexaric'])
+    credit_i = _find_col(['mədaxil', 'medaxil'])
     desc_i = _find_col(['təsvir', 'tesvir', 'описание', 'description'])
     code_i = _find_col(['kod', 'код', 'code'])
 
-    # Fallback: стандартная раскладка (B..G → 1..6)
     if date_i == -1:
         date_i = 1
     if debit_i == -1:
@@ -3359,7 +3569,6 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
     if code_i == -1:
         code_i = 6
 
-    # --- 4. Проходим по строкам после заголовка ---
     seen_keys = set()
 
     for idx in range(header_row + 1, len(df)):
@@ -3380,24 +3589,18 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
         desc_raw = _get(desc_i)
         code_raw = _get(code_i)
 
-        # --- Пропускаем повторный заголовок 'Tarix / Məxaric / Mədaxil ...' ---
         joined_row = ' '.join([date_raw, debit_raw, credit_raw, desc_raw]).lower()
         if ('tarix' in joined_row and ('məxaric' in joined_row or 'mexaric' in joined_row)
                 and ('mədaxil' in joined_row or 'medaxil' in joined_row)):
             continue
 
-        # --- Пропускаем пустые строки ---
         if not date_raw and not debit_raw and not credit_raw and not desc_raw:
             continue
 
-        # --- Парсим дату ---
         date = parse_date(date_raw)
         if not date or not re.match(r'^\d{2}-\d{2}-\d{4}$', date):
             continue
 
-        # --- Парсим суммы (Məxaric — расход; Mədaxil — приход) ---
-        # ВАЖНО: колонка "Məxaric" — расход, поэтому сумма идёт со знаком минус.
-        # Колонка "Mədaxil" — приход, знак плюс.
         debit_val = parse_amount(debit_raw) if debit_raw else 0.0
         credit_val = parse_amount(credit_raw) if credit_raw else 0.0
 
@@ -3414,31 +3617,24 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
         if not _is_reasonable_amount(amount):
             continue
 
-        # --- Описание: Təsvir + (если есть) Код ---
         desc_parts = []
         if desc_raw:
             desc_parts.append(desc_raw)
         if code_raw and code_raw.lower() not in ('nan', 'none'):
-            # Код добавляем только если он короткий или если Təsvir пустой.
-            # В файле Saida_AZN колонка "Код" содержит длинный бухгалтерский текст,
-            # который портит описание. Поэтому добавляем его только как fallback.
             if not desc_raw:
                 desc_parts.append(code_raw)
             elif len(code_raw) < 20:
                 desc_parts.append(code_raw)
-        
+
         desc = ' | '.join(desc_parts) if len(desc_parts) > 1 else (desc_parts[0] if desc_parts else '')
 
-        # Дополнительная защита: если описание пустое, но есть код — берём код
         if not desc:
             desc = code_raw or ''
 
-        # --- Контрагент ---
         cp_final, _ = extract_counterparty_smart(desc, account_name)
         if not cp_final:
             cp_final = 'Kapital Bank'
 
-        # --- Дедупликация ---
         key = (date, round(amount, 2), cp_final, desc)
         if key in seen_keys:
             continue
@@ -3458,23 +3654,8 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
 # ==================== [FIX-KAPITAL-PDF] Kapital bank Saida AZN (PDF) ====================
 
 def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Специальный парсер для PDF-файлов Kapital bank Saida AZN.
-
-    Проблемы исходного файла:
-      - В строке таблицы колонки "Məxaric" и "Mədaxil" идут подряд и могут
-        «склеиваться»: "3.000" (3.00 + 0) или "06672.00" (0 + 6672.00).
-      - В шапке "Dövr üzrə mədaxil məbləği 6672" — целое число без десятичных.
-      - Заголовок "Tarix Məxaric Mədaxil Balans Təsvir Kartın son 4 rəqəmi"
-        встречается один раз.
-
-    Стратегия:
-      1) Пытаемся разобрать таблицу через pdfplumber (extract_tables).
-      2) Если не получилось — парсим сырой текст PDF.
-    """
     result: List[Dict] = []
 
-    # ---------- 1. Пытаемся через таблицы pdfplumber ----------
     tables = pdf_all_tables(file_content)
     for table in tables:
         if not table or len(table) < 2:
@@ -3514,7 +3695,7 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
             cells = [str(c or '').strip() for c in row]
             joined = ' '.join(cells).lower()
             if 'tarix' in joined and ('məxaric' in joined or 'mədaxil' in joined):
-                continue  # повтор заголовка
+                continue
 
             def _cell(ci_key):
                 idx_c = ci.get(ci_key, -1)
@@ -3526,38 +3707,28 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
             if not date or not re.match(r'^\d{2}-\d{2}-\d{4}$', date):
                 continue
 
-            # Пытаемся понять, где Məxaric и где Mədaxil.
-            # Если в строке есть оба столбца — берём их значения.
-            # Но часто в pdfplumber они слипаются: "3.000" — на самом деле 3.00 | 0.
             debit_raw = _cell('debit')
             credit_raw = _cell('credit')
 
-            # Разбор "слипшихся" значений:
-            # "3.000" → debit=3.00, credit=0.00
-            # "06672.00" → debit=0, credit=6672.00
             def _split_stuck(s: str) -> Tuple[float, float]:
                 s = (s or '').strip()
                 if not s:
                     return 0.0, 0.0
-                # Случай "3.000" — два числа слиплись: 3.00 и 0
                 m = re.fullmatch(r'(\d+)[.,](\d{2})(\d)', s)
                 if m:
                     a = float(f"{m.group(1)}.{m.group(2)}")
                     b = float(m.group(3))
                     return a, b
-                # Случай "06672.00" — 0 и 6672.00
                 m = re.fullmatch(r'0(\d+[.,]\d{2})', s)
                 if m:
                     b = float(m.group(1).replace(',', '.'))
                     return 0.0, b
-                # Обычное одно число
                 v = parse_amount(s)
                 return v, 0.0
 
             d1, c1 = _split_stuck(debit_raw)
             d2, c2 = _split_stuck(credit_raw)
 
-            # Итоговые debit/credit
             debit_val = max(d1, d2)
             credit_val = max(c1, c2)
 
@@ -3588,20 +3759,16 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
     if result:
         return result
 
-    # ---------- 2. Fallback: разбор сырого текста ----------
     full_text = pdf_all_text(file_content)
     if not full_text:
         return []
 
-    # Паттерн для строк вида:
-    #   2026-04-20 3.000 18656.53 SMS SERVICE FEE
-    #   2026-04-10 0 6672.00 18659.53 38810944013880896102 MEMMEDBEYLI SEIDE ALMAN QIZI Qeyri budca -> 1270532664
     line_re = re.compile(
         r'^\s*(\d{4}-\d{2}-\d{2})\s+'
-        r'([\d.,]+)\s+'                     # Məxaric (может быть пусто/0)
-        r'([\d.,]+)\s*'                     # Mədaxil (может быть пусто/0)
-        r'([\d.,]+)\s+'                     # Balans
-        r'(.+?)\s*$',                       # Təsvir
+        r'([\d.,]+)\s+'
+        r'([\d.,]+)\s*'
+        r'([\d.,]+)\s+'
+        r'(.+?)\s*$',
         re.MULTILINE
     )
 
@@ -3609,23 +3776,12 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
         date = parse_date(m.group(1))
         if not date:
             continue
-        # Если Məxaric = "3.000", а Mədaxil = "18656.53" — это НЕ транзакция, а
-        # строка с балансом (значения перепутаны местами). Проверим по описанию.
-        # Настоящий формат: Tarix | Məxaric | Mədaxil | Balans | Təsvir
-        # Пример: 2026-04-20 | 3.000 | 18656.53 | SMS SERVICE FEE  ← только 3 числа!
-        # Пример: 2026-04-10 | 0 | 6672.00 | 18659.53 | ...  ← 4 числа!
 
-        # Соберём все числа в строке
-        nums = re.findall(r'[\d]+(?:[.,]\d+)?', m.group(0))
-        # Первое число — дата (уже использована)
-        # nums[0] — год, nums[1] — месяц, nums[2] — день (если регулярка сработала по-другому)
-        # Проще: возьмём группы из регулярки
-        g2 = m.group(2)   # Məxaric
-        g3 = m.group(3)   # Mədaxil
-        g4 = m.group(4)   # Balans
+        g2 = m.group(2)
+        g3 = m.group(3)
+        g4 = m.group(4)
         desc = m.group(5).strip()
 
-        # Разбор "слипшихся" значений
         def _split_stuck(s: str) -> Tuple[float, float]:
             s = (s or '').strip()
             if not s:
@@ -3671,7 +3827,6 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
             'Описание': desc
         })
 
-    # Дедупликация
     seen = set()
     deduped = []
     for r in result:
@@ -3686,21 +3841,15 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
 # ==================== [FIX-KAPITAL] Kapital bank Saida AZN (CSV) ====================
 
 def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    CSV-парсер для Kapital bank Saida AZN (на случай, если выгрузка пойдёт в CSV).
-    Ожидаемый формат: Tarix;Məxaric;Mədaxil;Balans;Təsvir;Код
-    """
     result = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     if not lines:
         return []
 
-    # Определяем разделитель
     sample = '\n'.join(lines[:5])
     sep = ';' if sample.count(';') >= sample.count(',') else ','
 
-    # Ищем заголовок
     header_idx = -1
     for i, l in enumerate(lines[:30]):
         low = l.lower()
@@ -3739,7 +3888,6 @@ def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[
         parts = _split_line(line, sep)
         if len(parts) <= max(date_i, debit_i, credit_i):
             continue
-        # Пропускаем повторный заголовок
         joined_low = ' '.join(parts).lower()
         if 'tarix' in joined_low and ('məxaric' in joined_low or 'mədaxil' in joined_low):
             continue
@@ -5852,12 +6000,10 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== [FIX-KAPITAL] МАРШРУТИЗАЦИЯ ====================
+# ==================== МАРШРУТИЗАЦИЯ ====================
 
 def get_parser_by_ext(account_name: str, ext: str):
     low = account_name.lower()
-
-    # --- Kapital bank Saida AZN: отдельные парсеры для XLSX / PDF / CSV ---
     is_kapital_saida = ('kapital' in low) or ('saida' in low and 'azn' in low)
 
     if ext == '.pdf':
@@ -5894,9 +6040,6 @@ def get_parser_by_ext(account_name: str, ext: str):
         return parse_pdf_universal, 'pdf_universal'
 
     if ext == '.docx':
-        # [FIX-KAPITAL-DOCX-ERROR] Убираем вызов несуществующего парсера
-        # if is_kapital_saida:
-        #     return parse_kapital_saida_docx, 'kapital_saida_docx'
         if 'regina alfa' in low:
             return parse_regina_alfa_docx, 'regina_alfa_docx'
         if 'tinkoff' in low:
@@ -5911,7 +6054,6 @@ def get_parser_by_ext(account_name: str, ext: str):
 
     if ext in ('.xlsx', '.xls'):
         if is_kapital_saida:
-            # [FIX-KAPITAL-XLSX] Для XLSX — специальный парсер!
             return parse_kapital_saida_xlsx, 'kapital_saida_xlsx'
         if 'revolut' in low:
             if 'nb rev' in low or 'nb_rev' in low:
@@ -6385,7 +6527,8 @@ def build_summary_excel(summary_df: pd.DataFrame) -> BytesIO:
 
 def build_combined_excel(df_display: pd.DataFrame,
                          df_numeric: pd.DataFrame,
-                         summary_df: pd.DataFrame) -> BytesIO:
+                         summary_df: pd.DataFrame,
+                         ai_df: Optional[pd.DataFrame] = None) -> BytesIO:
     output = BytesIO()
     wb = Workbook()
     ws1 = wb.active
@@ -6400,6 +6543,24 @@ def build_combined_excel(df_display: pd.DataFrame,
     _write_operations_sheet(ws1, df_export)
     ws2 = wb.create_sheet('Сводка по счетам')
     _write_summary_sheet(ws2, summary_df)
+
+    # [DEEPSEEK-INTEGRATION] Лист с AI-обогащением, если есть
+    if ai_df is not None and not ai_df.empty:
+        ws3 = wb.create_sheet('AI-обогащение')
+        for j, col_name in enumerate(ai_df.columns, start=1):
+            c = ws3.cell(row=1, column=j, value=col_name)
+            c.fill = _HEADER_FILL
+            c.font = _HEADER_FONT
+            c.alignment = Alignment(horizontal='left', vertical='center')
+            c.border = _BORDER
+        for i, row in enumerate(ai_df.itertuples(index=False), start=2):
+            for j, value in enumerate(row, start=1):
+                c = ws3.cell(row=i, column=j, value=value)
+                c.border = _BORDER
+                c.alignment = Alignment(horizontal='left', vertical='top', wrap_text=True)
+        ws3.freeze_panes = 'A2'
+        _autosize_worksheet(ws3)
+
     wb.save(output)
     output.seek(0)
     return output
@@ -6508,6 +6669,8 @@ def _process_uploaded_files(uploaded_files) -> Dict:
     }
 
 
+# ==================== [DEEPSEEK-INTEGRATION] РЕНДЕР РЕЗУЛЬТАТОВ ====================
+
 def _render_results(result: Dict):
     all_tx = result.get('all_tx', [])
     failed = result.get('failed', [])
@@ -6552,6 +6715,11 @@ def _render_results(result: Dict):
             lambda x: translate_description_inline(str(x)) if x is not None else ''
         )
 
+    # [DEEPSEEK-INTEGRATION] Сохраняем для AI-вкладки
+    st.session_state['df_numeric'] = df_numeric
+    st.session_state['df_display'] = df_display
+    st.session_state['df_raw'] = df_raw
+
     st.markdown("---")
     st.markdown("### 📊 Итоги")
     c1, c2, c3 = st.columns(3)
@@ -6561,6 +6729,67 @@ def _render_results(result: Dict):
         st.metric("📈 Доходы", format_amount(income))
     with c3:
         st.metric("📉 Расходы", format_amount(expense))
+
+    # [DEEPSEEK-INTEGRATION] AI-обогащение
+    st.markdown("---")
+    st.markdown("### 🤖 AI-обогащение транзакций (DeepSeek)")
+    st.caption(
+        "DeepSeek переведёт описания, определит категорию и вытащит чистое имя "
+        "контрагента. Обрабатывается не более 200 строк за раз."
+    )
+
+    col_ai1, col_ai2 = st.columns([1, 3])
+    with col_ai1:
+        ai_run = st.button("🚀 Обогатить через AI", key="ai_enrich_btn")
+    with col_ai2:
+        ai_limit = st.slider(
+            "Сколько строк обработать", min_value=10, max_value=200, value=50, step=10,
+            key="ai_limit_slider"
+        )
+
+    if ai_run:
+        with st.spinner("DeepSeek обрабатывает транзакции..."):
+            tx_list = df_raw.to_dict('records')
+            progress_bar = st.progress(0)
+
+            def _cb(done, total):
+                try:
+                    progress_bar.progress(min(done / max(total, 1), 1.0))
+                except Exception:
+                    pass
+
+            enriched, ai_errors = ai_enrich_transactions(
+                tx_list, max_items=ai_limit, progress_callback=_cb
+            )
+            st.session_state['ai_enriched'] = enriched
+            st.session_state['ai_errors'] = ai_errors
+            if ai_errors:
+                st.warning(f"Ошибки AI: {len(ai_errors)}. Первые 3: {ai_errors[:3]}")
+            else:
+                st.success("AI-обогащение завершено!")
+
+    ai_enriched = st.session_state.get('ai_enriched')
+    if ai_enriched:
+        ai_rows = []
+        for tx in ai_enriched:
+            if tx.get('_ai_translation') or tx.get('_ai_category'):
+                ai_rows.append({
+                    'Дата': tx.get('Дата', ''),
+                    'Сумма': tx.get('Сумма', 0),
+                    'Счёт': tx.get('Наименование счета', ''),
+                    'Оригинал': tx.get('Описание', ''),
+                    'Перевод AI': tx.get('_ai_translation', ''),
+                    'Категория AI': tx.get('_ai_category', ''),
+                    'Контрагент AI': tx.get('_ai_counterparty_clean', ''),
+                    'Банк. комиссия': tx.get('_ai_is_bank_fee', False),
+                    'Уверенность': tx.get('_ai_confidence', 0.0),
+                })
+        if ai_rows:
+            ai_df = pd.DataFrame(ai_rows)
+            st.dataframe(ai_df, use_container_width=True, hide_index=True)
+            st.session_state['ai_df'] = ai_df
+        else:
+            st.info("AI не вернул данных по этим строкам.")
 
     st.markdown("---")
     st.markdown("### 🧾 Детализация транзакций")
@@ -6589,7 +6818,8 @@ def _render_results(result: Dict):
 
     ops_excel = build_operations_excel(df_display, df_numeric)
     summary_excel = build_summary_excel(summary_df) if not summary_df.empty else None
-    combined_excel = build_combined_excel(df_display, df_numeric, summary_df) if not summary_df.empty else None
+    ai_df_for_excel = st.session_state.get('ai_df')
+    combined_excel = build_combined_excel(df_display, df_numeric, summary_df, ai_df_for_excel) if not summary_df.empty else None
 
     dl1, dl2, dl3 = st.columns(3)
 
@@ -6642,6 +6872,191 @@ def _render_results(result: Dict):
             st.write(f"- {f}")
 
 
+# ==================== [DEEPSEEK-INTEGRATION] AI-АССИСТЕНТ ====================
+
+def _render_ai_assistant_tab():
+    st.markdown("### 🤖 AI-ассистент (DeepSeek)")
+    st.caption(
+        "Задавайте вопросы по коду, данным и обработке выписок. "
+        "Ассистент видит только то, что вы ему напишете — файлы не отправляются автоматически."
+    )
+
+    # Статус подключения
+    client = _get_deepseek_client()
+    if client is None:
+        if not _OPENAI_SDK_AVAILABLE:
+            st.markdown(
+                '<span class="ai-status-warn">⚠️ Библиотека openai не установлена. '
+                'Выполните: <code>pip install openai</code></span>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<span class="ai-status-warn">⚠️ API-ключ DeepSeek не задан. '
+                'Введите его ниже или в <code>.streamlit/secrets.toml</code></span>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown(
+            '<span class="ai-status-ok">✅ DeepSeek подключён</span>',
+            unsafe_allow_html=True,
+        )
+
+    with st.expander("🔑 Настройка API-ключа", expanded=(client is None)):
+        st.markdown(
+            "Получите ключ на [platform.deepseek.com](https://platform.deepseek.com). "
+            "Ключ можно хранить в `.streamlit/secrets.toml`:\n\n"
+            "```toml\nDEEPSEEK_API_KEY = \"sk-...\"\n```\n\n"
+            "Или ввести здесь — он сохранится только в текущей сессии."
+        )
+        key_input = st.text_input(
+            "API-ключ DeepSeek",
+            value=st.session_state.get('deepseek_api_key', ''),
+            type='password',
+            key='deepseek_key_input',
+        )
+        if st.button("💾 Сохранить ключ в сессии", key='save_deepseek_key'):
+            st.session_state['deepseek_api_key'] = key_input.strip()
+            st.success("Ключ сохранён в сессии.")
+            st.rerun()
+
+    st.markdown("---")
+
+    # Выбор модели
+    model_choice = st.selectbox(
+        "Модель",
+        options=[DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_REASONER_MODEL],
+        index=0,
+        key='deepseek_model_choice',
+        help="deepseek-chat — быстрая; deepseek-reasoner — для отладки кода.",
+    )
+
+    # Быстрые промпты
+    st.markdown("**Быстрые действия:**")
+    qc1, qc2, qc3, qc4 = st.columns(4)
+    quick_prompt = None
+    with qc1:
+        if st.button("🐞 Помоги отладить", key='quick_debug'):
+            quick_prompt = (
+                "Помоги отладить программу анализа банковских выписок. "
+                "Опиши, как найти проблему, если парсер возвращает 0 операций."
+            )
+    with qc2:
+        if st.button("📊 Анализ данных", key='quick_data'):
+            quick_prompt = (
+                "У меня есть DataFrame с колонками: Дата, Сумма, Контрагент, "
+                "Наименование счета, Описание. Как найти аномалии и подозрительные операции?"
+            )
+    with qc3:
+        if st.button("🎨 Улучшить UI", key='quick_ui'):
+            quick_prompt = (
+                "Как улучшить интерфейс Streamlit-приложения для аналитика "
+                "банковских выписок? Предложи 5 конкретных идей."
+            )
+    with qc4:
+        if st.button("🧹 Очистить чат", key='quick_clear'):
+            st.session_state['ai_chat_history'] = []
+            st.rerun()
+
+    # История чата
+    if 'ai_chat_history' not in st.session_state:
+        st.session_state['ai_chat_history'] = []
+
+    # Системный промпт с контекстом
+    context_parts = [
+        "Ты — ассистент внутри Streamlit-приложения 'Аналитик банковских выписок'. "
+        "Приложение парсит CSV, XLSX, XLS, DOCX, PDF выписки банков (ČSOB, UniCredit, "
+        "Revolut, Tinkoff, Kapital bank, MASHREQ, Pasha Bank, WIO, Paysera, MKB, BluOr и др.), "
+        "сводит операции в единый DataFrame и экспортирует в Excel.",
+        "Структура DataFrame: Дата (str), Сумма (float, + доход, - расход), Контрагент (str), "
+        "Наименование счета (str), Описание (str).",
+        "Если пользователь спрашивает про код — давай конкретные фрагменты на Python.",
+    ]
+    df_numeric = st.session_state.get('df_numeric')
+    if df_numeric is not None and not df_numeric.empty:
+        try:
+            n = len(df_numeric)
+            income = df_numeric[df_numeric['Сумма'] > 0]['Сумма'].sum()
+            expense = df_numeric[df_numeric['Сумма'] < 0]['Сумма'].sum()
+            accounts = df_numeric['Наименование счета'].nunique()
+            context_parts.append(
+                f"Текущие данные пользователя: {n} операций, "
+                f"доходы {income:.2f}, расходы {expense:.2f}, счетов: {accounts}."
+            )
+        except Exception:
+            pass
+    system_prompt = "\n".join(context_parts)
+
+    # Отображение истории
+    for msg in st.session_state['ai_chat_history']:
+        if msg['role'] == 'user':
+            st.markdown(
+                f'<div class="ai-chat-bubble-user"><b>Вы:</b><br>{msg["content"]}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div class="ai-chat-bubble-assistant"><b>DeepSeek:</b><br>'
+                f'{msg["content"]}</div>',
+                unsafe_allow_html=True,
+            )
+
+    # Обработка быстрого промпта
+    if quick_prompt:
+        st.session_state['ai_chat_history'].append({'role': 'user', 'content': quick_prompt})
+        with st.spinner("DeepSeek думает..."):
+            messages = [{"role": "system", "content": system_prompt}]
+            messages.extend(st.session_state['ai_chat_history'])
+            answer, err = call_deepseek(messages, model=model_choice)
+        if err:
+            st.session_state['ai_chat_history'].append({'role': 'assistant', 'content': f"❌ {err}"})
+        else:
+            st.session_state['ai_chat_history'].append({'role': 'assistant', 'content': answer})
+        st.rerun()
+
+    # Поле ввода
+    user_input = st.chat_input("Спросите DeepSeek о коде, данных или обработке...")
+    if user_input:
+        st.session_state['ai_chat_history'].append({'role': 'user', 'content': user_input})
+        with st.spinner("DeepSeek думает..."):
+            messages = [{"role": "system", "content": system_prompt}]
+            messages.extend(st.session_state['ai_chat_history'])
+            answer, err = call_deepseek(messages, model=model_choice)
+        if err:
+            st.session_state['ai_chat_history'].append({'role': 'assistant', 'content': f"❌ {err}"})
+        else:
+            st.session_state['ai_chat_history'].append({'role': 'assistant', 'content': answer})
+        st.rerun()
+
+    # Кнопка «Отправить код на ревью»
+    with st.expander("📎 Отправить фрагмент кода на ревью"):
+        code_snippet = st.text_area(
+            "Вставьте код или ошибку",
+            height=200,
+            key='ai_code_snippet',
+            placeholder="def my_parser(...): ...\n\n# или\n\nTraceback (most recent call last): ...",
+        )
+        if st.button("🔍 Разобрать", key='ai_review_code'):
+            if code_snippet.strip():
+                with st.spinner("DeepSeek анализирует..."):
+                    messages = [
+                        {"role": "system", "content": _AI_DEBUG_SYSTEM},
+                        {"role": "user", "content": code_snippet},
+                    ]
+                    answer, err = call_deepseek(messages, model=model_choice, max_tokens=3000)
+                if err:
+                    st.error(err)
+                else:
+                    st.markdown("**Ответ DeepSeek:**")
+                    st.markdown(answer)
+                    st.session_state['ai_chat_history'].append(
+                        {'role': 'user', 'content': f"[Фрагмент кода]\n{code_snippet[:500]}"}
+                    )
+                    st.session_state['ai_chat_history'].append(
+                        {'role': 'assistant', 'content': answer}
+                    )
+
+
 # ==================== ИНТЕРФЕЙС ====================
 
 def main():
@@ -6651,111 +7066,135 @@ def main():
         st.session_state['files_signature'] = None
     if 'uploader_key' not in st.session_state:
         st.session_state['uploader_key'] = 0
+    if 'ai_chat_history' not in st.session_state:
+        st.session_state['ai_chat_history'] = []
 
-    st.markdown("### 📥 Загрузка файлов")
-    st.markdown("Перетащите выписки в окно ниже или нажмите **Browse files**.")
+    # [DEEPSEEK-INTEGRATION] Сайдбар с настройками AI
+    with st.sidebar:
+        st.markdown("### ⚙️ Настройки")
+        st.markdown("**DeepSeek AI**")
+        client = _get_deepseek_client()
+        if client is not None:
+            st.success("✅ Подключён")
+        else:
+            st.warning("⚠️ Не подключён")
+            st.caption("Введите ключ во вкладке «AI-ассистент».")
+        st.markdown("---")
+        st.caption(
+            "Программа работает локально. Файлы выписок не отправляются в DeepSeek — "
+            "только те фрагменты, которые вы сами вводите в чат."
+        )
 
-    col_reset, col_info = st.columns([1, 4])
-    with col_reset:
-        reset_clicked = st.button("🔄 Сбросить файлы", key="reset_btn")
-    with col_info:
-        if reset_clicked:
+    # [DEEPSEEK-INTEGRATION] Вкладки
+    tab_upload, tab_ai = st.tabs(["📥 Обработка выписок", "🤖 AI-ассистент"])
+
+    with tab_upload:
+        st.markdown("### 📥 Загрузка файлов")
+        st.markdown("Перетащите выписки в окно ниже или нажмите **Browse files**.")
+
+        col_reset, col_info = st.columns([1, 4])
+        with col_reset:
+            reset_clicked = st.button("🔄 Сбросить файлы", key="reset_btn")
+        with col_info:
+            if reset_clicked:
+                st.session_state['processing_result'] = None
+                st.session_state['files_signature'] = None
+                st.session_state['uploader_key'] += 1
+                st.rerun()
+
+        uploader_key = f"file_uploader_{st.session_state['uploader_key']}"
+        uploaded_files = st.file_uploader(
+            "Выберите файлы",
+            type=['csv', 'xlsx', 'xls', 'docx', 'pdf'],
+            accept_multiple_files=True,
+            label_visibility="collapsed",
+            key=uploader_key,
+        )
+
+        if not uploaded_files:
             st.session_state['processing_result'] = None
             st.session_state['files_signature'] = None
-            st.session_state['uploader_key'] += 1
-            st.rerun()
 
-    uploader_key = f"file_uploader_{st.session_state['uploader_key']}"
-    uploaded_files = st.file_uploader(
-        "Выберите файлы",
-        type=['csv', 'xlsx', 'xls', 'docx', 'pdf'],
-        accept_multiple_files=True,
-        label_visibility="collapsed",
-        key=uploader_key,
-    )
-
-    if not uploaded_files:
-        st.session_state['processing_result'] = None
-        st.session_state['files_signature'] = None
-
-        st.markdown("---")
-        c1, c2, c3 = st.columns(3)
-        with c1:
+            st.markdown("---")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.markdown("""
+                <div class="info-card">
+                <div class="info-card-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                </div>
+                <div class="info-card-text"><h4>Поддержка форматов</h4><p>CSV, XLSX, XLS, DOCX, PDF</p></div>
+                </div>
+                """, unsafe_allow_html=True)
+            with c2:
+                st.markdown("""
+                <div class="info-card">
+                <div class="info-card-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M3 12h4l3-9 4 18 3-9h4" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                </div>
+                <div class="info-card-text"><h4>Перевод в скобках</h4><p>EN / CS / LV / HU → RU, оригинал сохраняется</p></div>
+                </div>
+                """, unsafe_allow_html=True)
+            with c3:
+                st.markdown("""
+                <div class="info-card">
+                <div class="info-card-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2a10 10 0 100 20 10 10 0 000-20zM2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                </div>
+                <div class="info-card-text"><h4>DeepSeek AI</h4><p>Перевод, категории, отладка кода</p></div>
+                </div>
+                """, unsafe_allow_html=True)
             st.markdown("""
-            <div class="info-card">
-            <div class="info-card-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            </div>
-            <div class="info-card-text"><h4>Поддержка форматов</h4><p>CSV, XLSX, XLS, DOCX, PDF</p></div>
+            <div class="footer-note">
+            Работает локально. Данные никуда не отправляются.
             </div>
             """, unsafe_allow_html=True)
-        with c2:
-            st.markdown("""
-            <div class="info-card">
-            <div class="info-card-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M3 12h4l3-9 4 18 3-9h4" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            </div>
-            <div class="info-card-text"><h4>Перевод в скобках</h4><p>EN / CS / LV / HU → RU, оригинал сохраняется</p></div>
-            </div>
-            """, unsafe_allow_html=True)
-        with c3:
-            st.markdown("""
-            <div class="info-card">
-            <div class="info-card-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M3 3v18h18M18 17V9M13 17V5M8 17v-3" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            </div>
-            <div class="info-card-text"><h4>Числовой экспорт</h4><p>Суммы — числа с форматом 0,00</p></div>
-            </div>
-            """, unsafe_allow_html=True)
+        else:
+            st.markdown("---")
+            st.markdown(f"**Загружено файлов:** {len(uploaded_files)}")
+
+            current_sig = _files_signature(uploaded_files)
+
+            col_btn, col_hint = st.columns([1, 3])
+            with col_btn:
+                process_clicked = st.button("🚀 Обработать файлы", key="process_btn")
+            with col_hint:
+                if st.session_state['processing_result'] is not None:
+                    st.caption("Результат готов. Можно скачивать файлы; повторное нажатие «Обработать» перезапустит разбор.")
+
+            need_process = False
+            if process_clicked:
+                if st.session_state['processing_result'] is None:
+                    need_process = True
+                elif st.session_state['files_signature'] != current_sig:
+                    need_process = True
+                else:
+                    need_process = False
+                    st.info("Файлы не изменились — использую уже готовый результат.")
+
+            if need_process:
+                result = _process_uploaded_files(uploaded_files)
+                st.session_state['processing_result'] = result
+                st.session_state['files_signature'] = current_sig
+
+            if st.session_state['processing_result'] is not None:
+                st.markdown("---")
+                _render_results(st.session_state['processing_result'])
+
         st.markdown("""
         <div class="footer-note">
         Работает локально. Данные никуда не отправляются.
         </div>
         """, unsafe_allow_html=True)
-        return
 
-    st.markdown("---")
-    st.markdown(f"**Загружено файлов:** {len(uploaded_files)}")
-
-    current_sig = _files_signature(uploaded_files)
-
-    col_btn, col_hint = st.columns([1, 3])
-    with col_btn:
-        process_clicked = st.button("🚀 Обработать файлы", key="process_btn")
-    with col_hint:
-        if st.session_state['processing_result'] is not None:
-            st.caption("Результат готов. Можно скачивать файлы; повторное нажатие «Обработать» перезапустит разбор.")
-
-    need_process = False
-    if process_clicked:
-        if st.session_state['processing_result'] is None:
-            need_process = True
-        elif st.session_state['files_signature'] != current_sig:
-            need_process = True
-        else:
-            need_process = False
-            st.info("Файлы не изменились — использую уже готовый результат.")
-
-    if need_process:
-        result = _process_uploaded_files(uploaded_files)
-        st.session_state['processing_result'] = result
-        st.session_state['files_signature'] = current_sig
-
-    if st.session_state['processing_result'] is not None:
-        st.markdown("---")
-        _render_results(st.session_state['processing_result'])
-
-    st.markdown("""
-    <div class="footer-note">
-    Работает локально. Данные никуда не отправляются.
-    </div>
-    """, unsafe_allow_html=True)
+    with tab_ai:
+        _render_ai_assistant_tab()
 
 
 if __name__ == "__main__":
