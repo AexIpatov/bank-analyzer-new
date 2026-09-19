@@ -2,6 +2,7 @@
 """
 app.py — Аналитик банковских выписок.
 Полная рабочая версия + интеграция DeepSeek AI (через Hugging Face Router).
++ Дедупликация транзакций между файлами (строгая / мягкая / без).
 """
 
 import streamlit as st
@@ -42,7 +43,7 @@ st.set_page_config(
 )
 
 
-# ==================== ФОН: ГОРОДЕЦКАЯ РОСПИСЬ "ЧАЕПИТИЕ" ====================
+# ==================== ФОН: ГОРОДЕЦКАЯ РОСПИСЬ ====================
 
 _GORODETS_SVG = (
     "<svg xmlns='http://www.w3.org/2000/svg' width='520' height='460'>"
@@ -857,6 +858,7 @@ st.markdown("""
 <span class="chip">📕 PDF</span>
 <span class="chip">🌐 Перевод в скобках</span>
 <span class="chip">🤖 DeepSeek AI</span>
+<span class="chip">🔁 Дедупликация</span>
 </div>
 </div>
 <div class="hero-illustration">
@@ -1185,7 +1187,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "apartment rent": "аренда квартиры",
     "rent": "аренда",
     "utilities": "коммунальные услуги",
-
     "tiktok ads": "реклама TikTok",
     "tiktok": "TikTok",
     "google *ads": "GOOGLE *ADS",
@@ -1242,7 +1243,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "n26": "N26",
     "rak bank": "RAK Bank",
     "wio": "WIO",
-
     "apmaksa par rēķinu nr.": "оплата по счёту №",
     "apmaksa par rekinu nr.": "оплата по счёту №",
     "apmaksa par pakalpojumiem objekta": "оплата за услуги объекта",
@@ -1251,14 +1251,12 @@ _PHRASE_DICT: Dict[str, str] = {
     "apmaksa par rekinu": "оплата по счёту",
     "apmaksa par": "оплата за",
     "apmaksa": "оплата",
-
     "darba algas izmaksa par": "выплата заработной платы за",
     "darba algas izmaksa": "выплата заработной платы",
     "darba alga par": "заработная плата за",
     "darba alga": "заработная плата",
     "darba algas": "заработной платы",
     "darba algu": "заработную плату",
-
     "rēķinu nr.": "счёт №",
     "rekinu nr.": "счёт №",
     "rēķins nr.": "счёт №",
@@ -1278,7 +1276,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "rekin": "счёт",
     "reķins": "счёт",
     "reķinu": "счёт",
-
     "ires maksa par periodu": "арендная плата за период",
     "ires maksa": "арендная плата",
     "īres maksa": "арендная плата",
@@ -1294,73 +1291,58 @@ _PHRASE_DICT: Dict[str, str] = {
     "dzīvokli": "квартиру",
     "par periodu": "за период",
     "par pakalpojumiem": "за услуги",
-
     "komunalie pakalpojumi": "коммунальные услуги",
     "komunālie pakalpojumi": "коммунальные услуги",
     "komunalie": "коммунальные",
     "komunālie": "коммунальные",
-
     "kredīta apgrozījums": "кредитовый оборот",
     "debeta apgrozījums": "дебетовый оборот",
     "kredīta": "кредитовый",
     "debeta": "дебетовый",
     "apgrozījums": "оборот",
-
     "sākuma atlikums": "начальный остаток",
     "beigu atlikums": "конечный остаток",
     "atlikums": "остаток",
-
     "kompensācijas izmaksa": "выплата компенсации",
     "kompensācija": "компенсация",
     "izmaksa": "выплата",
     "izmaksas": "выплаты",
-
     "skaidras naudas iemaksa": "внесение наличных",
     "skaidras naudas izņemšana": "снятие наличных",
-
     "maksājums ar karti": "оплата картой",
     "maksājuma mērķis": "назначение платежа",
     "maksājums": "платёж",
     "maksājumi": "платежи",
-
     "ienākošais maksājums": "входящий платёж",
     "izejošais maksājums": "исходящий платёж",
     "ienākošais": "входящий",
     "izejošais": "исходящий",
-
     "bankas komisija par holdinga izveidi internetbankā": "банковская комиссия за создание холдинга в интернет-банке",
     "bankas komisija par izmaiņām klientu lietā": "банковская комиссия за изменения в деле клиента",
     "bankas komisija": "банковская комиссия",
     "komisijas maksa": "комиссионный сбор",
     "komisija": "комиссия",
-
     "pārskaitījums": "перевод",
     "pārskaitījumi": "переводы",
     "pārskaitīts": "переведено",
-
     "īpašuma tiesību maiņas noformēšanu bankā": "оформление смены права собственности в банке",
     "īpašuma tiesību": "права собственности",
     "noformēšanu": "оформление",
     "cenrādis": "прейскурант",
-
     "procenti par aizdevumu": "проценты по кредиту",
     "procentu maksājums": "процентный платёж",
     "procenti": "проценты",
-
     "nodoklis": "налог",
     "nodokļi": "налоги",
     "apdrošināšana": "страхование",
     "aizdevums": "кредит",
     "aizdevuma": "кредита",
-
     "atlīdzība": "вознаграждение",
     "prēmija": "премия",
     "prēmijas": "премии",
-
     "konts": "счёт",
     "kontā": "на счёте",
     "no konta": "со счёта",
-
     "saņēmējs": "получатель",
     "maksātājs": "плательщик",
     "mērķis": "назначение",
@@ -1369,7 +1351,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "valūta": "валюта",
     "veids": "тип",
     "statuss": "статус",
-
     "trvalý příkaz": "постоянное поручение",
     "vklad hotovosti": "внесение наличных",
     "výběr hotovosti": "снятие наличных",
@@ -1412,7 +1393,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "celkem": "всего",
     "zůstatek": "остаток",
     "pohyby": "операции",
-
     "készpénzfelvétel": "снятие наличных",
     "készpénzbefizetés": "внесение наличных",
     "kártyás fizetés": "оплата картой",
@@ -1466,7 +1446,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "megbízás": "поручение",
     "befizetés": "внесение",
     "kifizetés": "выплата",
-
     "hesaba mədaxil": "зачисление на счёт",
     "hesaba medaxil": "зачисление на счёт",
     "dövrün sonuna balans": "остаток на конец периода",
@@ -1482,7 +1461,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "kart hesabi": "карточный счёт",
     "icare haqqi odenisi": "оплата аренды",
     "dovlet vergi xidmeti": "государственная налоговая служба",
-
     "плата за обслуживание счета": "плата за обслуживание счёта",
     "остаток в начале": "остаток на начало",
     "остаток в конце": "остаток на конец",
@@ -1506,7 +1484,6 @@ _WORD_DICT: Dict[str, str] = {
     "to": "к", "from": "от", "for": "за",
     "internal": "внутренний", "external": "внешний", "card": "карта",
     "outgoing": "исходящий", "incoming": "входящий",
-
     "poplatek": "комиссия", "úrok": "проценты", "převod": "перевод",
     "vklad": "внесение", "výběr": "снятие", "platba": "платёж",
     "faktura": "счёт", "nájem": "аренда", "mzda": "зарплата",
@@ -1517,58 +1494,42 @@ _WORD_DICT: Dict[str, str] = {
     "odepsáno": "списано", "zaúčtováno": "проведено", "provedeno": "выполнено",
     "popis": "описание", "protiúčet": "корсчёт", "příchozí": "входящий",
     "odchozí": "исходящий",
-
     "apmaksa": "оплата", "apmaksas": "оплаты", "apmaksāts": "оплачено",
     "rēķins": "счёт", "rēķina": "счёта", "rēķinu": "счёт", "rēķini": "счета",
     "rekins": "счёт", "rekina": "счёта", "rekinu": "счёт", "rekini": "счета",
     "reķins": "счёт", "reķinu": "счёт", "rēkins": "счёт", "rēkinu": "счёт",
-
     "maksa": "плата", "maksas": "платы", "maksājums": "платёж",
     "maksājumi": "платежи", "maksājumu": "платежей",
-
     "alga": "зарплата", "algas": "зарплаты", "algu": "зарплату",
     "algām": "зарплатам", "darba": "рабочей",
     "darba alga": "заработная плата", "darba algas": "заработной платы",
-
     "izmaksa": "выплата", "izmaksas": "выплаты", "izmaksu": "выплат",
     "izmaksāt": "выплатить",
-
     "īre": "аренда", "īres": "аренды", "īri": "аренду",
     "ire": "аренда", "ires": "аренды", "noma": "аренда", "nomas": "аренды",
     "nomas maksa": "арендная плата",
-
     "dzīvoklis": "квартира", "dzīvokli": "квартиру", "dzīvokļa": "квартиры",
     "dzivoklis": "квартира", "dzivokli": "квартиру", "dzivokla": "квартиры",
-
     "māja": "дом", "mājas": "дома", "iela": "улица", "ielas": "улицы",
     "ielā": "на улице",
-
     "periods": "период", "periodu": "период", "perioda": "периода",
     "no": "с", "līdz": "до", "lidz": "до",
-
     "komunālie": "коммунальные", "komunalie": "коммунальные",
     "komunālo": "коммунальных", "komunāliem": "коммунальным",
     "pakalpojumi": "услуги", "pakalpojumu": "услуг",
     "pakalpojumiem": "услуг", "pakalpojums": "услуга",
-
     "procenti": "проценты", "procentu": "процентов", "procents": "процент",
-
     "nodoklis": "налог", "nodokļi": "налоги", "nodokļa": "налога",
     "nodokļu": "налогов",
-
     "apdrošināšana": "страхование", "apdrošināšanas": "страхования",
     "aizdevums": "кредит", "aizdevuma": "кредита",
     "kredīts": "кредит", "kredīta": "кредита",
-
     "komisija": "комиссия", "komisijas": "комиссии", "komisiju": "комиссию",
     "komisijas maksa": "комиссионный сбор",
-
     "atlikums": "остаток", "atlikuma": "остатка", "atlikumu": "остаток",
     "sākuma": "начальный", "beigu": "конечный",
-
     "ienākumi": "доходы", "izdevumi": "расходы",
     "ienākumu": "доходов", "izdevumu": "расходов",
-
     "saņēmējs": "получатель", "saņēmēja": "получателя",
     "maksātājs": "плательщик", "maksātāja": "плательщика",
     "mērķis": "назначение", "mērķa": "назначения",
@@ -1578,16 +1539,12 @@ _WORD_DICT: Dict[str, str] = {
     "veids": "тип", "veida": "типа", "statuss": "статус",
     "numurs": "номер", "numura": "номера",
     "kods": "код", "koda": "кода",
-
     "konts": "счёт", "konta": "счёта", "kontā": "на счёте",
     "kontu": "счёт", "kontiem": "счетам",
-
     "bankas": "банковские", "banka": "банк", "bankā": "в банке",
     "banku": "банк",
-
     "pārskaitījums": "перевод", "pārskaitījuma": "перевода",
     "pārskaitīt": "перевести", "pārskaitīts": "переведено",
-
     "fizetés": "платёж", "átutalás": "перевод", "bejövő": "входящий",
     "kimenő": "исходящий", "díj": "сбор", "jutalék": "комиссия",
     "vásárlás": "покупка", "kamat": "проценты", "bér": "зарплата",
@@ -1714,7 +1671,6 @@ def _clean_counterparty_name(name: str, keep_full: bool = False) -> str:
     return s
 
 
-# Расширенный список банков
 _BANK_WORDS = [
     'bank', 'payments', 'finance', 'revolut', 'paysera', 'wise',
     'sepa', 'csob', 'unicredit', 'tinkoff', 'bluor',
@@ -1733,13 +1689,9 @@ def _looks_like_bank_name(s: str) -> bool:
     return any(w in low for w in _BANK_WORDS)
 
 
-# --- Спец-парсеры для извлечения контрагента ---
+# --- Спец-парсеры контрагента ---
 
-def _extract_revolut_name(desc: str,
-                           account_name: str = '',
-                           payer: str = '',
-                           beneficiary: str = '',
-                           sender_name: str = '') -> str:
+def _extract_revolut_name(desc, account_name='', payer='', beneficiary='', sender_name=''):
     for cand in (beneficiary, sender_name, payer):
         c = str(cand).strip() if cand else ''
         if c and c.lower() not in ('nan', 'none', 'n/a', '-'):
@@ -1763,11 +1715,7 @@ def _extract_revolut_name(desc: str,
     return ''
 
 
-def _extract_paysera_name(desc: str,
-                           account_name: str = '',
-                           payer: str = '',
-                           beneficiary: str = '',
-                           raw_cp: str = '') -> str:
+def _extract_paysera_name(desc, account_name='', payer='', beneficiary='', raw_cp=''):
     if raw_cp:
         c = str(raw_cp).strip()
         if c and c.lower() not in ('nan', 'none', 'n/a', '-', ''):
@@ -1777,7 +1725,6 @@ def _extract_paysera_name(desc: str,
             cleaned = re.sub(r'\s+', ' ', cleaned).strip(' .,;:-')
             if cleaned and len(cleaned) >= 2:
                 return cleaned
-
     for cand in (beneficiary, payer):
         if cand:
             c = str(cand).strip()
@@ -1789,7 +1736,6 @@ def _extract_paysera_name(desc: str,
             cleaned = re.sub(r'\s+', ' ', cleaned).strip(' .,;:-')
             if cleaned and len(cleaned) >= 2:
                 return cleaned
-
     if not desc:
         return ''
     s = str(desc).strip()
@@ -1800,11 +1746,7 @@ def _extract_paysera_name(desc: str,
     return ''
 
 
-def _extract_industra_name(desc: str,
-                            account_name: str = '',
-                            payer: str = '',
-                            beneficiary: str = '',
-                            raw_cp: str = '') -> str:
+def _extract_industra_name(desc, account_name='', payer='', beneficiary='', raw_cp=''):
     if raw_cp:
         c = str(raw_cp).strip()
         if c and c.lower() not in ('nan', 'none', 'n/a', '-', ''):
@@ -1812,7 +1754,6 @@ def _extract_industra_name(desc: str,
             cleaned = re.sub(r'\s+', ' ', cleaned).strip(' .,;:-')
             if cleaned and len(cleaned) >= 2:
                 return cleaned
-
     for cand in (beneficiary, payer):
         if cand:
             c = str(cand).strip()
@@ -1822,7 +1763,6 @@ def _extract_industra_name(desc: str,
             cleaned = re.sub(r'\s+', ' ', cleaned).strip(' .,;:-')
             if cleaned and len(cleaned) >= 2:
                 return cleaned
-
     if not desc:
         return ''
     low = desc.lower()
@@ -1840,7 +1780,7 @@ def _extract_industra_name(desc: str,
     return ''
 
 
-def _extract_csob_name(desc: str) -> str:
+def _extract_csob_name(desc):
     if not desc:
         return ''
     low = desc.lower()
@@ -1855,7 +1795,7 @@ def _extract_csob_name(desc: str) -> str:
     return ''
 
 
-def _extract_unicredit_name(desc: str) -> str:
+def _extract_unicredit_name(desc):
     if not desc:
         return ''
     low = desc.lower()
@@ -1868,7 +1808,7 @@ def _extract_unicredit_name(desc: str) -> str:
     return ''
 
 
-def _extract_bluor_name(desc: str) -> str:
+def _extract_bluor_name(desc):
     if not desc:
         return ''
     low = desc.lower()
@@ -1879,7 +1819,7 @@ def _extract_bluor_name(desc: str) -> str:
     return ''
 
 
-def _extract_mkb_name(desc: str) -> str:
+def _extract_mkb_name(desc):
     if not desc:
         return ''
     low = desc.lower()
@@ -1896,7 +1836,7 @@ def _extract_mkb_name(desc: str) -> str:
     return ''
 
 
-def _extract_tinkoff_name(desc: str) -> str:
+def _extract_tinkoff_name(desc):
     if not desc:
         return ''
     low = desc.lower()
@@ -1913,7 +1853,7 @@ def _extract_tinkoff_name(desc: str) -> str:
     return ''
 
 
-def _extract_wio_name(desc: str) -> str:
+def _extract_wio_name(desc):
     if not desc:
         return ''
     s = desc.strip()
@@ -1944,7 +1884,7 @@ def _extract_wio_name(desc: str) -> str:
     return _clean_counterparty_name(' '.join(out), keep_full=True)
 
 
-def _extract_pasha_name(desc: str) -> str:
+def _extract_pasha_name(desc):
     if not desc:
         return ''
     s = desc.strip()
@@ -1974,7 +1914,7 @@ def _extract_pasha_name(desc: str) -> str:
     return _clean_counterparty_name(s, keep_full=True)
 
 
-def _extract_mashreq_name(desc: str) -> str:
+def _extract_mashreq_name(desc):
     if not desc:
         return ''
     s = desc.strip()
@@ -2000,7 +1940,7 @@ def _extract_mashreq_name(desc: str) -> str:
     return ''
 
 
-def _extract_regina_alfa_name(desc: str) -> str:
+def _extract_regina_alfa_name(desc):
     if not desc:
         return ''
     s = desc.strip()
@@ -2026,7 +1966,7 @@ def _extract_regina_alfa_name(desc: str) -> str:
     return ''
 
 
-def _extract_kapital_name(desc: str) -> str:
+def _extract_kapital_name(desc):
     if not desc:
         return ''
     s = str(desc).strip()
@@ -2051,7 +1991,7 @@ def _extract_kapital_name(desc: str) -> str:
     return cleaned
 
 
-def _extract_name_by_patterns(desc: str) -> str:
+def _extract_name_by_patterns(desc):
     if not desc:
         return ''
     patterns = [
@@ -2088,7 +2028,6 @@ def extract_counterparty_smart(description: str,
     desc = (description or '').strip()
     acc_low = (account_name or '').lower()
 
-    # 1) Прямые кандидаты
     for cand in (raw_cp, beneficiary, sender_name, payer):
         if not cand:
             continue
@@ -2105,7 +2044,6 @@ def extract_counterparty_smart(description: str,
     if not desc:
         return ('', '')
 
-    # 2) Спец-парсеры по банку
     cp = ''
     if 'revolut' in acc_low:
         cp = _extract_revolut_name(desc, account_name, payer, beneficiary, sender_name)
@@ -2141,11 +2079,9 @@ def extract_counterparty_smart(description: str,
     if not cp and 'wise' in acc_low:
         cp = _extract_wio_name(desc)
 
-    # 3) Шаблоны
     if not cp:
         cp = _extract_name_by_patterns(desc)
 
-    # 4) Эвристика
     if not cp:
         parts = re.split(r'[|•;]', desc)
         for p in parts:
@@ -2160,7 +2096,6 @@ def extract_counterparty_smart(description: str,
                 if cp:
                     break
 
-    # 5) Имя банка из названия счёта
     if not cp:
         m = re.search(
             r'\b(CSOB|UniCredit|Revolut|Tinkoff|Paysera|Wise|BluOr|Industra|'
@@ -6401,6 +6336,73 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
     return [], msg
 
 
+# ==================== ДЕДУПЛИКАЦИЯ ТРАНЗАКЦИЙ ====================
+
+def _make_tx_key_strict(tx: Dict) -> Tuple:
+    """Строгий ключ: дата + сумма + контрагент + описание (первые 200 симв.)."""
+    date = _to_scalar_str(tx.get('Дата', '')).strip()
+    try:
+        amount = round(to_float_amount(tx.get('Сумма', 0)), 2)
+    except Exception:
+        amount = 0.0
+    cp = _to_scalar_str(tx.get('Контрагент', '')).strip().lower()
+    desc = _to_scalar_str(tx.get('Описание', '')).strip().lower()[:200]
+    return (date, amount, cp, desc)
+
+
+def _make_tx_key_soft(tx: Dict) -> Tuple:
+    """Мягкий ключ: дата + сумма + контрагент (без описания)."""
+    date = _to_scalar_str(tx.get('Дата', '')).strip()
+    try:
+        amount = round(to_float_amount(tx.get('Сумма', 0)), 2)
+    except Exception:
+        amount = 0.0
+    cp = _to_scalar_str(tx.get('Контрагент', '')).strip().lower()
+    return (date, amount, cp)
+
+
+def dedupe_transactions(transactions: List[Dict],
+                        mode: str = 'strict') -> Tuple[List[Dict], int, List[Tuple[str, str]]]:
+    """
+    Дедупликация списка транзакций.
+
+    mode:
+      - 'off'    — без дедупликации (возвращает всё как есть)
+      - 'strict' — дата + сумма + контрагент + описание (первые 200 симв.)
+      - 'soft'   — дата + сумма + контрагент
+
+    Возвращает: (уникальные_транзакции, отброшено_штук, [(ключ, инфо_о_источнике), ...])
+    """
+    if mode == 'off' or not transactions:
+        return list(transactions), 0, []
+
+    key_fn = _make_tx_key_strict if mode == 'strict' else _make_tx_key_soft
+
+    seen: Dict[Tuple, int] = {}
+    unique: List[Dict] = []
+    dropped_details: List[Tuple[str, str]] = []
+
+    for tx in transactions:
+        try:
+            key = key_fn(tx)
+        except Exception:
+            unique.append(tx)
+            continue
+
+        if key in seen:
+            dropped_details.append((
+                str(key),
+                f"источник #{seen[key]}",
+            ))
+            continue
+
+        seen[key] = len(unique)
+        unique.append(tx)
+
+    dropped = len(transactions) - len(unique)
+    return unique, dropped, dropped_details
+
+
 # ==================== СВОДКА ПО СЧЕТАМ ====================
 
 def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
@@ -6664,7 +6666,15 @@ def _files_signature(uploaded_files) -> str:
     return h.hexdigest()
 
 
-def _process_uploaded_files(uploaded_files) -> Dict:
+def _process_uploaded_files(uploaded_files, dedupe_mode: str = 'strict') -> Dict:
+    """
+    Обработка загруженных файлов с дедупликацией транзакций.
+
+    dedupe_mode:
+      - 'off'    — без дедупликации
+      - 'strict' — дата + сумма + контрагент + описание
+      - 'soft'   — дата + сумма + контрагент
+    """
     all_tx: List[Dict] = []
     failed: List[str] = []
     file_stats: List[str] = []
@@ -6672,6 +6682,11 @@ def _process_uploaded_files(uploaded_files) -> Dict:
 
     seen_hashes: Dict[str, str] = {}
     skipped_dupes: List[str] = []
+
+    # Для дедупликации транзакций между файлами
+    seen_tx_keys: Dict[Tuple, str] = {}
+    deduped_count_total = 0
+    deduped_per_file: List[Tuple[str, int]] = []
 
     progress = st.progress(0)
     status = st.empty()
@@ -6685,10 +6700,11 @@ def _process_uploaded_files(uploaded_files) -> Dict:
                 progress.progress((i + 1) / max(1, len(uploaded_files)))
                 continue
 
+            # Отсев полных дубликатов файлов по MD5
             h = hashlib.md5(content).hexdigest()
             if h in seen_hashes:
                 skipped_dupes.append(f"{uf.name} (дубликат {seen_hashes[h]})")
-                file_stats.append(f"⏭️ {uf.name}: дубликат {seen_hashes[h]}, пропущен")
+                file_stats.append(f"⏭️ {uf.name}: дубликат файла {seen_hashes[h]}, пропущен")
                 progress.progress((i + 1) / max(1, len(uploaded_files)))
                 continue
             seen_hashes[h] = uf.name
@@ -6696,6 +6712,31 @@ def _process_uploaded_files(uploaded_files) -> Dict:
             tx, parser_name = parse_file(content, uf.name)
             raw_account_name = clean_account_name(uf.name)
             account_name = normalize_account_name(raw_account_name)
+
+            # Дедупликация транзакций между файлами
+            deduped_local = 0
+            if tx and dedupe_mode != 'off':
+                key_fn = _make_tx_key_strict if dedupe_mode == 'strict' else _make_tx_key_soft
+                unique_tx = []
+                for t in tx:
+                    try:
+                        key = key_fn(t)
+                    except Exception:
+                        unique_tx.append(t)
+                        continue
+                    if key in seen_tx_keys:
+                        deduped_local += 1
+                        continue
+                    seen_tx_keys[key] = uf.name
+                    unique_tx.append(t)
+                tx = unique_tx
+                if deduped_local:
+                    deduped_count_total += deduped_local
+                    deduped_per_file.append((uf.name, deduped_local))
+                    debug_info.append(
+                        f"🔁 `{uf.name}`: отброшено **{deduped_local}** дублей "
+                        f"(совпали с ранее загруженными файлами)"
+                    )
 
             debug_info.append(
                 f"🔍 `{uf.name}` → сырое имя: `{raw_account_name}` → "
@@ -6705,7 +6746,13 @@ def _process_uploaded_files(uploaded_files) -> Dict:
 
             if tx:
                 all_tx.extend(tx)
-                file_stats.append(f"✅ {uf.name}: {len(tx)} операций → {account_name}")
+                if deduped_local:
+                    file_stats.append(
+                        f"✅ {uf.name}: {len(tx)} операций → {account_name} "
+                        f"(отброшено {deduped_local} дублей)"
+                    )
+                else:
+                    file_stats.append(f"✅ {uf.name}: {len(tx)} операций → {account_name}")
             else:
                 ext_low = os.path.splitext(uf.name)[1].lower()
                 is_service_file = False
@@ -6742,7 +6789,14 @@ def _process_uploaded_files(uploaded_files) -> Dict:
         progress.progress((i + 1) / max(1, len(uploaded_files)))
 
     if skipped_dupes:
-        debug_info.append("⏭️ Пропущены дубликаты: " + "; ".join(skipped_dupes))
+        debug_info.append("⏭️ Пропущены дубликаты файлов: " + "; ".join(skipped_dupes))
+
+    if deduped_count_total:
+        summary_line = "; ".join([f"{name}: {cnt}" for name, cnt in deduped_per_file])
+        debug_info.append(
+            f"🔁 **Всего отброшено дублей транзакций: {deduped_count_total}** "
+            f"({summary_line})"
+        )
 
     status.text("✅ Обработка завершена!")
 
@@ -6751,6 +6805,9 @@ def _process_uploaded_files(uploaded_files) -> Dict:
         'failed': failed,
         'file_stats': file_stats,
         'debug_info': debug_info,
+        'deduped_count': deduped_count_total,
+        'deduped_per_file': deduped_per_file,
+        'dedupe_mode': dedupe_mode,
     }
 
 
@@ -6761,8 +6818,21 @@ def _render_results(result: Dict):
     failed = result.get('failed', [])
     file_stats = result.get('file_stats', [])
     debug_info = result.get('debug_info', [])
+    deduped_count = result.get('deduped_count', 0)
+    dedupe_mode = result.get('dedupe_mode', 'off')
 
     st.markdown("### 📋 Результат обработки")
+
+    # Сводка по дедупликации
+    if dedupe_mode != 'off' and deduped_count:
+        mode_label = 'строгая' if dedupe_mode == 'strict' else 'мягкая'
+        st.success(
+            f"🔁 Дедупликация ({mode_label}): отброшено **{deduped_count}** дублей транзакций "
+            f"между файлами."
+        )
+    elif dedupe_mode != 'off' and not deduped_count:
+        st.info("🔁 Дедупликация включена, но дублей не найдено.")
+
     for s in file_stats:
         st.info(s)
 
@@ -6789,7 +6859,6 @@ def _render_results(result: Dict):
         st.info("Нет данных.")
         return
 
-    # Приводим все object-колонки к строкам, кроме 'Сумма'
     for col in df_raw.columns:
         if col == 'Сумма':
             continue
@@ -7307,6 +7376,37 @@ def main():
             st.markdown("---")
             st.markdown(f"**Загружено файлов:** {len(uploaded_files)}")
 
+            # Настройка дедупликации
+            st.markdown("#### 🔁 Дедупликация транзакций")
+            st.caption(
+                "Если один и тот же счёт загружен в нескольких форматах (PDF + XLSX + CSV), "
+                "включите дедупликацию — программа отбросит совпадающие операции, "
+                "оставив те, что пришли из первого файла в списке."
+            )
+
+            dedupe_mode_label = st.radio(
+                "Режим дедупликации:",
+                options=[
+                    "Строгая — дата + сумма + контрагент + описание",
+                    "Мягкая — дата + сумма + контрагент",
+                    "Отключена — оставить все операции",
+                ],
+                index=0,
+                key="dedupe_mode_radio",
+            )
+
+            if dedupe_mode_label.startswith("Строгая"):
+                dedupe_mode = "strict"
+            elif dedupe_mode_label.startswith("Мягкая"):
+                dedupe_mode = "soft"
+            else:
+                dedupe_mode = "off"
+
+            st.caption(
+                "💡 Порядок файлов важен: первый загруженный файл «выигрывает». "
+                "Рекомендуется ставить наиболее точный формат (обычно XLSX) первым."
+            )
+
             current_sig = _files_signature(uploaded_files)
 
             col_btn, col_hint = st.columns([1, 3])
@@ -7314,22 +7414,28 @@ def main():
                 process_clicked = st.button("🚀 Обработать файлы", key="process_btn")
             with col_hint:
                 if st.session_state['processing_result'] is not None:
-                    st.caption("Результат готов. Можно скачивать файлы; повторное нажатие «Обработать» перезапустит разбор.")
+                    st.caption(
+                        "Результат готов. Можно скачивать файлы; "
+                        "повторное нажатие «Обработать» перезапустит разбор."
+                    )
+
+            # Сигнатура с учётом режима дедупликации
+            full_sig = f"{current_sig}|{dedupe_mode}"
 
             need_process = False
             if process_clicked:
                 if st.session_state['processing_result'] is None:
                     need_process = True
-                elif st.session_state['files_signature'] != current_sig:
+                elif st.session_state['files_signature'] != full_sig:
                     need_process = True
                 else:
                     need_process = False
-                    st.info("Файлы не изменились — использую уже готовый результат.")
+                    st.info("Файлы и режим дедупликации не изменились — использую готовый результат.")
 
             if need_process:
-                result = _process_uploaded_files(uploaded_files)
+                result = _process_uploaded_files(uploaded_files, dedupe_mode=dedupe_mode)
                 st.session_state['processing_result'] = result
-                st.session_state['files_signature'] = current_sig
+                st.session_state['files_signature'] = full_sig
 
             if st.session_state['processing_result'] is not None:
                 st.markdown("---")
