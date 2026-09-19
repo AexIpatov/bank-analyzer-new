@@ -781,11 +781,12 @@ def _get_deepseek_api_key() -> str:
 def _get_deepseek_client() -> Optional["OpenAI"]:
     if not _OPENAI_SDK_AVAILABLE:
         return None
-    api_key = _get_deepseek_api_key()
-    if not api_key:
-        return None
     try:
-        return OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
+        # Используем публичный бесплатный прокси DanyAPI
+        return OpenAI(
+            api_key="dummy-key",  # Ключ не нужен, но библиотека требует его указать
+            base_url="https://danyapi.cloudpub.ru/v1"
+        )
     except Exception:
         return None
 
