@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 app.py — Аналитик банковских выписок.
-Полная рабочая версия + интеграция DeepSeek AI.
+Полная рабочая версия + интеграция DeepSeek AI (через Hugging Face Router).
 
-FIX-пакет v7 (полная версия):
+FIX-пакет v8 (актуальная версия):
+  [FIX-INDENTATION]              — устранены 7 IndentationError
+  [FIX-BRANDING-DEEPSEEK]        — в интерфейсе сохранено имя "DeepSeek AI"
   [FIX-COUNTERPARTY-TRUNCATION]  — устранена обрезка имён контрагентов
   [FIX-LATVENERGO-AS]            — "To LATVENERGO AS" больше не превращается в "AS"
   [FIX-PAYSERA-PDF]              — Paysera PDF: корректное извлечение контрагента
@@ -11,18 +13,18 @@ FIX-пакет v7 (полная версия):
   [FIX-RENDER-SCALAR-V5]         — все колонки приводятся к строкам до DataFrame
   [FIX-RENAME-COLUMN-V4]         — "Наименование счета" → "Наименование банка"
   [FIX-TRANSLATE-FULL]           — многословные фразы переводятся ПОЛНОСТЬЮ
-  [FIX-SYNTAX-MASHREQ]           — устранена слипшаяся строка "amount = credit  elif ..."
+  [FIX-SYNTAX-MASHREQ]           — устранена слипшаяся строка
   [FIX-BG-BASE64]                — фон: SVG в base64 + CSS-градиенты
   [FIX-BUTTONS-SMALL]            — уменьшен шрифт кнопок
   [FIX-KAPITAL-XLSX]             — парсер Kapital bank Saida AZN (XLSX, 2-колоночный)
-  [FIX-KAPITAL-PDF]              — улучшен PDF-парсер Kapital bank (склейка Məxaric/Mədaxil)
+  [FIX-KAPITAL-PDF]              — улучшен PDF-парсер Kapital bank
   [NEW-NORMALIZE-ACCOUNT]        — приведение наименований счетов к эталонному списку
   [NEW-GORODETS-TEA]             — фон: городецкая роспись "Чаепитие"
   [NEW-TRANSLATE-INLINE]         — Оригинал + (перевод) в одной ячейке
   [NEW-AMOUNT-FORMAT]            — Суммы на экране: 1 234,56
   [NEW-EXCEL-NUMERIC]            — В Excel суммы — числа с форматом # ##0.00
   [NEW-SMART-COUNTERPARTY]       — Умное извлечение контрагента
-    [HF-INTEGRATION]               — AI-ассистент Hugging Face и AI-обогащение
+  [DEEPSEEK-INTEGRATION]         — AI-ассистент DeepSeek и AI-обогащение
 """
 
 import streamlit as st
@@ -757,7 +759,8 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 1.6rem 0; }
 st.markdown(_CSS.replace("__GORODETS_B64__", _GORODETS_SVG_B64), unsafe_allow_html=True)
 
 
-# ==================== [HF-INTEGRATION] ====================
+# ==================== [DEEPSEEK-INTEGRATION] ====================
+# Работаем через Hugging Face Router, но в интерфейсе называем "DeepSeek AI"
 
 HF_BASE_URL = "https://router.huggingface.co/v1"
 HF_DEFAULT_MODEL = "deepseek-ai/DeepSeek-V3-0324"
@@ -799,7 +802,7 @@ def call_ai(messages, model=HF_DEFAULT_MODEL, temperature=0.3,
     if client is None:
         if not _OPENAI_SDK_AVAILABLE:
             return "", "Библиотека openai не установлена. Выполните: pip install openai"
-        return "", ("HF-токен не задан или неверен. "
+        return "", ("DeepSeek-токен не задан или неверен. "
                     "Проверьте HF_TOKEN в .streamlit/secrets.toml.")
     try:
         kwargs = {"model": model, "messages": messages,
@@ -809,7 +812,7 @@ def call_ai(messages, model=HF_DEFAULT_MODEL, temperature=0.3,
         resp = client.chat.completions.create(**kwargs)
         return (resp.choices[0].message.content or "").strip(), None
     except Exception as e:
-        return "", f"Ошибка Hugging Face API: {e}"
+        return "", f"Ошибка DeepSeek AI: {e}"
 
 
 def call_ai_json(system_prompt, user_prompt, model=HF_DEFAULT_MODEL):
@@ -842,9 +845,9 @@ def ai_enrich_transactions(transactions, max_items=200, progress_callback=None):
     errors = []
     if not transactions:
         return transactions, ["Нет транзакций для обогащения"]
-       client = _get_hf_client()
+    client = _get_hf_client()
     if client is None:
-        return transactions, ["Hugging Face недоступен (проверьте HF_TOKEN)"]
+        return transactions, ["DeepSeek AI недоступен (проверьте HF_TOKEN)"]
     subset = transactions[:max_items]
     enriched = [dict(t) for t in transactions]
     for i, tx in enumerate(subset):
@@ -890,7 +893,7 @@ st.markdown("""
 <span class="chip">📝 DOCX</span>
 <span class="chip">📕 PDF</span>
 <span class="chip">🌐 Перевод в скобках</span>
-<span class="chip">🤖 Hugging Face AI</span>
+<span class="chip">🤖 DeepSeek AI</span>
 </div>
 </div>
 <div class="hero-illustration">
@@ -914,8 +917,6 @@ st.markdown("""
 </div>
 </div>
 """, unsafe_allow_html=True)
-
-
 # ==================== ОБЩИЕ УТИЛИТЫ ====================
 
 def clean_account_name(filename: str) -> str:
@@ -1687,25 +1688,23 @@ def translate_description_inline(original: str) -> str:
 
 # ==================== [FIX-COUNTERPARTY-TRUNCATION] ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
 
-# Минимальный набор «мусорных» паттернов.
-# НЕ трогаем фамилии, названия компаний, короткие слова (AS, SIA).
 _JUNK_PATTERNS = [
-    r'\b[A-Z]{2}\d{2}[A-Z0-9]{12,}\b',     # IBAN без пробелов
-    r'\b[A-Z]{2}\d{2}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\b',  # IBAN с пробелами
+    r'\b[A-Z]{2}\d{2}[A-Z0-9]{12,}\b',
+    r'\b[A-Z]{2}\d{2}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\b',
     r'\bREF\b[^\s]*', r'\bSRN\b[^\s]*', r'\bREC\b[^\s]*',
     r'\bROC\b[^\s]*', r'\bMCC\d+\b', r'\bTOC-[A-Z0-9\-]+\b',
     r'\bT_[A-F0-9]{10,}\b',
-    r'\b\d{10,}\b',                         # длинные цифры
-    r'\+?\d[\d\s\(\)\-]{8,}',               # телефоны
+    r'\b\d{10,}\b',
+    r'\+?\d[\d\s\(\)\-]{8,}',
     r'\bLV\d{2}[A-Z]{4}\d{10,}\b',
     r'\bLT\d{2}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b',
     r'\bEE\d{2}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b',
     r'\bAZ\d{2}[A-Z]{4}\d{16,}\b',
     r'\bAE\d{2}\s?\d{3,}\b',
-    r'\b\d{4}-\d{2}-\d{2}\b',               # ISO-дата
-    r'\b\d{2}\.\d{2}\.\d{4}\b',             # дата DD.MM.YYYY
+    r'\b\d{4}-\d{2}-\d{2}\b',
+    r'\b\d{2}\.\d{2}\.\d{4}\b',
     r'_x000D_', r'[\r\n\t]+',
-    r'\\[a-zA-Z]{2,}\b',                    # \x, \t и пр.
+    r'\\[a-zA-Z]{2,}\b',
 ]
 
 
@@ -1748,7 +1747,6 @@ def _clean_counterparty_name(name: str, keep_full: bool = False) -> str:
                     s = parts[0]
                 break
 
-    # Убираем завершающие скобки (номера, коды) — только если внутри цифры/коды
     s = re.sub(r'\s*\(\s*[\dA-Z]{4,}\s*\)\s*$', '', s).strip()
     s = s.strip(' .,;:-–—/\\')
 
@@ -1771,7 +1769,6 @@ def _looks_like_bank_name(s: str) -> bool:
         'fio banka', 'kapital bank', 'rak bank',
         'swedbank', 'seb banka', 'luminor',
     ]
-    # ВАЖНО: 'AS' и 'SIA' НЕ считаются банком
     if low in ('as', 'sia', 'llc', 'ltd', 'inc'):
         return False
     return any(w in low for w in bank_words)
@@ -1784,9 +1781,6 @@ def _extract_revolut_name(desc: str,
                            payer: str = '',
                            beneficiary: str = '',
                            sender_name: str = '') -> str:
-    """
-    Revolut: приоритет Beneficiary → Sender name → Payer → Description.
-    """
     for cand in (beneficiary, sender_name, payer):
         c = str(cand).strip() if cand else ''
         if c and c.lower() not in ('nan', 'none', 'n/a', '-'):
@@ -1815,14 +1809,9 @@ def _extract_paysera_name(desc: str,
                            payer: str = '',
                            beneficiary: str = '',
                            raw_cp: str = '') -> str:
-    """
-    Paysera: приоритет raw_cp (сырая колонка «Получатель / Плательщик») →
-    beneficiary → payer → Description.
-    """
     if raw_cp:
         c = str(raw_cp).strip()
         if c and c.lower() not in ('nan', 'none', 'n/a', '-', ''):
-            # НЕ режем имя, только убираем IBAN в конце и коды
             cleaned = re.sub(r'\s+\(?\s*\d{6,}\s*\)?\s*$', '', c)
             cleaned = re.sub(r'\s+[A-Z]{2}\d{2}[A-Z0-9]{10,}\s*$', '', cleaned)
             cleaned = re.sub(r'\s+\([A-Z0-9]{4,}\)\s*$', '', cleaned)
@@ -1857,9 +1846,6 @@ def _extract_industra_name(desc: str,
                             payer: str = '',
                             beneficiary: str = '',
                             raw_cp: str = '') -> str:
-    """
-    Industra: приоритет raw_cp → beneficiary → payer → Description.
-    """
     if raw_cp:
         c = str(raw_cp).strip()
         if c and c.lower() not in ('nan', 'none', 'n/a', '-', ''):
@@ -2245,7 +2231,7 @@ def extract_counterparty_smart(description: str,
     cp = _to_scalar_str(cp)
     desc = _to_scalar_str(desc)
     return (cp, desc)
-# ==================== ФАЙЛОВЫЕ УТИЛИТЫ ====================
+    # ==================== ФАЙЛОВЫЕ УТИЛИТЫ ====================
 
 def read_xlsx(file_content: bytes, sheet_name=None, header=None):
     for engine in ['openpyxl', 'xlrd', None]:
@@ -4065,8 +4051,6 @@ def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[
             'Описание': desc
         })
     return result
-
-
 # ==================== MASHREQ ====================
 
 def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
@@ -6140,9 +6124,7 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
     return result
-
-
-# ==================== МАРШРУТИЗАЦИЯ ПАРСЕРОВ ====================
+  # ==================== МАРШРУТИЗАЦИЯ ПАРСЕРОВ ====================
 
 def get_parser_by_ext(account_name: str, ext: str):
     low = account_name.lower()
@@ -6475,6 +6457,8 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
     if errors:
         msg += f' | errors: {errors}'
     return [], msg
+
+
 # ==================== СВОДКА ПО СЧЕТАМ ====================
 
 def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
@@ -6723,8 +6707,6 @@ def build_combined_excel(df_display: pd.DataFrame,
     wb.save(output)
     output.seek(0)
     return output
-
-
 # ==================== ОБРАБОТКА ЗАГРУЖЕННЫХ ФАЙЛОВ ====================
 
 def _files_signature(uploaded_files) -> str:
@@ -6937,7 +6919,7 @@ def _render_results(result: Dict):
 
     # [DEEPSEEK-INTEGRATION] AI-обогащение
     st.markdown("---")
-       st.markdown("### 🤖 AI-обогащение транзакций (Hugging Face)")
+    st.markdown("### 🤖 AI-обогащение транзакций (DeepSeek AI)")
     st.caption(
         "AI переведёт описания, определит категорию и вытащит чистое имя "
         "контрагента. Обрабатывается не более 200 строк за раз."
@@ -6953,7 +6935,7 @@ def _render_results(result: Dict):
         )
 
     if ai_run:
-                with st.spinner("AI обрабатывает транзакции..."):
+        with st.spinner("DeepSeek AI обрабатывает транзакции..."):
             tx_list = df_raw.to_dict('records')
             progress_bar = st.progress(0)
 
@@ -7110,7 +7092,7 @@ def _render_results(result: Dict):
 # ==================== AI-АССИСТЕНТ ====================
 
 def _render_ai_assistant_tab():
-    st.markdown("### 🤖 AI-ассистент (Hugging Face)")
+    st.markdown("### 🤖 AI-ассистент (DeepSeek AI)")
     st.caption(
         "Задавайте вопросы по коду, данным и обработке выписок. "
         "Ассистент видит только то, что вы ему напишете — файлы не отправляются автоматически."
@@ -7126,27 +7108,24 @@ def _render_ai_assistant_tab():
             )
         else:
             st.markdown(
-                '<span class="ai-status-warn">⚠️ HF-токен не задан или неверен. '
+                '<span class="ai-status-warn">⚠️ DeepSeek-токен не задан или неверен. '
                 'Проверьте <code>HF_TOKEN</code> в <code>.streamlit/secrets.toml</code></span>',
                 unsafe_allow_html=True,
             )
     else:
         st.markdown(
-            '<span class="ai-status-ok">✅ Hugging Face подключён</span>',
+            '<span class="ai-status-ok">✅ DeepSeek AI подключён</span>',
             unsafe_allow_html=True,
         )
 
-    with st.expander("🔑 Настройка HF-токена", expanded=(client is None)):
+    with st.expander("🔑 Настройка DeepSeek-токена", expanded=(client is None)):
         st.markdown(
-            "Получите токен на [huggingface.co/settings/tokens]"
-            "(https://huggingface.co/settings/tokens) с правом "
-            "**Make calls to Inference Providers**. "
             "Токен хранится в `.streamlit/secrets.toml`:\n\n"
             "```toml\nHF_TOKEN = \"hf_...\"\n```\n\n"
             "Или введите здесь — он сохранится только в текущей сессии."
         )
         key_input = st.text_input(
-            "HF-токен",
+            "DeepSeek-токен",
             value=st.session_state.get('hf_token', ''),
             type='password',
             key='hf_token_input',
@@ -7163,8 +7142,7 @@ def _render_ai_assistant_tab():
         options=[HF_DEFAULT_MODEL, HF_REASONER_MODEL],
         index=0,
         key='hf_model_choice',
-        help="DeepSeek-V3 — быстрая; DeepSeek-R1 — для отладки кода "
-             "(если модель доступна на бесплатном тарифе HF).",
+        help="DeepSeek-V3 — быстрая; DeepSeek-R1 — для отладки кода.",
     )
 
     st.markdown("**Быстрые действия:**")
@@ -7228,7 +7206,7 @@ def _render_ai_assistant_tab():
                 unsafe_allow_html=True,
             )
         else:
-                st.markdown(
+            st.markdown(
                 f'<div class="ai-chat-bubble-assistant"><b>AI:</b><br>'
                 f'{msg["content"]}</div>',
                 unsafe_allow_html=True,
@@ -7236,7 +7214,7 @@ def _render_ai_assistant_tab():
 
     if quick_prompt:
         st.session_state['ai_chat_history'].append({'role': 'user', 'content': quick_prompt})
-        with st.spinner("AI думает..."):
+        with st.spinner("DeepSeek AI думает..."):
             messages = [{"role": "system", "content": system_prompt}]
             messages.extend(st.session_state['ai_chat_history'])
             answer, err = call_ai(messages, model=model_choice)
@@ -7249,7 +7227,7 @@ def _render_ai_assistant_tab():
     user_input = st.chat_input("Спросите DeepSeek о коде, данных или обработке...")
     if user_input:
         st.session_state['ai_chat_history'].append({'role': 'user', 'content': user_input})
-          with st.spinner("AI думает..."):
+        with st.spinner("DeepSeek AI думает..."):
             messages = [{"role": "system", "content": system_prompt}]
             messages.extend(st.session_state['ai_chat_history'])
             answer, err = call_ai(messages, model=model_choice)
@@ -7273,7 +7251,7 @@ def _render_ai_assistant_tab():
                         {"role": "system", "content": _AI_DEBUG_SYSTEM},
                         {"role": "user", "content": code_snippet},
                     ]
-                              answer, err = call_ai(messages, model=model_choice, max_tokens=3000)
+                    answer, err = call_ai(messages, model=model_choice, max_tokens=3000)
                 if err:
                     st.error(err)
                 else:
@@ -7299,18 +7277,18 @@ def main():
     if 'ai_chat_history' not in st.session_state:
         st.session_state['ai_chat_history'] = []
 
-        with st.sidebar:
+    with st.sidebar:
         st.markdown("### ⚙️ Настройки")
-        st.markdown("**AI (Hugging Face)**")
+        st.markdown("**DeepSeek AI**")
         client = _get_hf_client()
         if client is not None:
             st.success("✅ Подключён")
         else:
             st.warning("⚠️ Не подключён")
-            st.caption("Проверьте HF_TOKEN во вкладке «AI-ассистент».")
+            st.caption("Проверьте DeepSeek-токен во вкладке «AI-ассистент».")
         st.markdown("---")
         st.caption(
-            "Программа работает локально. Файлы выписок не отправляются в HF — "
+            "Программа работает локально. Файлы выписок не отправляются в DeepSeek — "
             "только те фрагменты, которые вы сами вводите в чат."
         )
 
@@ -7375,7 +7353,7 @@ def main():
                 <path d="M12 2a10 10 0 100 20 10 10 0 000-20zM2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
                 </div>
-                <div class="info-card-text"><h4>Hugging Face AI</h4><p>Перевод, категории, отладка кода</p></div>
+                <div class="info-card-text"><h4>DeepSeek AI</h4><p>Перевод, категории, отладка кода</p></div>
                 </div>
                 """, unsafe_allow_html=True)
             st.markdown("""
@@ -7426,7 +7404,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-
-
-
+    main()                        
+                           
