@@ -2,29 +2,6 @@
 """
 app.py — Аналитик банковских выписок.
 Полная рабочая версия + интеграция DeepSeek AI (через Hugging Face Router).
-
-FIX-пакет v8 (актуальная версия):
-  [FIX-INDENTATION]              — устранены 7 IndentationError
-  [FIX-BRANDING-DEEPSEEK]        — в интерфейсе сохранено имя "DeepSeek AI"
-  [FIX-COUNTERPARTY-TRUNCATION]  — устранена обрезка имён контрагентов
-  [FIX-LATVENERGO-AS]            — "To LATVENERGO AS" больше не превращается в "AS"
-  [FIX-PAYSERA-PDF]              — Paysera PDF: корректное извлечение контрагента
-  [FIX-INDUSTRA-PDF]             — Industra PDF: контрагент берётся из ячейки
-  [FIX-RENDER-SCALAR-V5]         — все колонки приводятся к строкам до DataFrame
-  [FIX-RENAME-COLUMN-V4]         — "Наименование счета" → "Наименование банка"
-  [FIX-TRANSLATE-FULL]           — многословные фразы переводятся ПОЛНОСТЬЮ
-  [FIX-SYNTAX-MASHREQ]           — устранена слипшаяся строка
-  [FIX-BG-BASE64]                — фон: SVG в base64 + CSS-градиенты
-  [FIX-BUTTONS-SMALL]            — уменьшен шрифт кнопок
-  [FIX-KAPITAL-XLSX]             — парсер Kapital bank Saida AZN (XLSX, 2-колоночный)
-  [FIX-KAPITAL-PDF]              — улучшен PDF-парсер Kapital bank
-  [NEW-NORMALIZE-ACCOUNT]        — приведение наименований счетов к эталонному списку
-  [NEW-GORODETS-TEA]             — фон: городецкая роспись "Чаепитие"
-  [NEW-TRANSLATE-INLINE]         — Оригинал + (перевод) в одной ячейке
-  [NEW-AMOUNT-FORMAT]            — Суммы на экране: 1 234,56
-  [NEW-EXCEL-NUMERIC]            — В Excel суммы — числа с форматом # ##0.00
-  [NEW-SMART-COUNTERPARTY]       — Умное извлечение контрагента
-  [DEEPSEEK-INTEGRATION]         — AI-ассистент DeepSeek и AI-обогащение
 """
 
 import streamlit as st
@@ -35,9 +12,11 @@ import hashlib
 import csv
 import base64
 import json
+import traceback
 from datetime import datetime
 from io import BytesIO, StringIO
 from typing import Dict, List, Tuple, Callable, Optional, Any
+
 from docx import Document
 import pdfplumber
 
@@ -63,21 +42,19 @@ st.set_page_config(
 )
 
 
-# ==================== [NEW-GORODETS-TEA] ФОН: ГОРОДЕЦКАЯ РОСПИСЬ "ЧАЕПИТИЕ" ====================
+# ==================== ФОН: ГОРОДЕЦКАЯ РОСПИСЬ "ЧАЕПИТИЕ" ====================
 
 _GORODETS_SVG = (
     "<svg xmlns='http://www.w3.org/2000/svg' width='520' height='460'>"
     "<defs><pattern id='gorodets' x='0' y='0' width='520' height='460' "
     "patternUnits='userSpaceOnUse'>"
     "<g opacity='0.55'>"
-
     "<g fill='none' stroke='#2C3E50' stroke-width='2' stroke-linecap='round'>"
     "<path d='M10 380 Q120 320 240 360 Q360 400 510 340'/>"
     "<path d='M5 120 Q90 70 190 100 Q290 130 390 90 Q470 55 520 85'/>"
     "<path d='M60 250 Q160 210 260 245 Q360 280 460 240'/>"
     "<path d='M0 445 Q130 415 260 440 Q400 465 520 430'/>"
     "</g>"
-
     "<g fill='#43A047' stroke='#1B5E20' stroke-width='1.6'>"
     "<path d='M120 350 q18 -28 46 -18 q-4 26 -24 34 q-24 10 -22 -16 z'/>"
     "<path d='M120 350 q22 -10 46 -18' fill='none' stroke='#1B5E20' stroke-width='1.3'/>"
@@ -91,14 +68,12 @@ _GORODETS_SVG = (
     "<path d='M460 330 q16 -22 40 -12 q-4 22 -22 30 q-22 8 -18 -18 z'/>"
     "<path d='M70 210 q16 -20 40 -10 q-4 22 -24 30 q-24 8 -16 -20 z'/>"
     "</g>"
-
     "<g transform='translate(260,360)'>"
     "<ellipse cx='0' cy='0' rx='170' ry='34' fill='#8D6E63' stroke='#4E342E' stroke-width='2'/>"
     "<ellipse cx='0' cy='-6' rx='170' ry='30' fill='#A1887F' stroke='#4E342E' stroke-width='1.6'/>"
     "<ellipse cx='0' cy='-12' rx='160' ry='24' fill='#D7CCC8' stroke='#4E342E' stroke-width='1.2'/>"
     "<ellipse cx='0' cy='-14' rx='90' ry='16' fill='#FFFFFF' opacity='0.6' stroke='#BCAAA4' stroke-width='1'/>"
     "</g>"
-
     "<g transform='translate(260,300)'>"
     "<path d='M-30 0 q-8 -55 30 -60 q38 5 30 60 z' fill='#FBC02D' stroke='#F57F17' stroke-width='2'/>"
     "<ellipse cx='0' cy='-60' rx='30' ry='8' fill='#FDD835' stroke='#F57F17' stroke-width='1.8'/>"
@@ -109,7 +84,6 @@ _GORODETS_SVG = (
     "<ellipse cx='0' cy='14' rx='14' ry='4' fill='#FDD835' stroke='#F57F17' stroke-width='1.4'/>"
     "<path d='M-15 -50 q0 -6 6 -6' fill='none' stroke='#FFF9C4' stroke-width='2'/>"
     "</g>"
-
     "<g transform='translate(180,340)'>"
     "<ellipse cx='0' cy='0' rx='24' ry='7' fill='#FFFFFF' stroke='#1565C0' stroke-width='1.6'/>"
     "<path d='M-20 -2 q0 -18 20 -18 q20 0 20 18 z' fill='#FFFFFF' stroke='#1565C0' stroke-width='1.8'/>"
@@ -118,7 +92,6 @@ _GORODETS_SVG = (
     "<circle cx='4' cy='-8' r='3' fill='#E91E63' stroke='#880E4F' stroke-width='1'/>"
     "<circle cx='0' cy='-3' r='2.4' fill='#FBC02D' stroke='#F57F17' stroke-width='1'/>"
     "</g>"
-
     "<g transform='translate(340,340)'>"
     "<ellipse cx='0' cy='0' rx='24' ry='7' fill='#FFFFFF' stroke='#C62828' stroke-width='1.6'/>"
     "<path d='M-20 -2 q0 -18 20 -18 q20 0 20 18 z' fill='#FFFFFF' stroke='#C62828' stroke-width='1.8'/>"
@@ -127,13 +100,11 @@ _GORODETS_SVG = (
     "<circle cx='4' cy='-8' r='3' fill='#1E88E5' stroke='#0D47A1' stroke-width='1'/>"
     "<circle cx='0' cy='-3' r='2.4' fill='#FBC02D' stroke='#F57F17' stroke-width='1'/>"
     "</g>"
-
     "<g transform='translate(260,335)'>"
     "<ellipse cx='0' cy='0' rx='22' ry='6' fill='#FFFFFF' stroke='#7E57C2' stroke-width='1.4'/>"
     "<circle cx='-6' cy='-4' r='5' fill='#FFB74D' stroke='#E65100' stroke-width='1'/>"
     "<circle cx='4' cy='-4' r='5' fill='#FFB74D' stroke='#E65100' stroke-width='1'/>"
     "</g>"
-
     "<g transform='translate(90,150)'>"
     "<circle r='34' fill='#E91E63' stroke='#880E4F' stroke-width='2.2'/>"
     "<circle r='24' fill='#F48FB1' stroke='#C2185B' stroke-width='1.8'/>"
@@ -146,7 +117,6 @@ _GORODETS_SVG = (
     "<circle cx='8' cy='22' r='3'/><circle cx='-10' cy='22' r='3'/>"
     "</g>"
     "</g>"
-
     "<g transform='translate(430,170)'>"
     "<path d='M-30 8 q0 -32 30 -44 q30 12 30 44 q0 32 -30 44 q-30 -12 -30 -44 z' "
     "fill='#1E88E5' stroke='#0D47A1' stroke-width='2.2'/>"
@@ -159,7 +129,6 @@ _GORODETS_SVG = (
     "<circle cy='-22' r='2.6'/>"
     "</g>"
     "</g>"
-
     "<g transform='translate(340,120)'>"
     "<path d='M-16 5 q0 -20 16 -27 q16 7 16 27 q0 20 -16 27 q-16 -7 -16 -27 z' "
     "fill='#F06292' stroke='#AD1457' stroke-width='1.8'/>"
@@ -168,7 +137,6 @@ _GORODETS_SVG = (
     "<circle cx='-7' cy='9' r='2.2'/><circle cx='7' cy='9' r='2.2'/>"
     "</g>"
     "</g>"
-
     "<g transform='translate(200,210)'>"
     "<path d='M-14 5 q0 -18 14 -24 q14 6 14 24 q0 18 -14 24 q-14 -6 -14 -24 z' "
     "fill='#26A69A' stroke='#00695C' stroke-width='1.8'/>"
@@ -177,7 +145,6 @@ _GORODETS_SVG = (
     "<circle cx='-6' cy='8' r='1.8'/><circle cx='6' cy='8' r='1.8'/>"
     "</g>"
     "</g>"
-
     "<g fill='#E53935' stroke='#B71C1C' stroke-width='1.2'>"
     "<circle cx='160' cy='60' r='4.5'/><circle cx='172' cy='66' r='4.5'/>"
     "<circle cx='166' cy='74' r='4.5'/>"
@@ -189,14 +156,12 @@ _GORODETS_SVG = (
     "<circle cx='440' cy='65' r='4'/><circle cx='452' cy='60' r='4'/>"
     "<circle cx='300' cy='270' r='4'/><circle cx='312' cy='264' r='4'/>"
     "</g>"
-
     "<g fill='none' stroke='#2C3E50' stroke-width='1.8' stroke-linecap='round'>"
     "<path d='M220 180 q-24 10 -30 34 q-4 22 16 32'/>"
     "<path d='M340 220 q24 10 30 34 q4 22 -16 32'/>"
     "<path d='M60 280 q-20 8 -24 28'/>"
     "<path d='M460 130 q20 8 24 28'/>"
     "</g>"
-
     "</g></pattern></defs>"
     "<rect width='100%' height='100%' fill='url(%23gorodets)'/></svg>"
 )
@@ -204,7 +169,7 @@ _GORODETS_SVG = (
 _GORODETS_SVG_B64 = base64.b64encode(_GORODETS_SVG.encode('utf-8')).decode('ascii')
 
 
-# ==================== [NEW-NORMALIZE-ACCOUNT] ЭТАЛОННЫЙ СПИСОК СЧЕТОВ ====================
+# ==================== ЭТАЛОННЫЙ СПИСОК СЧЕТОВ ====================
 
 _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
     ("an14estateeurindustra", "AN14_Estate_EUR_Industra"),
@@ -759,8 +724,7 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 1.6rem 0; }
 st.markdown(_CSS.replace("__GORODETS_B64__", _GORODETS_SVG_B64), unsafe_allow_html=True)
 
 
-# ==================== [DEEPSEEK-INTEGRATION] ====================
-# Работаем через Hugging Face Router, но в интерфейсе называем "DeepSeek AI"
+# ==================== DEEPSEEK AI ====================
 
 HF_BASE_URL = "https://router.huggingface.co/v1"
 HF_DEFAULT_MODEL = "deepseek-ai/DeepSeek-V3-0324"
@@ -778,7 +742,6 @@ def _get_hf_token() -> str:
         token = os.environ.get("HF_TOKEN", "").strip()
     if not token:
         token = str(st.session_state.get("hf_token", "")).strip()
-    # Защита от плейсхолдеров и не-ASCII
     if token and (not token.isascii() or not token.startswith("hf_")):
         return ""
     return token
@@ -917,6 +880,8 @@ st.markdown("""
 </div>
 </div>
 """, unsafe_allow_html=True)
+
+
 # ==================== ОБЩИЕ УТИЛИТЫ ====================
 
 def clean_account_name(filename: str) -> str:
@@ -1143,7 +1108,7 @@ def _safe_str_series(series: pd.Series) -> pd.Series:
         return pd.Series([''] * len(series), index=series.index, dtype=str)
 
 
-# ==================== [FIX-TRANSLATE-FULL] СЛОВАРИ ПЕРЕВОДА ====================
+# ==================== СЛОВАРИ ПЕРЕВОДА ====================
 
 _PHRASE_DICT: Dict[str, str] = {
     "value added tax - output": "НДС к уплате",
@@ -1686,7 +1651,7 @@ def translate_description_inline(original: str) -> str:
     return f"{orig} ({translated})"
 
 
-# ==================== [FIX-COUNTERPARTY-TRUNCATION] ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
+# ==================== ИЗВЛЕЧЕНИЕ КОНТРАГЕНТА ====================
 
 _JUNK_PATTERNS = [
     r'\b[A-Z]{2}\d{2}[A-Z0-9]{12,}\b',
@@ -1709,7 +1674,6 @@ _JUNK_PATTERNS = [
 
 
 def _strip_junk_soft(s: str) -> str:
-    """Мягкая очистка: убирает только явный мусор, не режет слова."""
     if not s:
         return ''
     out = str(s)
@@ -1722,13 +1686,6 @@ def _strip_junk_soft(s: str) -> str:
 
 
 def _clean_counterparty_name(name: str, keep_full: bool = False) -> str:
-    """
-    Мягкая очистка имени контрагента.
-    НЕ режет слова вроде 'Kumbhani', 'Peram', 'Thumar', 'Sreenivasan',
-    'Pesetskii', 'Putniece', 'Voronina', 'Kiselova', 'Straume',
-    'Lielmanis', 'Bodnieks', 'Denisko', 'Serebrjakova', 'Kaur',
-    'Jose', 'Fiore', 'Dipak', 'Rahul', 'Sagar', 'AS', 'SIA'.
-    """
     if not name:
         return ''
     s = str(name).strip()
@@ -1757,24 +1714,26 @@ def _clean_counterparty_name(name: str, keep_full: bool = False) -> str:
     return s
 
 
+# Расширенный список банков
+_BANK_WORDS = [
+    'bank', 'payments', 'finance', 'revolut', 'paysera', 'wise',
+    'sepa', 'csob', 'unicredit', 'tinkoff', 'bluor',
+    'industra', 'pasha', 'mashreq', 'wio', 'n26', 'mkb',
+    'fio', 'kapital', 'rak', 'swedbank', 'seb', 'luminor',
+    'citadele', 'dnb', 'nordea', 'op corporate',
+]
+
+
 def _looks_like_bank_name(s: str) -> bool:
-    """Проверка: похоже ли имя на название банка (не контрагента)."""
     if not s:
         return False
     low = str(s).lower()
-    bank_words = [
-        'bank', 'payments', 'finance', 'revolut', 'paysera', 'wise',
-        'sepa', 'csob', 'unicredit', 'tinkoff', 'bluor',
-        'industra', 'pasha', 'mashreq', 'wio bank', 'n26', 'mkb',
-        'fio banka', 'kapital bank', 'rak bank',
-        'swedbank', 'seb banka', 'luminor',
-    ]
-    if low in ('as', 'sia', 'llc', 'ltd', 'inc'):
+    if low in ('as', 'sia', 'llc', 'ltd', 'inc', 'ооо', 'зао', 'оао', 'пао'):
         return False
-    return any(w in low for w in bank_words)
+    return any(w in low for w in _BANK_WORDS)
 
 
-# --- Спец-парсеры для банков ---
+# --- Спец-парсеры для извлечения контрагента ---
 
 def _extract_revolut_name(desc: str,
                            account_name: str = '',
@@ -2047,7 +2006,6 @@ def _extract_regina_alfa_name(desc: str) -> str:
     s = desc.strip()
     m = re.match(r'^(CRD_[A-Z0-9]+)', s)
     if m:
-        mcc = re.search(r'MCC(\d{4})', s)
         place = re.search(r'место совершения операции:\s*(.+?)(?:MCC|$)', s)
         if place:
             place_s = place.group(1).strip()
@@ -2055,6 +2013,7 @@ def _extract_regina_alfa_name(desc: str) -> str:
             place_s = _clean_counterparty_name(place_s, keep_full=True)
             if place_s:
                 return place_s
+        mcc = re.search(r'MCC(\d{4})', s)
         if mcc:
             return f"MCC{mcc.group(1)}"
         return 'Card payment'
@@ -2126,23 +2085,11 @@ def extract_counterparty_smart(description: str,
                                 beneficiary: str = '',
                                 raw_cp: str = '',
                                 sender_name: str = '') -> Tuple[str, str]:
-    """
-    Возвращает (cp, desc).
-    Приоритет источников:
-      1) raw_cp (сырая колонка «Получатель / Плательщик» из Paysera/Industra)
-      2) beneficiary (Beneficiary name из Revolut)
-      3) sender_name (Sender name из Revolut)
-      4) payer (Payer из Revolut)
-      5) спец-парсер по имени счёта
-      6) шаблоны из description
-      7) эвристика
-    """
     desc = (description or '').strip()
     acc_low = (account_name or '').lower()
 
-    # --- 1) Прямые кандидаты (без агрессивной чистки) ---
-    for label, cand in [('raw_cp', raw_cp), ('beneficiary', beneficiary),
-                        ('sender_name', sender_name), ('payer', payer)]:
+    # 1) Прямые кандидаты
+    for cand in (raw_cp, beneficiary, sender_name, payer):
         if not cand:
             continue
         c = str(cand).strip()
@@ -2158,19 +2105,14 @@ def extract_counterparty_smart(description: str,
     if not desc:
         return ('', '')
 
-    # --- 2) Спец-парсеры ---
+    # 2) Спец-парсеры по банку
     cp = ''
-
     if 'revolut' in acc_low:
-        cp = _extract_revolut_name(desc, account_name, payer,
-                                    beneficiary, sender_name)
+        cp = _extract_revolut_name(desc, account_name, payer, beneficiary, sender_name)
     if not cp and 'paysera' in acc_low:
-        cp = _extract_paysera_name(desc, account_name, payer,
-                                    beneficiary, raw_cp)
-    if not cp and ('industra' in acc_low or 'plavas' in acc_low
-                   or 'kl59' in acc_low):
-        cp = _extract_industra_name(desc, account_name, payer,
-                                     beneficiary, raw_cp)
+        cp = _extract_paysera_name(desc, account_name, payer, beneficiary, raw_cp)
+    if not cp and ('industra' in acc_low or 'plavas' in acc_low or 'kl59' in acc_low):
+        cp = _extract_industra_name(desc, account_name, payer, beneficiary, raw_cp)
     if not cp and ('csob' in acc_low or 'jenhor' in acc_low
                    or 'jenisov' in acc_low or 'dzibik' in acc_low
                    or 'džibik' in acc_low or 'rr ' in acc_low
@@ -2199,11 +2141,11 @@ def extract_counterparty_smart(description: str,
     if not cp and 'wise' in acc_low:
         cp = _extract_wio_name(desc)
 
-    # --- 3) Шаблоны из описания ---
+    # 3) Шаблоны
     if not cp:
         cp = _extract_name_by_patterns(desc)
 
-    # --- 4) Эвристика ---
+    # 4) Эвристика
     if not cp:
         parts = re.split(r'[|•;]', desc)
         for p in parts:
@@ -2218,7 +2160,7 @@ def extract_counterparty_smart(description: str,
                 if cp:
                     break
 
-    # --- 5) Имя банка из названия счёта ---
+    # 5) Имя банка из названия счёта
     if not cp:
         m = re.search(
             r'\b(CSOB|UniCredit|Revolut|Tinkoff|Paysera|Wise|BluOr|Industra|'
@@ -2231,7 +2173,9 @@ def extract_counterparty_smart(description: str,
     cp = _to_scalar_str(cp)
     desc = _to_scalar_str(desc)
     return (cp, desc)
-    # ==================== ФАЙЛОВЫЕ УТИЛИТЫ ====================
+
+
+# ==================== ФАЙЛОВЫЕ УТИЛИТЫ ====================
 
 def read_xlsx(file_content: bytes, sheet_name=None, header=None):
     for engine in ['openpyxl', 'xlrd', None]:
@@ -3637,7 +3581,7 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return deduped
 
 
-# ==================== Kapital bank Saida AZN (XLSX) ====================
+# ==================== Kapital bank Saida AZN ====================
 
 def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
     result: List[Dict] = []
@@ -3775,8 +3719,6 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
 
     return result
 
-
-# ==================== Kapital bank Saida AZN (PDF) ====================
 
 def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result: List[Dict] = []
@@ -3962,8 +3904,6 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
     return deduped
 
 
-# ==================== Kapital bank Saida AZN (CSV) ====================
-
 def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
     content = read_text_with_encoding(file_content)
@@ -4051,6 +3991,8 @@ def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[
             'Описание': desc
         })
     return result
+
+
 # ==================== MASHREQ ====================
 
 def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
@@ -5396,7 +5338,7 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== Saida N26 (CSV) ====================
+# ==================== Saida N26 / Wise ====================
 
 def parse_saida_n26_csv(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -5438,8 +5380,6 @@ def parse_saida_n26_csv(file_content: bytes, account_name: str) -> List[Dict]:
 def parse_saida_wise(file_content, account_name):
     return parse_saida_n26_csv(file_content, account_name)
 
-
-# ==================== Saida Wise XLSX ====================
 
 def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
     result = []
@@ -6124,7 +6064,9 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
     return result
-  # ==================== МАРШРУТИЗАЦИЯ ПАРСЕРОВ ====================
+
+
+# ==================== МАРШРУТИЗАЦИЯ ПАРСЕРОВ ====================
 
 def get_parser_by_ext(account_name: str, ext: str):
     low = account_name.lower()
@@ -6707,6 +6649,8 @@ def build_combined_excel(df_display: pd.DataFrame,
     wb.save(output)
     output.seek(0)
     return output
+
+
 # ==================== ОБРАБОТКА ЗАГРУЖЕННЫХ ФАЙЛОВ ====================
 
 def _files_signature(uploaded_files) -> str:
@@ -6793,7 +6737,7 @@ def _process_uploaded_files(uploaded_files) -> Dict:
 
         except Exception as e:
             failed.append(f"{uf.name} (ошибка: {e})")
-            debug_info.append(f"❌ `{uf.name}` → исключение: {e}")
+            debug_info.append(f"❌ `{uf.name}` → исключение: {e}\n{traceback.format_exc()[:1000]}")
 
         progress.progress((i + 1) / max(1, len(uploaded_files)))
 
@@ -6845,7 +6789,7 @@ def _render_results(result: Dict):
         st.info("Нет данных.")
         return
 
-    # [FIX-RENDER-SCALAR-V5] Приводим все object-колонки к строкам, кроме 'Сумма'
+    # Приводим все object-колонки к строкам, кроме 'Сумма'
     for col in df_raw.columns:
         if col == 'Сумма':
             continue
@@ -6860,7 +6804,6 @@ def _render_results(result: Dict):
     except Exception:
         df_raw['Сумма_число'] = 0.0
 
-    # Переименование "Наименование счета" -> "Наименование банка"
     if 'Наименование счета' in df_raw.columns and 'Наименование банка' not in df_raw.columns:
         df_raw = df_raw.rename(columns={'Наименование счета': 'Наименование банка'})
 
@@ -6917,7 +6860,6 @@ def _render_results(result: Dict):
     with c3:
         st.metric("📉 Расходы", format_amount(expense))
 
-    # [DEEPSEEK-INTEGRATION] AI-обогащение
     st.markdown("---")
     st.markdown("### 🤖 AI-обогащение транзакций (DeepSeek AI)")
     st.caption(
@@ -7404,5 +7346,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()                        
-                           
+    main()
