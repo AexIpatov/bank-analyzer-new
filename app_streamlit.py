@@ -22,7 +22,7 @@ FIX-пакет v7 (полная версия):
   [NEW-AMOUNT-FORMAT]            — Суммы на экране: 1 234,56
   [NEW-EXCEL-NUMERIC]            — В Excel суммы — числа с форматом # ##0.00
   [NEW-SMART-COUNTERPARTY]       — Умное извлечение контрагента
-  [DEEPSEEK-INTEGRATION]         — AI-ассистент DeepSeek и AI-обогащение
+    [HF-INTEGRATION]               — AI-ассистент Hugging Face и AI-обогащение
 """
 
 import streamlit as st
@@ -757,47 +757,50 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 1.6rem 0; }
 st.markdown(_CSS.replace("__GORODETS_B64__", _GORODETS_SVG_B64), unsafe_allow_html=True)
 
 
-# ==================== [DEEPSEEK-INTEGRATION] ====================
+# ==================== [HF-INTEGRATION] ====================
 
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_DEFAULT_MODEL = "deepseek-chat"
-DEEPSEEK_REASONER_MODEL = "deepseek-reasoner"
+HF_BASE_URL = "https://router.huggingface.co/v1"
+HF_DEFAULT_MODEL = "deepseek-ai/DeepSeek-V3-0324"
+HF_REASONER_MODEL = "deepseek-ai/DeepSeek-R1"
 
 
-def _get_deepseek_api_key() -> str:
-    key = ""
+def _get_hf_token() -> str:
+    token = ""
     try:
-        if "DEEPSEEK_API_KEY" in st.secrets:
-            key = str(st.secrets["DEEPSEEK_API_KEY"]).strip()
+        if "HF_TOKEN" in st.secrets:
+            token = str(st.secrets["HF_TOKEN"]).strip()
     except Exception:
         pass
-    if not key:
-        key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-    if not key:
-        key = str(st.session_state.get("deepseek_api_key", "")).strip()
-    return key
+    if not token:
+        token = os.environ.get("HF_TOKEN", "").strip()
+    if not token:
+        token = str(st.session_state.get("hf_token", "")).strip()
+    # Защита от плейсхолдеров и не-ASCII
+    if token and (not token.isascii() or not token.startswith("hf_")):
+        return ""
+    return token
 
 
-def _get_deepseek_client() -> Optional["OpenAI"]:
+def _get_hf_client() -> Optional["OpenAI"]:
     if not _OPENAI_SDK_AVAILABLE:
         return None
+    token = _get_hf_token()
+    if not token:
+        return None
     try:
-        # Используем публичный бесплатный прокси DanyAPI
-        return OpenAI(
-            api_key="dummy-key",  # Ключ не нужен, но библиотека требует его указать
-            base_url="https://danyapi.cloudpub.ru/v1"
-        )
+        return OpenAI(base_url=HF_BASE_URL, api_key=token)
     except Exception:
         return None
 
 
-def call_deepseek(messages, model=DEEPSEEK_DEFAULT_MODEL, temperature=0.3,
-                  max_tokens=2048, json_mode=False):
-    client = _get_deepseek_client()
+def call_ai(messages, model=HF_DEFAULT_MODEL, temperature=0.3,
+            max_tokens=2048, json_mode=False):
+    client = _get_hf_client()
     if client is None:
         if not _OPENAI_SDK_AVAILABLE:
             return "", "Библиотека openai не установлена. Выполните: pip install openai"
-        return "", "API-ключ DeepSeek не задан."
+        return "", ("HF-токен не задан или неверен. "
+                    "Проверьте HF_TOKEN в .streamlit/secrets.toml.")
     try:
         kwargs = {"model": model, "messages": messages,
                   "temperature": temperature, "max_tokens": max_tokens, "stream": False}
@@ -806,13 +809,13 @@ def call_deepseek(messages, model=DEEPSEEK_DEFAULT_MODEL, temperature=0.3,
         resp = client.chat.completions.create(**kwargs)
         return (resp.choices[0].message.content or "").strip(), None
     except Exception as e:
-        return "", f"Ошибка DeepSeek API: {e}"
+        return "", f"Ошибка Hugging Face API: {e}"
 
 
-def call_deepseek_json(system_prompt, user_prompt, model=DEEPSEEK_DEFAULT_MODEL):
+def call_ai_json(system_prompt, user_prompt, model=HF_DEFAULT_MODEL):
     messages = [{"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}]
-    raw, err = call_deepseek(messages, model=model, temperature=0.1, json_mode=True)
+    raw, err = call_ai(messages, model=model, temperature=0.1, json_mode=True)
     if err:
         return None, err
     try:
@@ -839,9 +842,9 @@ def ai_enrich_transactions(transactions, max_items=200, progress_callback=None):
     errors = []
     if not transactions:
         return transactions, ["Нет транзакций для обогащения"]
-    client = _get_deepseek_client()
+       client = _get_hf_client()
     if client is None:
-        return transactions, ["DeepSeek недоступен"]
+        return transactions, ["Hugging Face недоступен (проверьте HF_TOKEN)"]
     subset = transactions[:max_items]
     enriched = [dict(t) for t in transactions]
     for i, tx in enumerate(subset):
@@ -849,7 +852,7 @@ def ai_enrich_transactions(transactions, max_items=200, progress_callback=None):
         acc = str(tx.get("Наименование счета", tx.get("Наименование банка", "")))
         amount = tx.get("Сумма", 0)
         user_prompt = f"Счёт: {acc}\nСумма: {amount}\nОписание: {desc}\n"
-        data, err = call_deepseek_json(_AI_TRANSACTION_SYSTEM, user_prompt)
+        data, err = call_ai_json(_AI_TRANSACTION_SYSTEM, user_prompt)
         if err:
             errors.append(f"строка {i+1}: {err}")
         else:
@@ -887,7 +890,7 @@ st.markdown("""
 <span class="chip">📝 DOCX</span>
 <span class="chip">📕 PDF</span>
 <span class="chip">🌐 Перевод в скобках</span>
-<span class="chip">🤖 DeepSeek AI</span>
+<span class="chip">🤖 Hugging Face AI</span>
 </div>
 </div>
 <div class="hero-illustration">
@@ -6934,9 +6937,9 @@ def _render_results(result: Dict):
 
     # [DEEPSEEK-INTEGRATION] AI-обогащение
     st.markdown("---")
-    st.markdown("### 🤖 AI-обогащение транзакций (DeepSeek)")
+       st.markdown("### 🤖 AI-обогащение транзакций (Hugging Face)")
     st.caption(
-        "DeepSeek переведёт описания, определит категорию и вытащит чистое имя "
+        "AI переведёт описания, определит категорию и вытащит чистое имя "
         "контрагента. Обрабатывается не более 200 строк за раз."
     )
 
@@ -6950,7 +6953,7 @@ def _render_results(result: Dict):
         )
 
     if ai_run:
-        with st.spinner("DeepSeek обрабатывает транзакции..."):
+                with st.spinner("AI обрабатывает транзакции..."):
             tx_list = df_raw.to_dict('records')
             progress_bar = st.progress(0)
 
@@ -7107,13 +7110,13 @@ def _render_results(result: Dict):
 # ==================== AI-АССИСТЕНТ ====================
 
 def _render_ai_assistant_tab():
-    st.markdown("### 🤖 AI-ассистент (DeepSeek)")
+    st.markdown("### 🤖 AI-ассистент (Hugging Face)")
     st.caption(
         "Задавайте вопросы по коду, данным и обработке выписок. "
         "Ассистент видит только то, что вы ему напишете — файлы не отправляются автоматически."
     )
 
-    client = _get_deepseek_client()
+    client = _get_hf_client()
     if client is None:
         if not _OPENAI_SDK_AVAILABLE:
             st.markdown(
@@ -7123,42 +7126,45 @@ def _render_ai_assistant_tab():
             )
         else:
             st.markdown(
-                '<span class="ai-status-warn">⚠️ API-ключ DeepSeek не задан. '
-                'Введите его ниже или в <code>.streamlit/secrets.toml</code></span>',
+                '<span class="ai-status-warn">⚠️ HF-токен не задан или неверен. '
+                'Проверьте <code>HF_TOKEN</code> в <code>.streamlit/secrets.toml</code></span>',
                 unsafe_allow_html=True,
             )
     else:
         st.markdown(
-            '<span class="ai-status-ok">✅ DeepSeek подключён</span>',
+            '<span class="ai-status-ok">✅ Hugging Face подключён</span>',
             unsafe_allow_html=True,
         )
 
-    with st.expander("🔑 Настройка API-ключа", expanded=(client is None)):
+    with st.expander("🔑 Настройка HF-токена", expanded=(client is None)):
         st.markdown(
-            "Получите ключ на [platform.deepseek.com](https://platform.deepseek.com). "
-            "Ключ можно хранить в `.streamlit/secrets.toml`:\n\n"
-            "```toml\nDEEPSEEK_API_KEY = \"sk-...\"\n```\n\n"
-            "Или ввести здесь — он сохранится только в текущей сессии."
+            "Получите токен на [huggingface.co/settings/tokens]"
+            "(https://huggingface.co/settings/tokens) с правом "
+            "**Make calls to Inference Providers**. "
+            "Токен хранится в `.streamlit/secrets.toml`:\n\n"
+            "```toml\nHF_TOKEN = \"hf_...\"\n```\n\n"
+            "Или введите здесь — он сохранится только в текущей сессии."
         )
         key_input = st.text_input(
-            "API-ключ DeepSeek",
-            value=st.session_state.get('deepseek_api_key', ''),
+            "HF-токен",
+            value=st.session_state.get('hf_token', ''),
             type='password',
-            key='deepseek_key_input',
+            key='hf_token_input',
         )
-        if st.button("💾 Сохранить ключ в сессии", key='save_deepseek_key'):
-            st.session_state['deepseek_api_key'] = key_input.strip()
-            st.success("Ключ сохранён в сессии.")
+        if st.button("💾 Сохранить токен в сессии", key='save_hf_token'):
+            st.session_state['hf_token'] = key_input.strip()
+            st.success("Токен сохранён в сессии.")
             st.rerun()
 
     st.markdown("---")
 
     model_choice = st.selectbox(
         "Модель",
-        options=[DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_REASONER_MODEL],
+        options=[HF_DEFAULT_MODEL, HF_REASONER_MODEL],
         index=0,
-        key='deepseek_model_choice',
-        help="deepseek-chat — быстрая; deepseek-reasoner — для отладки кода.",
+        key='hf_model_choice',
+        help="DeepSeek-V3 — быстрая; DeepSeek-R1 — для отладки кода "
+             "(если модель доступна на бесплатном тарифе HF).",
     )
 
     st.markdown("**Быстрые действия:**")
@@ -7222,18 +7228,18 @@ def _render_ai_assistant_tab():
                 unsafe_allow_html=True,
             )
         else:
-            st.markdown(
-                f'<div class="ai-chat-bubble-assistant"><b>DeepSeek:</b><br>'
+                st.markdown(
+                f'<div class="ai-chat-bubble-assistant"><b>AI:</b><br>'
                 f'{msg["content"]}</div>',
                 unsafe_allow_html=True,
             )
 
     if quick_prompt:
         st.session_state['ai_chat_history'].append({'role': 'user', 'content': quick_prompt})
-        with st.spinner("DeepSeek думает..."):
+        with st.spinner("AI думает..."):
             messages = [{"role": "system", "content": system_prompt}]
             messages.extend(st.session_state['ai_chat_history'])
-            answer, err = call_deepseek(messages, model=model_choice)
+            answer, err = call_ai(messages, model=model_choice)
         if err:
             st.session_state['ai_chat_history'].append({'role': 'assistant', 'content': f"❌ {err}"})
         else:
@@ -7243,10 +7249,10 @@ def _render_ai_assistant_tab():
     user_input = st.chat_input("Спросите DeepSeek о коде, данных или обработке...")
     if user_input:
         st.session_state['ai_chat_history'].append({'role': 'user', 'content': user_input})
-        with st.spinner("DeepSeek думает..."):
+          with st.spinner("AI думает..."):
             messages = [{"role": "system", "content": system_prompt}]
             messages.extend(st.session_state['ai_chat_history'])
-            answer, err = call_deepseek(messages, model=model_choice)
+            answer, err = call_ai(messages, model=model_choice)
         if err:
             st.session_state['ai_chat_history'].append({'role': 'assistant', 'content': f"❌ {err}"})
         else:
@@ -7267,11 +7273,11 @@ def _render_ai_assistant_tab():
                         {"role": "system", "content": _AI_DEBUG_SYSTEM},
                         {"role": "user", "content": code_snippet},
                     ]
-                    answer, err = call_deepseek(messages, model=model_choice, max_tokens=3000)
+                              answer, err = call_ai(messages, model=model_choice, max_tokens=3000)
                 if err:
                     st.error(err)
                 else:
-                    st.markdown("**Ответ DeepSeek:**")
+                    st.markdown("**Ответ AI:**")
                     st.markdown(answer)
                     st.session_state['ai_chat_history'].append(
                         {'role': 'user', 'content': f"[Фрагмент кода]\n{code_snippet[:500]}"}
@@ -7293,18 +7299,18 @@ def main():
     if 'ai_chat_history' not in st.session_state:
         st.session_state['ai_chat_history'] = []
 
-    with st.sidebar:
+        with st.sidebar:
         st.markdown("### ⚙️ Настройки")
-        st.markdown("**DeepSeek AI**")
-        client = _get_deepseek_client()
+        st.markdown("**AI (Hugging Face)**")
+        client = _get_hf_client()
         if client is not None:
             st.success("✅ Подключён")
         else:
             st.warning("⚠️ Не подключён")
-            st.caption("Введите ключ во вкладке «AI-ассистент».")
+            st.caption("Проверьте HF_TOKEN во вкладке «AI-ассистент».")
         st.markdown("---")
         st.caption(
-            "Программа работает локально. Файлы выписок не отправляются в DeepSeek — "
+            "Программа работает локально. Файлы выписок не отправляются в HF — "
             "только те фрагменты, которые вы сами вводите в чат."
         )
 
@@ -7369,7 +7375,7 @@ def main():
                 <path d="M12 2a10 10 0 100 20 10 10 0 000-20zM2 12h20M12 2a15 15 0 010 20M12 2a15 15 0 000 20" stroke="#1B5E20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
                 </div>
-                <div class="info-card-text"><h4>DeepSeek AI</h4><p>Перевод, категории, отладка кода</p></div>
+                <div class="info-card-text"><h4>Hugging Face AI</h4><p>Перевод, категории, отладка кода</p></div>
                 </div>
                 """, unsafe_allow_html=True)
             st.markdown("""
