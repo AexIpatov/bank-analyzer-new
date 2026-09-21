@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 app_streamlit.py — Аналитик банковских выписок.
-Полностью переписанная с нуля версия:
-  - координатная реконструкция PDF (extract_words)
-  - правильный разбор Wise, N26, Paysera, Revolut
-  - фильтрация служебных строк
-  - красивая "Городецкая роспись" и полный CSS
+Полностью переписанная с нуля версия (v2):
+  - координатная реконструкция PDF + устойчивость к склейке таблиц
+  - корректный разбор Paysera (PDF и DOCX-табличная склейка)
+  - корректный разбор N26 (PDF с CID-мусором и DOCX с OCR-ошибками)
+  - жёсткая нормализация сумм вида "16,e0", "-16,e0€"
+  - фильтрация служебных строк и дублирующихся ячеек
   - DeepSeek AI (перевод, категории, отладка)
 """
 
@@ -182,8 +183,6 @@ _GORODETS_SVG_B64 = base64.b64encode(_GORODETS_SVG.encode('utf-8')).decode('asci
 
 
 # ==================== CSS ====================
-# ВАЖНО: НЕ трогаем нативные селекторы кнопок file_uploader/download,
-# только .stButton > button и общие блоки.
 
 _CSS = """
 <style>
@@ -229,7 +228,6 @@ html, body {
 footer {visibility: hidden;}
 #MainMenu {visibility: hidden;}
 
-/* ===== Hero ===== */
 .hero {
     background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 50%, #4CAF50 100%);
     padding: 2.2rem 2rem;
@@ -264,7 +262,6 @@ footer {visibility: hidden;}
 }
 .hero-illustration { position: relative; z-index: 2; }
 
-/* ===== Кнопки: только .stButton ===== */
 .stButton > button {
     background: linear-gradient(180deg, #3E8E41 0%, #1B5E20 45%, #0D3A12 100%) !important;
     color: #FFFFFF !important;
@@ -301,7 +298,6 @@ footer {visibility: hidden;}
     filter: brightness(0.95) !important;
 }
 
-/* ===== File uploader ===== */
 .stFileUploader {
     background: #FFFFFF;
     border-radius: 16px;
@@ -330,7 +326,6 @@ footer {visibility: hidden;}
     display: block;
 }
 
-/* ===== Метрики ===== */
 .stMetric {
     background: #FFFFFF;
     border-radius: 16px;
@@ -350,19 +345,15 @@ footer {visibility: hidden;}
 .stMetric label { color: var(--ink-soft) !important; font-size: 0.85rem !important; text-transform: uppercase; }
 .stMetric [data-testid="stMetricValue"] { color: var(--ink) !important; font-weight: 700 !important; font-size: 1.5rem !important; }
 
-/* ===== DataFrame ===== */
 .stDataFrame { border-radius: 16px; overflow: hidden; box-shadow: 0 8px 28px rgba(27, 94, 32, 0.10); background: #FFFFFF; }
 
-/* ===== Alerts ===== */
 .stAlert { border-radius: 12px; border: none; }
 div[data-baseweb="notification"][kind="positive"] { background: #E8F5E9; color: var(--ink); }
 div[data-baseweb="notification"][kind="info"] { background: #FFF6E8; color: var(--ink); }
 div[data-baseweb="notification"][kind="warning"] { background: #FBF3E0; color: #7A5B10; }
 
-/* ===== Progress ===== */
 .stProgress > div > div > div { background: linear-gradient(90deg, #1B5E20 0%, #4CAF50 100%); border-radius: 8px; }
 
-/* ===== Заголовки ===== */
 h3 {
     color: var(--ink);
     font-weight: 700;
@@ -373,14 +364,12 @@ h3 {
     font-size: 1.15rem;
 }
 
-/* ===== Скроллбар ===== */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: #FFF6E8; }
 ::-webkit-scrollbar-thumb { background: #F48FB1; border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: #E91E63; }
 hr { border: none; border-top: 1px solid #E1EEDD; margin: 1.6rem 0; }
 
-/* ===== Инфо-карточки ===== */
 .info-card {
     background: #FFFFFF;
     border-radius: 14px;
@@ -401,7 +390,6 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 1.6rem 0; }
 .info-card-text p { color: var(--ink-muted); margin: 0; font-size: 0.82rem; }
 .footer-note { text-align: center; color: var(--ink-muted); font-size: 0.8rem; padding: 1.2rem 0 0.4rem 0; }
 
-/* ===== Сводка ===== */
 .summary-table {
     border-radius: 14px;
     overflow: hidden;
@@ -434,7 +422,6 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 1.6rem 0; }
 .summary-table tbody tr:hover td { background: #FCE4EC; }
 .summary-table tbody tr:last-child td { border-bottom: none; }
 
-/* ===== AI-чат ===== */
 .ai-chat-bubble-user {
     background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%);
     border-left: 4px solid #2E7D32;
@@ -474,7 +461,7 @@ hr { border: none; border-top: 1px solid #E1EEDD; margin: 1.6rem 0; }
 st.markdown(_CSS.replace("__GORODETS_B64__", _GORODETS_SVG_B64), unsafe_allow_html=True)
 
 
-# ==================== ЭТАЛОННЫЙ СПИСОК СЧЕТОВ (200+ алиасов) ====================
+# ==================== ЭТАЛОННЫЙ СПИСОК СЧЕТОВ ====================
 
 _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
     ("an14estateeurindustra", "AN14_Estate_EUR_Industra"),
@@ -888,10 +875,26 @@ _MONTHS_CS = {
     'pro': 12, 'prosince': 12,
 }
 
+_MONTHS_ES = {
+    'ene': 1, 'enero': 1,
+    'feb': 2, 'febrero': 2,
+    'mar': 3, 'marzo': 3,
+    'abr': 4, 'abril': 4,
+    'may': 5, 'mayo': 5,
+    'jun': 6, 'junio': 6,
+    'jul': 7, 'julio': 7,
+    'ago': 8, 'agosto': 8,
+    'sep': 9, 'sept': 9, 'septiembre': 9,
+    'oct': 10, 'octubre': 10,
+    'nov': 11, 'noviembre': 11,
+    'dic': 12, 'diciembre': 12,
+}
+
 _ALL_MONTHS: Dict[str, int] = {}
 _ALL_MONTHS.update(_MONTHS_RU)
 _ALL_MONTHS.update(_MONTHS_EN)
 _ALL_MONTHS.update(_MONTHS_CS)
+_ALL_MONTHS.update(_MONTHS_ES)
 
 
 def parse_date(date_str) -> str:
@@ -971,6 +974,81 @@ def parse_date(date_str) -> str:
     return s
 
 
+# ---------- Нормализация OCR-ошибок суммы ----------
+
+_OCR_DIGIT_MAP = {
+    'o': '0', 'O': '0', 'О': '0',
+    'l': '1', 'I': '1', '|': '1',
+    'e': '9', 'g': '9',
+    'S': '5', 's': '5',
+    'B': '8',
+    'Z': '2', 'z': '2',
+}
+
+
+def _normalize_ocr_amount_str(s: str) -> str:
+    """
+    Исправляет OCR-ошибки в строке суммы:
+      - заменяет 'e' на '9', 'o' на '0' и т.п. внутри числа
+      - убирает пробелы внутри тысяч
+    Работает только с фрагментом, содержащим цифры и запятую/точку.
+    """
+    if not s:
+        return s
+    # Сначала нормализуем разделители
+    out_chars: List[str] = []
+    for ch in s:
+        if ch in _OCR_DIGIT_MAP and any(c.isdigit() for c in s):
+            out_chars.append(_OCR_DIGIT_MAP[ch])
+        else:
+            out_chars.append(ch)
+    return ''.join(out_chars)
+
+
+def _find_ocr_amount(text: str) -> Optional[float]:
+    """
+    Ищет сумму с OCR-ошибками вроде "-16,e0€" или "16,e0".
+    Возвращает float или None.
+    """
+    if not text:
+        return None
+    # Точный паттерн с € после числа
+    pat = re.compile(
+        r'(-?)\s*'
+        r'(\d{1,3}(?:[\s\u00a0]\d{3})*)'          # целая часть (1-3 цифры, возможно с пробелами)
+        r'([,.]\s*)'                              # разделитель
+        r'([0-9OoОoEeSsBbZz]{1,3})'               # дробная часть (может содержать OCR-мусор)
+        r'\s*(€|EUR|eur)'
+    )
+    m = pat.search(text)
+    if not m:
+        return None
+    sign = m.group(1)
+    int_part = m.group(2).replace(' ', '').replace('\u00a0', '')
+    sep = m.group(3)
+    frac_raw = m.group(4)
+    frac = _normalize_ocr_amount_str(frac_raw)
+    # Убираем всё нецифровое
+    frac = re.sub(r'\D', '', frac)
+    if not frac:
+        return None
+    # Нормализуем длину дробной части: "90" → 90, "9" → 90, "900" → 90
+    if len(frac) == 1:
+        frac = frac + '0'
+    elif len(frac) > 2:
+        frac = frac[:2]
+    # Проверим целую часть
+    if not int_part:
+        int_part = '0'
+    try:
+        value = float(f"{int_part}.{frac}")
+    except Exception:
+        return None
+    if sign == '-':
+        value = -value
+    return value
+
+
 def parse_amount(amount_str) -> float:
     """Парсит сумму: возвращает положительное число, если не было '-'."""
     if amount_str is None:
@@ -983,6 +1061,11 @@ def parse_amount(amount_str) -> float:
     s = str(amount_str).strip()
     if s.lower() in ('', 'nan', '-', 'none', 'null', 'n/a'):
         return 0.0
+
+    # Сначала пробуем восстановить OCR-ошибки (например, "16,e0")
+    ocr_val = _find_ocr_amount(s)
+    if ocr_val is not None:
+        return ocr_val
 
     is_negative = False
     if s.startswith('-'):
@@ -1057,6 +1140,10 @@ def to_float_amount(v) -> float:
     s = str(v).strip()
     if not s or s.lower() in ('nan', 'none', 'null'):
         return 0.0
+    # Сначала OCR-нормализация
+    ocr_val = _find_ocr_amount(s)
+    if ocr_val is not None:
+        return ocr_val
     s = s.replace('\xa0', '').replace('\u202f', '').replace(' ', '')
     if ',' in s and '.' in s:
         if s.rfind('.') < s.rfind(','):
@@ -1340,6 +1427,7 @@ _SERVICE_LINE_MARKERS = [
     'payment id', 'signed:', 'signed by:',
     'тип операции', 'выписка по', 'eur на',
     'создано:', 'владелец счета', 'swift/bic',
+    'recipient / payer (code)',
 ]
 
 
@@ -1372,9 +1460,8 @@ def _is_service_word_line(line: str) -> bool:
         if cnt >= 2 and cnt >= len(words) - 1:
             return True
     return False# ==================== PDF-УТИЛИТЫ ====================
-# Ключевое отличие от старого файла:
-#   pdf_all_text умеет ОБХОДИТЬ CID-мусор через extract_words + координаты.
-#   Именно это чинит БАГ 4 (Saida_N26) и стабилизирует БАГ 1 (Saida_Wise).
+# Ключевое: pdf_all_text умеет обходить CID-мусор через extract_words,
+# а _pdf_lines_with_coords даёт устойчивую реконструкцию строк.
 
 _CID_PATTERN = re.compile(r'\(cid:\d+\)')
 
@@ -1386,7 +1473,6 @@ def _text_has_cid_junk(text: str) -> bool:
     cid_count = len(_CID_PATTERN.findall(text))
     if cid_count == 0:
         return False
-    # Значимо: >5 вхождений или >0.5% символов
     return cid_count > 5 or cid_count > len(text) * 0.005
 
 
@@ -1477,7 +1563,6 @@ def _pdf_lines_with_coords(file_content: bytes) -> List[str]:
     """
     Полная координатная реконструкция строк:
     каждая физическая строка = слова с одинаковым top (±3pt), отсортированные по x0.
-    Это ФИКС БАГА 1 (Wise) и БАГА 4 (N26).
     """
     words = _pdf_words_with_coords(file_content)
     if not words:
@@ -1512,13 +1597,10 @@ def pdf_all_text(file_content: bytes) -> str:
 
     # --- 2. Если нет CID-мусора, primary — приоритетный источник ---
     if primary.strip() and not _text_has_cid_junk(primary):
-        # Дополняем координатной реконструкцией — она не ломает, но добавляет
-        # пропущенные слова на сложных страницах
         coord_lines = _pdf_lines_with_coords(file_content)
         if coord_lines:
             coord_text = '\n'.join(coord_lines).replace('\ufeff', '').replace('\xa0', ' ')
-            # Если координатный текст содержит больше операций (грубая проверка
-            # по количеству дат), отдадим его
+
             def _count_dates(s: str) -> int:
                 return len(re.findall(
                     r'\b\d{1,2}[\.\-/]\d{1,2}[\.\-/]\d{2,4}\b', s or ''
@@ -1615,12 +1697,14 @@ def pdf_all_words(file_content: bytes) -> List[Dict]:
 def _split_glued_line(line: str) -> List[str]:
     """
     Иногда PDF-парсер клеит соседние колонки без пробела.
-    Разбиваем по границе цифра→буква и буква→цифра (с сохранением обеих сторон).
-    Возвращает список токенов, если удалось выделить >=2 осмысленных, иначе [line].
+    Разбиваем по границе цифра→буква и буква→цифра.
     """
     if not line:
         return [line]
-    tokens = re.split(r'(?<=[A-Za-zА-Яа-яÀ-ÿ]) (?=\d)|(?<=\d) (?=[A-Za-zА-Яа-яÀ-ÿ])', line)
+    tokens = re.split(
+        r'(?<=[A-Za-zА-Яа-яÀ-ÿ]) (?=\d)|(?<=\d) (?=[A-Za-zА-Яа-яÀ-ÿ])',
+        line
+    )
     tokens = [t.strip() for t in tokens if t and t.strip()]
     if len(tokens) >= 2:
         return tokens
@@ -2027,6 +2111,17 @@ _PHRASE_DICT: Dict[str, str] = {
     "pajamos": "доходы",
     "išlaidos": "расходы",
 
+    # --- ES ---
+    "saldo previo": "предыдущий баланс",
+    "transacciones salientes": "исходящие операции",
+    "transacciones entrantes": "входящие операции",
+    "tu nuevo saldo": "новый баланс",
+    "fecha de reserva": "дата операции",
+    "fecha de valor": "дата валютирования",
+    "cantidad": "сумма",
+    "descripción": "описание",
+    "emitido en": "выпущено",
+
     # --- прочее ---
     "плата за обслуживание счета": "плата за обслуживание счёта",
     "остаток в начале": "остаток на начало",
@@ -2300,7 +2395,6 @@ def _extract_revolut_name(desc: str,
                            payer: str = '',
                            beneficiary: str = '',
                            sender_name: str = '') -> str:
-    """Revolut. ФИКС БАГА 6: склеиваем описание до €-суммы."""
     for cand in (beneficiary, sender_name, payer):
         c = str(cand).strip() if cand else ''
         if c and c.lower() not in ('nan', 'none', 'n/a', '-'):
@@ -2331,7 +2425,7 @@ def _extract_paysera_name(desc: str,
                            payer: str = '',
                            beneficiary: str = '',
                            raw_cp: str = '') -> str:
-    """Paysera. ФИКС БАГА 3: чистим контрагента от даты-времени/ID."""
+    """Paysera: чистим контрагента от даты-времени, ID, IBAN, EVP-кодов."""
     if raw_cp:
         c = str(raw_cp).strip()
         if c and c.lower() not in ('nan', 'none', 'n/a', '-', ''):
@@ -2422,7 +2516,6 @@ def _extract_csob_name(desc: str) -> str:
 
 
 def _extract_unicredit_name(desc: str) -> str:
-    """UniCredit Bank: ÚROK, KREDITNÍ ÚROK, bonusový úrok и т.п."""
     if not desc:
         return ''
     low = desc.lower()
@@ -2489,7 +2582,6 @@ def _extract_tinkoff_name(desc: str) -> str:
 
 
 def _extract_wio_name(desc: str) -> str:
-    """WIO Business Bank. Используется также как fallback для Wise."""
     if not desc:
         return ''
     s = desc.strip()
@@ -2626,7 +2718,6 @@ def _extract_kapital_name(desc: str) -> str:
 
 
 def _extract_csas_name(desc: str, account_name: str = '') -> str:
-    """Česká spořitelna."""
     if not desc:
         return ''
     s = str(desc)
@@ -2700,7 +2791,6 @@ def extract_counterparty_smart(description: str,
     """
     Главный диспетчер извлечения контрагента.
     Возвращает (имя контрагента, описание).
-    Все 14 _extract_*_name реально используются.
     """
     desc = (description or '').strip()
     acc_low = (account_name or '').lower()
@@ -2738,7 +2828,6 @@ def extract_counterparty_smart(description: str,
     if not cp and ('industra' in acc_low or 'plavas' in acc_low or 'kl59' in acc_low):
         cp = _extract_industra_name(desc, account_name, payer, beneficiary, raw_cp)
 
-    # CSAS раньше CSOB
     if not cp and is_csas_acc:
         cp = _extract_csas_name(desc, account_name)
 
@@ -2801,23 +2890,19 @@ def extract_counterparty_smart(description: str,
 
     cp = _to_scalar_str(cp)
     desc = _to_scalar_str(desc)
-    return (cp, desc)# ==================== WISE PDF (ФИКС БАГА 1, БАГА 5) ====================
+    return (cp, desc)# ==================== WISE PDF ====================
 
 def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Парсер PDF Wise (EUR-баланс).
-    Ключевые фиксы:
-      БАГ 1: используем координатную реконструкцию и надёжно ловим
-             2 суммы в строке (операция + баланс).
-      БАГ 5: жёстко фильтруем "EUR на 30 июня 2026 г." и строки без суммы.
+    Использует координатную реконструкцию, надёжно ловит
+    две суммы в конце строки: операция + баланс.
     """
     result: List[Dict] = []
 
-    # Координатная реконструкция предпочтительнее
     coord_lines = _pdf_lines_with_coords(file_content)
     full_text_normal = pdf_all_text(file_content)
 
-    # Собираем кандидатов-строк: сначала координатные, если есть
     candidate_sources: List[str] = []
     if coord_lines:
         candidate_sources.append('\n'.join(coord_lines))
@@ -2845,8 +2930,6 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     two_amounts_re = re.compile(
         r'^(.*?)\s+(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s+(\d[\d\s\u00a0]*[.,]\d{2})\s*$'
     )
-
-    debug_rows: List[Tuple[str, float, str]] = []
 
     for src_text in candidate_sources:
         if not src_text:
@@ -2876,7 +2959,6 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
             low = line_s.lower()
 
-            # Жёсткий фильтр служебных строк (ФИКС БАГА 5)
             if any(w in low for w in [
                 'описание входящие исходящие сумма',
                 'eur на', 'создано:', 'владелец счета',
@@ -2889,7 +2971,6 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if re.fullmatch(r'описание\s+входящие\s+исходящие\s+сумма', low):
                 continue
             if re.fullmatch(r'\d[\d\s\u00a0]*[.,]\d{2}\s*eur\s*', low):
-                # "1 357,37 EUR" — итоговый баланс, не операция
                 continue
             if _is_service_line(line_s):
                 continue
@@ -2929,7 +3010,6 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 if not desc_clean:
                     desc_clean = 'Wise'
 
-                # Знак
                 low_desc = desc_clean.lower()
                 if amt > 0 and any(w in low_desc for w in [
                     'транзакция по карте', 'списана', 'отправлено',
@@ -2953,14 +3033,12 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     'Наименование счета': account_name,
                     'Описание': desc_clean
                 })
-                debug_rows.append((op_date, amt, desc_clean))
                 pending_desc_parts = []
                 continue
 
             if dm:
                 continue
 
-            # Строка без двух сумм — копим как продолжение описания
             cleaned_line = _clean_desc_text(line_s)
             if cleaned_line and len(cleaned_line) > 3:
                 if re.search(r'Карта,\s*заканчивающаяся\s+на\s+\d+', cleaned_line):
@@ -2972,11 +3050,9 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                         continue
                 pending_desc_parts.append(cleaned_line)
 
-        # Выбираем источник с наибольшим числом найденных операций
         if len(local_result) > len(result):
             result = local_result
 
-    # Дедуп
     seen = set()
     deduped: List[Dict] = []
     for r in result:
@@ -2989,17 +3065,16 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return deduped
 
 
-# ==================== N26 PDF (ФИКС БАГА 4) ====================
+# ==================== N26 PDF (устойчив к CID и -16,e0€) ====================
 
 def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Парсер PDF N26 (испанский формат).
-    ФИКС БАГА 4: при CID-мусоре обязательно используем extract_words.
-    Формат: N26 N26 Metal Membership Fecha de valor 27.06.2026 27.06.2026 -16,90€
+    Устойчив к CID-мусору и к OCR-ошибкам вида "-16,e0€".
+    Формат строки: "N26 N26 Metal Membership Fecha de valor 27.06.2026 27.06.2026 -16,90€"
     """
     result: List[Dict] = []
 
-    # Используем координатную реконструкцию как основной источник для CID-PDF
     coord_lines = _pdf_lines_with_coords(file_content)
     normal_text = pdf_all_text(file_content)
 
@@ -3014,31 +3089,33 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
     best: List[Dict] = []
 
-    patterns = [
-        # 1) N26 ... Fecha de valor DD.MM.YYYY DD.MM.YYYY -16,90€
-        re.compile(
-            r'^(.*?)\s+Fecha\s+de\s+valor\s+(\d{2}\.\d{2}\.\d{4})\s+'
-            r'(\d{2}\.\d{2}\.\d{4})\s+(-?[\d.,]+)\s*€',
-            re.IGNORECASE
-        ),
-        # 2) N26 ... DD.MM.YYYY DD.MM.YYYY -16,90€
-        re.compile(
-            r'^(.*?)\s+(\d{2}\.\d{2}\.\d{4})\s+(\d{2}\.\d{2}\.\d{4})\s+'
-            r'(-?[\d.,]+)\s*€'
-        ),
-        # 3) N26 ... DD.MM.YYYY -16,90€
-        re.compile(
-            r'^(.*?)\s+(\d{2}\.\d{2}\.\d{4})\s+(-?[\d.,]+)\s*€'
-        ),
-    ]
+    # Паттерн: "… Fecha de valor DD.MM.YYYY [DD.MM.YYYY] <amount> €"
+    # amount может содержать OCR-ошибки: -16,e0 / -16,90 / 16,90
+    fecha_pattern = re.compile(
+        r'^(.*?)'
+        r'\s+Fecha\s+de\s+valor\s+(\d{2}\.\d{2}\.\d{4})'
+        r'(?:\s+(\d{2}\.\d{2}\.\d{4}))?'
+        r'\s+(-?[\dOoОoEeSsBbZz|][\dOoОoEeSsBbZz|.,\s\u00a0]*?)'
+        r'\s*€',
+        re.IGNORECASE
+    )
+
+    # Паттерн без Fecha: "… DD.MM.YYYY <amount> €"
+    no_fecha_pattern = re.compile(
+        r'^(.*?)'
+        r'\s+(\d{2}\.\d{2}\.\d{4})'
+        r'(?:\s+(\d{2}\.\d{2}\.\d{4}))?'
+        r'\s+(-?[\dOoОoEeSsBbZz|][\dOoОoEeSsBbZz|.,\s\u00a0]*?)'
+        r'\s*€'
+    )
 
     skip_markers = [
         'saldo previo', 'tu nuevo saldo', 'nuevo saldo',
         'transacciones salientes', 'transacciones entrantes',
         'descripción', 'fecha de reserva', 'cantidad',
         'emitido en', 'iban:', 'bic:', 'saida mammadbayli',
-        'malaga', 'benahavis', 'hasta',
-        'nº 06/2026', 'no 06/2026', 'n° 06/2026',
+        'malaga', 'benahavis', 'hasta', 'nº 06/2026',
+        'no 06/2026', 'n° 06/2026',
     ]
 
     for src_text in sources:
@@ -3055,72 +3132,69 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         for line in lines:
             low = line.lower()
 
-            # Строки с € и датой — претендуют на операцию
-            has_eur = '€' in line
-            has_date_ddmmyyyy = bool(re.search(r'\d{2}\.\d{2}\.\d{4}', line))
-            if not has_eur or not has_date_ddmmyyyy:
+            if '€' not in line:
                 continue
-
-            # Пропускаем только откровенные шапки/итоги
+            if not re.search(r'\d{2}\.\d{2}\.\d{4}', line):
+                continue
             if any(w in low for w in skip_markers):
                 continue
 
+            # Пробуем паттерны в порядке приоритета
+            desc = ''
+            date = ''
+            amount = 0.0
             matched = False
-            for pat in patterns:
-                m = pat.match(line)
-                if not m:
-                    continue
-                groups = m.groups()
-                if len(groups) == 4:
-                    desc = groups[0].strip()
-                    date = parse_date(groups[1])
-                    amount = parse_amount(groups[3])
-                elif len(groups) == 3:
-                    desc = groups[0].strip()
-                    date = parse_date(groups[1])
-                    amount = parse_amount(groups[2])
-                else:
-                    continue
 
-                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-                    continue
-
-                # Membership — расход
-                if 'membership' in desc.lower() and amount > 0:
-                    amount = -abs(amount)
-
-                desc_clean = re.sub(r'^N26\s+', '', desc, flags=re.IGNORECASE)
-                desc_clean = re.sub(r'^N26\s+', '', desc_clean, flags=re.IGNORECASE)
-                desc_clean = re.sub(r'\s+', ' ', desc_clean).strip()
-                desc_clean = re.sub(r'^[\s\-–—\|]+', '', desc_clean).strip()
-
-                if not desc_clean:
-                    desc_clean = 'N26'
-
-                if _is_service_line(desc_clean):
-                    continue
-
-                cp_final, _ = extract_counterparty_smart(desc_clean, account_name)
-                if not cp_final:
-                    cp_final = 'N26'
-
-                local.append({
-                    'Дата': date,
-                    'Сумма': amount,
-                    'Контрагент': cp_final,
-                    'Наименование счета': account_name,
-                    'Описание': desc_clean
-                })
+            m = fecha_pattern.match(line)
+            if m:
+                desc = m.group(1).strip()
+                date = parse_date(m.group(2))
+                amount = parse_amount(m.group(4))
                 matched = True
-                break
 
-            if matched:
+            if not matched:
+                m = no_fecha_pattern.match(line)
+                if m:
+                    desc = m.group(1).strip()
+                    date = parse_date(m.group(2))
+                    amount = parse_amount(m.group(4))
+                    matched = True
+
+            if not matched:
                 continue
+
+            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
+                continue
+
+            if 'membership' in desc.lower() and amount > 0:
+                amount = -abs(amount)
+
+            desc_clean = re.sub(r'^N26\s+', '', desc, flags=re.IGNORECASE)
+            desc_clean = re.sub(r'^N26\s+', '', desc_clean, flags=re.IGNORECASE)
+            desc_clean = re.sub(r'\s+', ' ', desc_clean).strip()
+            desc_clean = re.sub(r'^[\s\-–—\|]+', '', desc_clean).strip()
+
+            if not desc_clean:
+                desc_clean = 'N26'
+
+            if _is_service_line(desc_clean):
+                continue
+
+            cp_final, _ = extract_counterparty_smart(desc_clean, account_name)
+            if not cp_final:
+                cp_final = 'N26'
+
+            local.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': cp_final,
+                'Наименование счета': account_name,
+                'Описание': desc_clean
+            })
 
         if len(local) > len(best):
             best = local
 
-    # Финальный дедуп
     seen = set()
     deduped: List[Dict] = []
     for r in best:
@@ -3133,18 +3207,21 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
+    """Парсер DOCX N26 (учитывает OCR-ошибки вида '-16,e0€')."""
     full_text = docx_all_text(file_content)
     if not full_text:
         return []
     result: List[Dict] = []
+
+    # Ищем все фрагменты "… Fecha de valor DD.MM.YYYY [DD.MM.YYYY] <amount> €"
     pattern = re.compile(
         r'([A-Za-z0-9][^\n]{3,500}?)'
         r'(?:Fecha de valor\s+)?'
         r'(\d{2}\.\d{2}\.\d{4})'
+        r'(?:\s+(\d{2}\.\d{2}\.\d{4}))?'
         r'\s+'
-        r'(\d{2}\.\d{2}\.\d{4})?'
-        r'\s+'
-        r'(-?\d[\d\s]*[.,]\d{2})\s*€',
+        r'(-?[\dOoОoEeSsBbZz|][\dOoОoEeSsBbZz|.,\s\u00a0]*?)'
+        r'\s*€',
         re.MULTILINE
     )
     for m in pattern.finditer(full_text):
@@ -3172,21 +3249,54 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
+
+    # Fallback — простой поиск "… <amount> €" без Fecha
+    if not result:
+        pattern2 = re.compile(
+            r'(n26[^\n]{3,300}?)'
+            r'(\d{2}\.\d{2}\.\d{4})'
+            r'\s+'
+            r'(-?[\dOoОoEeSsBbZz|][\dOoОoEeSsBbZz|.,\s\u00a0]*?)'
+            r'\s*€',
+            re.IGNORECASE
+        )
+        for m in pattern2.finditer(full_text):
+            try:
+                desc = re.sub(r'\s+', ' ', m.group(1)).strip()
+                date = parse_date(m.group(2))
+                amount = parse_amount(m.group(3))
+                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
+                    continue
+                if 'membership' in desc.lower() and amount > 0:
+                    amount = -abs(amount)
+                cp_final, _ = extract_counterparty_smart(desc, account_name)
+                if not cp_final:
+                    cp_final = 'N26'
+                result.append({
+                    'Дата': date, 'Сумма': amount,
+                    'Контрагент': cp_final,
+                    'Наименование счета': account_name,
+                    'Описание': desc
+                })
+            except Exception:
+                continue
     return result
 
 
-# ==================== PAYSERA PDF (ФИКС БАГОВ 2, 3) ====================
+# ==================== PAYSERA PDF (устойчив к склейке таблиц) ====================
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Парсер PDF Paysera.
-    ФИКС БАГА 2: разрезаем на блоки по дате-времени, сумму берём ПОСЛЕ
-                 получателя и ДО Purpose of payment; исключаем Start/Final balance.
-    ФИКС БАГА 3: чистим контрагента от даты-времени, Payment ID, IBAN, EVP-кодов.
+    Ключевое отличие от предыдущих версий:
+      - блок = окно вокруг "Recipient / Payer (Code)" + "Start balance:" / строки с датой;
+      - каждая операция имеет тип (Transfer/Commission fee) и дату-время;
+      - сумма берётся из пары "Amount and currency Balance" — ПЕРВАЯ после получателя;
+      - баланс "67.71 EUR" (число без знака) не путается с операцией.
+    Устойчив к склейке таблицы в одну длинную строку.
     """
     result: List[Dict] = []
 
-    # Приоритет координатной реконструкции для табличных Paysera-PDF
     coord_lines = _pdf_lines_with_coords(file_content)
     layout_text = pdf_all_text_layout(file_content)
     normal_text = pdf_all_text(file_content)
@@ -3202,27 +3312,23 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     if not sources:
         return result
 
-    date_time_re = re.compile(
-        r'(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})'
-        r'(?:\s+[+\-]\d{4})?'
+    # "Transfer" / "Commission fee" с последующей датой
+    op_block_re = re.compile(
+        r'(Transfer|Commission\s+fee)\s+'
+        r'(\d{4}-\d{2}-\d{2})\s+'
+        r'(\d{2}:\d{2}:\d{2})\s*'
+        r'(?:\+0200|\+0300|\+0000)?',
+        re.IGNORECASE
     )
-    amount_with_curr_re = re.compile(
+
+    # Все суммы с валютой: "-5.00 EUR", "5000.00 EUR", "67.71 EUR"
+    amount_re = re.compile(
         r'(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s*(EUR|USD|CZK|GBP|PLN)',
         re.IGNORECASE
     )
+
     purpose_re = re.compile(
-        r'(?:Purpose\s+of\s+payment|Назначение\s+платежа)\s*:\s*(.*?)$',
-        re.IGNORECASE
-    )
-    # Признаки «имя получателя перед суммой»: строчные буквы/пробелы, не начинается с даты
-    recipient_markers = re.compile(
-        r'(?:Transfer|Commission\s+fee|Type|Statement|No\.|Payment\s+ID|'
-        r'Recipient\s*/\s*Payer|Start\s+balance|Final\s+balance|'
-        r'Amount\s+and\s+currency|Balance|EVP\s*/\s*IBAN|Currencies|Client|Account|'
-        r'Перевод|Комиссионная\s+плата|Тип|Номер|Дата\s+и\s+время|'
-        r'Получатель\s*/\s*Плательщик|Остаток|Сумма\s+и\s+валюта|'
-        r'Валюта|Начальный\s+остаток|Конечный\s+остаток|'
-        r'Оборот\s+по\s+дебету|Оборот\s+по\s+кредиту)',
+        r'(?:Purpose\s+of\s+payment|Назначение\s+платежа)\s*:\s*(.*?)(?:\n|$)',
         re.IGNORECASE
     )
 
@@ -3234,177 +3340,132 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         full_text = _CID_PATTERN.sub(' ', full_text)
         full_text = re.sub(r'[ \t]+', ' ', full_text)
 
-        lines = [l.strip() for l in full_text.split('\n') if l.strip()]
+        # Склеиваем всё в один текст, но сохраняем переносы
+        lines = full_text.split('\n')
 
-        # --- Блочный разбор ---
-        blocks: List[List[str]] = []
-        current_block: List[str] = []
-        for line in lines:
-            if date_time_re.search(line):
-                if current_block:
-                    blocks.append(current_block)
-                current_block = [line]
-            else:
-                if current_block:
-                    current_block.append(line)
-        if current_block:
-            blocks.append(current_block)
+        # Проходим по тексту и находим ВСЕ позиции, где встречается "Transfer" или "Commission fee"
+        # с последующей датой-временем.
+        full_flat = ' '.join(lines)
 
-        # Fallback: если блоков нет, а есть Purpose-блоки
-        if not blocks:
-            current_block = []
-            for line in lines:
-                current_block.append(line)
-                if purpose_re.search(line):
-                    blocks.append(current_block)
-                    current_block = []
-            if current_block:
-                blocks.append(current_block)
+        # Список всех "якорей" операций: (start_pos, type, date, time)
+        anchors: List[Dict] = []
+        for m in op_block_re.finditer(full_flat):
+            anchors.append({
+                'start': m.start(),
+                'end': m.end(),
+                'type': m.group(1).strip(),
+                'date': parse_date(m.group(2)),
+                'time': m.group(3),
+            })
 
-        block_results: List[Dict] = []
+        if not anchors:
+            continue
 
-        for block in blocks:
-            block_text = '\n'.join(block)
+        local: List[Dict] = []
 
-            # Пропускаем служебный блок полностью только если он без Purpose
-            if _is_service_line(block_text) and not purpose_re.search(block_text):
-                continue
+        # Для каждой пары якорей (текущий — следующий) разбираем окно между ними
+        for i, a in enumerate(anchors):
+            # Окно: от конца якоря до начала следующего якоря (или до конца текста)
+            win_start = a['end']
+            win_end = anchors[i + 1]['start'] if i + 1 < len(anchors) else len(full_flat)
+            window = full_flat[win_start:win_end]
 
-            date_matches = list(date_time_re.finditer(block_text))
-            if not date_matches:
-                continue
-
-            last_dt = date_matches[-1]
-            date = parse_date(last_dt.group(1))
-            if not date:
-                continue
-
-            amounts = list(amount_with_curr_re.finditer(block_text))
-            if not amounts:
-                continue
-
-            # Сумма после даты-времени и НЕ Start/Final balance
-            operation_amount: Optional[float] = None
-            chosen_amt_match = None
-            for am in amounts:
-                if am.start() < last_dt.end():
-                    continue
-                # Контекст до суммы
-                context_before = block_text[max(0, am.start() - 60):am.start()].lower()
-                if any(m in context_before for m in [
-                    'start balance', 'final balance',
-                    'начальный остаток', 'конечный остаток',
-                    'balance:', 'atlikums:', 'saldo',
-                ]):
-                    continue
-                v = parse_amount(am.group(1))
-                if v != 0.0 and _is_reasonable_amount(v):
-                    operation_amount = v
-                    chosen_amt_match = am
-                    break
-
-            if operation_amount is None:
-                # Второй проход — берём первую сумму после даты-времени
-                for am in amounts:
-                    if am.start() < last_dt.end():
-                        continue
-                    v = parse_amount(am.group(1))
-                    if v != 0.0 and _is_reasonable_amount(v):
-                        operation_amount = v
-                        chosen_amt_match = am
-                        break
-
-            if operation_amount is None or operation_amount == 0.0:
-                continue
-
-            # Purpose of payment
+            # Ищем Purpose of payment (может быть сразу после операции)
             purpose = ''
-            pm = purpose_re.search(block_text)
+            pm = purpose_re.search(window)
             if pm:
                 purpose = pm.group(1).strip()
                 purpose = re.sub(r'\s+', ' ', purpose)
+                purpose = purpose.rstrip('.').strip()
 
-            # --- Контрагент ---
-            # Берём текст между датой-временем (и служебными токенами) и суммой операции
-            party_raw = ''
-            if chosen_amt_match is not None:
-                # Фрагмент от конца последней даты-времени до суммы
-                start_pos = last_dt.end()
-                end_pos = chosen_amt_match.start()
-                if end_pos > start_pos:
-                    party_raw = block_text[start_pos:end_pos]
+            # Получатель: до первой суммы-с-валютой
+            first_amt = amount_re.search(window)
+            recipient_zone = window[:first_amt.start()] if first_amt else window[:500]
 
-            # Чистим party_raw
-            party_raw = re.sub(
+            # Чистим зону получателя от служебных слов и дат
+            recipient_zone = re.sub(
                 r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(\s+[+\-]\d{4})?',
-                ' ', party_raw
+                ' ', recipient_zone
             )
-            party_raw = re.sub(r'\b\d{6,}\b', ' ', party_raw)                # Payment ID/Statement No
-            party_raw = re.sub(r'\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b', ' ', party_raw)  # IBAN
-            party_raw = re.sub(r'\(\s*[A-Z0-9]+\s*\)', ' ', party_raw)      # (EVP...)
-            party_raw = recipient_markers.sub(' ', party_raw)
-            party_raw = re.sub(r'[\.\+]', ' ', party_raw)
-            party_raw = re.sub(r'\s+', ' ', party_raw).strip()
-            cp = party_raw.strip(' .,;:-')
+            recipient_zone = re.sub(
+                r'\b(?:Statement|No\.?|Payment\s*ID|Recipient\s*/\s*Payer\s*\(Code\)|'
+                r'EVP\s*/\s*IBAN|Amount\s+and\s+currency|Balance|Currencies|Client|Account|'
+                r'Start\s+balance|Final\s+balance|Debit\s+turnover|Credit\s+turnover|'
+                r'Purpose\s+of\s+payment)\b',
+                ' ', recipient_zone, flags=re.IGNORECASE
+            )
+            # Убираем голые большие числа (Payment ID, Statement No.)
+            recipient_zone = re.sub(r'\b\d{6,}\b', ' ', recipient_zone)
+            # Убираем IBAN/EVP коды
+            recipient_zone = re.sub(r'\(?\s*EVP\d+\s*\)?', ' ', recipient_zone)
+            recipient_zone = re.sub(r'\b[A-Z]{2}\d{2}[A-Z0-9]{8,}\b', ' ', recipient_zone)
+            recipient_zone = re.sub(r'\(\s*\d{6,}\s*\)', ' ', recipient_zone)
+            recipient_zone = re.sub(r'[\.\+]', ' ', recipient_zone)
+            recipient_zone = re.sub(r'\s+', ' ', recipient_zone).strip()
+            cp = recipient_zone.strip(' .,;:-')
 
-            # Если в cp осталась дата-время — блок отбрасываем целиком
-            if cp and re.search(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}', cp):
-                cp = ''
-            # Если в cp только цифры/знаки — отбрасываем
-            if cp and re.fullmatch(r'[\d\s.,\-/\\\+]+', cp):
-                cp = ''
+            # Если контрагент не найден — пробуем Purpose
+            if not cp or len(cp) < 2 or re.fullmatch(r'[\d\s.,\-/\\]+', cp):
+                cp = purpose
 
-            # --- Знак суммы ---
-            # transfer исходящий — минус; incoming — плюс.
-            # В Paysera формат: "Transfer ... -5.00 EUR" — знак уже в сумме.
-            # Если знак потерялся и рядом есть '-' в тексте — восстановим.
-            if chosen_amt_match is not None:
-                raw_amt_str = chosen_amt_match.group(1)
-                if raw_amt_str.strip().startswith('-'):
-                    operation_amount = -abs(operation_amount)
+            # Сумма операции: ПЕРВАЯ сумма-с-валютой в окне
+            amount = 0.0
+            if first_amt:
+                raw_amt = first_amt.group(1).strip()
+                amount = parse_amount(raw_amt)
+                # Баланс (число без знака сразу после операции) не должен попадать
+                # Проверяем: если первый матч — это просто "67.71 EUR" без знака
+                # и рядом (после) есть ещё одна сумма, а сама операция "Transfer",
+                # то вычислим знак по контексту: Transfer → минус, Commission fee → минус.
+                # В формате Paysera операционная сумма всегда со знаком минус для Transfer/Commission fee
+                # (исходящие), а положительные суммы (5000.00) идут БЕЗ явного +.
+                if a['type'].lower().startswith('commission'):
+                    amount = -abs(amount)
                 else:
-                    operation_amount = abs(operation_amount)
+                    # Transfer: знак '-' ожидается в исходнике
+                    if '-' in raw_amt:
+                        amount = -abs(amount)
+                    elif raw_amt.strip().startswith('+'):
+                        amount = abs(amount)
+                    else:
+                        # Если получитель — BS PROPERTY (входящий), сумма без минуса → приход
+                        # Эвристика: если это Transfer и сумма > 100, но нет минуса — вероятно приход
+                        # В реальности Paysera ставит знак явно.
+                        # Оставляем как есть, но не превращаем в минус без нужды.
+                        amount = abs(amount)
 
-            # Если в блоке явно "Transfer" и нет плюса — расход
-            block_low = block_text.lower()
-            if 'transfer' in block_low and 'commission' not in block_low:
-                # Не перезаписываем, но проверяем знак ещё раз
-                if not (chosen_amt_match and chosen_amt_match.group(1).strip().startswith('+')):
-                    if operation_amount > 0 and 'плюс' not in block_low:
-                        # Не доверяем без явного +
-                        pass
-
-            # Если описания нет — берём purpose
-            desc_for_cp = purpose if purpose else cp
-            if not desc_for_cp:
-                desc_for_cp = block_text[:200]
-
-            if _is_service_line(desc_for_cp) and _is_service_line(cp):
+            # Если сумма не найдена — пропускаем
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
 
+            # Проверяем, что это не строка баланса
+            if purpose and _is_service_line(purpose) and not cp:
+                continue
+
+            # Формируем итогового контрагента
             cp_final, _ = extract_counterparty_smart(
-                desc_for_cp, account_name, cp, '', cp
+                purpose if purpose else cp, account_name, cp, '', cp
             )
             if not cp_final:
                 cp_final = cp if cp else 'Paysera'
 
-            block_results.append({
-                'Дата': date,
-                'Сумма': operation_amount,
+            local.append({
+                'Дата': a['date'],
+                'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
                 'Описание': purpose if purpose else cp
             })
 
-        if len(block_results) > len(best_result):
-            best_result = block_results
+        if len(local) > len(best_result):
+            best_result = local
 
-    # Финальный дедуп
+    # Дедуп
     seen = set()
     deduped: List[Dict] = []
     for r in best_result:
         key = (r['Дата'], round(r['Сумма'], 2),
-               r['Контрагент'], r['Описание'])
+               r['Контрагент'], r['Описание'][:60])
         if key in seen:
             continue
         seen.add(key)
@@ -3412,77 +3473,209 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return deduped
 
 
+# ==================== PAYSERA DOCX (табличная склейка + дубли ячеек) ====================
+
 def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер Paysera DOCX.
+    Особенность: конвертация из PDF в DOCX портит таблицу —
+    дублирует ячейки многократно и склеивает суммы с балансом.
+    Формат: "Transfer 2026-06-01 08:31:44 +0200 1738895382 844408244 FELSŐ... HU43... -3000.00 EUR 67.71 EUR Purpose of payment: Loan agreement"
+    Также бывает OCR-склейка типа "-5.00 EUR 8754.54 EUR".
+    """
     result: List[Dict] = []
+
     try:
         doc = Document(BytesIO(file_content))
     except Exception:
         return []
-    all_parts: List[str] = []
+
+    # Собираем ВСЕ тексты из ячеек таблиц + параграфы, БЕЗ дедупликации —
+    # потом схлопнем повторы в одну длинную строку через уникальные последовательности.
+    raw_chunks: List[str] = []
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 t = cell.text.strip()
                 if t:
-                    all_parts.append(t)
+                    raw_chunks.append(t)
     for para in doc.paragraphs:
         t = para.text.strip()
         if t:
-            all_parts.append(t)
-    full_text = '\n'.join(all_parts).replace('\ufeff', '').replace('\xa0', ' ')
-    pattern = re.compile(
-        r'([A-Za-zА-Яа-я][A-Za-zА-Яа-я\s]{2,40}?)'
-        r'\s+'
-        r'(\d{4}-\d{2}-\d{2})'
-        r'\s+'
-        r'(\d{2}:\d{2}:\d{2})'
-        r'(?:\s+[+\-]\d{4})?'
-        r'\s*'
-        r'(\d{6,})'
-        r'\s*'
-        r'([A-Za-zА-Яа-я][^\d\-+]{2,500}?)'
-        r'\s*'
-        r'\((\d{6,})\)'
-        r'\s*'
-        r'(-?\d[\d\s]*[.,]\d{2})\s*([A-Z]{3})'
-        r'(?:\s+([^\n]{2,2000}))?',
-        re.MULTILINE
+            raw_chunks.append(t)
+
+    if not raw_chunks:
+        return []
+
+    # Схлопываем повторы: если ячейка повторяется много раз подряд — оставляем один раз.
+    dedup_chunks: List[str] = []
+    last = None
+    for c in raw_chunks:
+        if c != last:
+            dedup_chunks.append(c)
+            last = c
+    full_text = ' '.join(dedup_chunks).replace('\ufeff', '').replace('\xa0', ' ')
+    full_text = re.sub(r'\s+', ' ', full_text)
+
+    # Дополнительно схлопываем "A | A | A" → "A"
+    full_text = re.sub(r'(\b[^\s|]{2,})\s*\|\s*(?:\1\s*\|\s*)+', r'\1 ', full_text)
+
+    # Все якоря: "Transfer DD.MM.YYYY HH:MM:SS +TZ" и "Commission fee DD.MM.YYYY HH:MM:SS +TZ"
+    op_block_re = re.compile(
+        r'(Transfer|Commission\s+fee)\s+'
+        r'(\d{4}-\d{2}-\d{2})\s+'
+        r'(\d{2}:\d{2}:\d{2})\s*'
+        r'(?:\+0200|\+0300|\+0000)?',
+        re.IGNORECASE
     )
-    for m in pattern.finditer(full_text):
-        try:
-            date = parse_date(m.group(2))
-            amount = parse_amount(m.group(8))
-            counterparty = re.sub(r'\s+', ' ', m.group(6)).strip()
-            op_type = m.group(1).strip()
-            purpose = (m.group(10) or '').strip()
-            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-                continue
-            desc = purpose if purpose else f"{op_type}: {counterparty}"
-            if _is_service_line(desc):
-                continue
-            cp_final, _ = extract_counterparty_smart(
-                desc, account_name, counterparty, '', counterparty
-            )
-            if not cp_final:
-                cp_final = counterparty
-            result.append({
-                'Дата': date, 'Сумма': amount,
-                'Контрагент': cp_final,
-                'Наименование счета': account_name,
-                'Описание': desc
-            })
-        except Exception:
+
+    amount_re = re.compile(
+        r'(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s*(EUR|USD|CZK|GBP|PLN)',
+        re.IGNORECASE
+    )
+    purpose_re = re.compile(
+        r'(?:Purpose\s+of\s+payment|Назначение\s+платежа)\s*:\s*([^\.]{2,300}?)(?:\.|Transfer|Commission\s+fee|$)',
+        re.IGNORECASE
+    )
+
+    anchors: List[Dict] = []
+    for m in op_block_re.finditer(full_text):
+        anchors.append({
+            'start': m.start(),
+            'end': m.end(),
+            'type': m.group(1).strip(),
+            'date': parse_date(m.group(2)),
+            'time': m.group(3),
+        })
+
+    if not anchors:
+        # Fallback — без якорей, ищем по строкам
+        return _parse_paysera_docx_fallback(full_text, account_name)
+
+    for i, a in enumerate(anchors):
+        win_start = a['end']
+        win_end = anchors[i + 1]['start'] if i + 1 < len(anchors) else len(full_text)
+        window = full_text[win_start:win_end]
+
+        purpose = ''
+        pm = purpose_re.search(window)
+        if pm:
+            purpose = pm.group(1).strip()
+            purpose = re.sub(r'\s+', ' ', purpose)
+
+        # Получатель — до первой суммы-с-валютой
+        first_amt = amount_re.search(window)
+        recipient_zone = window[:first_amt.start()] if first_amt else window[:500]
+
+        # Чистим зону получателя
+        recipient_zone = re.sub(
+            r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(\s+[+\-]\d{4})?',
+            ' ', recipient_zone
+        )
+        recipient_zone = re.sub(r'\b\d{6,}\b', ' ', recipient_zone)
+        recipient_zone = re.sub(r'\b[A-Z]{2}\d{2}[A-Z0-9]{8,}\b', ' ', recipient_zone)
+        recipient_zone = re.sub(r'\(?\s*EVP\d+\s*\)?', ' ', recipient_zone)
+        recipient_zone = re.sub(r'\(\s*\d{6,}\s*\)', ' ', recipient_zone)
+        recipient_zone = re.sub(
+            r'\b(?:Statement|No\.?|Payment\s*ID|Recipient\s*/\s*Payer\s*\(Code\)|'
+            r'EVP\s*/\s*IBAN|Amount\s+and\s+currency|Balance|Currencies|Client|Account|'
+            r'Start\s+balance|Final\s+balance|Debit\s+turnover|Credit\s+turnover)\b',
+            ' ', recipient_zone, flags=re.IGNORECASE
+        )
+        recipient_zone = re.sub(r'[\.\+]', ' ', recipient_zone)
+        recipient_zone = re.sub(r'\s+', ' ', recipient_zone).strip()
+        cp = recipient_zone.strip(' .,;:-')
+
+        if not cp or len(cp) < 2 or re.fullmatch(r'[\d\s.,\-/\\]+', cp):
+            cp = purpose
+
+        # Сумма: первая сумма-с-валютой в окне
+        amount = 0.0
+        if first_amt:
+            raw_amt = first_amt.group(1).strip()
+            amount = parse_amount(raw_amt)
+            if a['type'].lower().startswith('commission'):
+                amount = -abs(amount)
+            else:
+                if '-' in raw_amt:
+                    amount = -abs(amount)
+                else:
+                    amount = abs(amount)
+
+        if amount == 0.0 or not _is_reasonable_amount(amount):
             continue
+
+        cp_final, _ = extract_counterparty_smart(
+            purpose if purpose else cp, account_name, cp, '', cp
+        )
+        if not cp_final:
+            cp_final = cp if cp else 'Paysera'
+
+        result.append({
+            'Дата': a['date'],
+            'Сумма': amount,
+            'Контрагент': cp_final,
+            'Наименование счета': account_name,
+            'Описание': purpose if purpose else cp
+        })
+
+    # Дедуп
+    seen = set()
+    deduped: List[Dict] = []
+    for r in result:
+        key = (r['Дата'], round(r['Сумма'], 2),
+               r['Контрагент'], r['Описание'][:60])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(r)
+    return deduped
+
+
+def _parse_paysera_docx_fallback(full_text: str, account_name: str) -> List[Dict]:
+    """Fallback для Paysera DOCX без якорей."""
+    result: List[Dict] = []
+    amount_re = re.compile(
+        r'(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s*(EUR|USD|CZK|GBP|PLN)',
+        re.IGNORECASE
+    )
+    date_re = re.compile(r'(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})')
+
+    for m in date_re.finditer(full_text):
+        date = parse_date(m.group(1))
+        if not date:
+            continue
+        # Окно после даты-времени
+        window = full_text[m.end(): m.end() + 400]
+        first_amt = amount_re.search(window)
+        if not first_amt:
+            continue
+        amount = parse_amount(first_amt.group(1))
+        if amount == 0.0:
+            continue
+        recipient_zone = window[:first_amt.start()]
+        recipient_zone = re.sub(r'\b\d{6,}\b', ' ', recipient_zone)
+        recipient_zone = re.sub(r'\b[A-Z]{2}\d{2}[A-Z0-9]{8,}\b', ' ', recipient_zone)
+        recipient_zone = re.sub(r'\(?\s*EVP\d+\s*\)?', ' ', recipient_zone)
+        recipient_zone = re.sub(r'\s+', ' ', recipient_zone).strip(' .,;:-')
+        cp_final, _ = extract_counterparty_smart(recipient_zone, account_name)
+        result.append({
+            'Дата': date,
+            'Сумма': amount,
+            'Контрагент': cp_final if cp_final else 'Paysera',
+            'Наименование счета': account_name,
+            'Описание': recipient_zone
+        })
     return result
 
 
-# ==================== REVOLUT PDF (ФИКС БАГА 6) ====================
+# ==================== REVOLUT PDF ====================
 
 def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Парсер PDF Revolut.
-    ФИКС БАГА 6: описание собирается из нескольких строк до первой €-суммы,
-                 не режется по первому вхождению € или •.
+    Описание собирается из нескольких строк до первой €-суммы,
+    не режется по первому вхождению € или •.
     """
     result: List[Dict] = []
 
@@ -3557,7 +3750,6 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         src_text = re.sub(r'[ \t]+', ' ', src_text)
         lines = [l.rstrip() for l in src_text.split('\n') if l.strip()]
 
-        # Собираем «сырые» блоки операций
         operations: List[Dict] = []
         current: Optional[Dict] = None
 
@@ -3565,10 +3757,8 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             stripped = line.strip()
             if not stripped:
                 continue
-
             low = stripped.lower()
 
-            # Явный разделитель между операциями — дата в начале
             dm = date_re.search(stripped)
             if dm:
                 if current is not None:
@@ -3583,12 +3773,10 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if current is None:
                 continue
 
-            # Шапки/служебные строки — пропускаем
             if any(m in low for m in skip_markers):
                 continue
             if re.fullmatch(r'[\s€0.,]+', stripped):
                 continue
-            # Строки, состоящие только из "€0.00" или "€ 0.00"
             if re.fullmatch(r'€\s?0[.,]00', stripped):
                 continue
             current['continuation'].append(stripped)
@@ -3610,21 +3798,16 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 ttype = tm.group(1)
                 after = after[tm.end():].strip()
 
-            # Ищем первую €-сумму
             eur_matches = list(eur_re.finditer(after))
             if eur_matches:
                 amount_match = eur_matches[0]
                 amount = parse_amount(amount_match.group(0))
                 if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
-                # Всё до €-суммы — описание; продолжение тоже идёт в описание,
-                # пока не встретим €-число.
                 desc_main = after[:amount_match.start()].strip()
                 cont_filtered: List[str] = []
                 for c in op['continuation']:
-                    # Если строка содержит €-число — стоп (это баланс/следующая строка)
                     if eur_re.search(c):
-                        # Дописываем до €-суммы
                         first_in_c = eur_re.search(c)
                         head = c[:first_in_c.start()].strip()
                         if head and not re.fullmatch(r'[\s€0.,]+', head):
@@ -3637,10 +3820,8 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                         continue
                     cont_filtered.append(c)
             else:
-                # Нет €-сумм — берём первое число с запятой/точкой
                 nums = re.findall(r'-?\s?\d[\d\s\u00a0]*[.,]\d{2}', after)
                 if not nums:
-                    # Попробуем собрать из continuation
                     joined_cont = ' '.join(op['continuation'])
                     nums = re.findall(r'-?\s?\d[\d\s\u00a0]*[.,]\d{2}', joined_cont)
                     if not nums:
@@ -3659,19 +3840,16 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
 
-            # Склеиваем описание
             parts = [desc_main] + cont_filtered
             desc = ' '.join(p for p in parts if p)
             desc = re.sub(r'\s+', ' ', desc).strip()
             desc = desc.strip(' •')
 
-            # Знак
             if ttype in ('MOA', 'MOR', 'TOPUP'):
                 amount = abs(amount)
             elif ttype in ('MOS', 'FEE', 'CAR', 'ATM', 'EXO'):
                 amount = -abs(amount)
             else:
-                # Fallback: если в тексте "FEE" или "Комиссия" — минус
                 low_desc = desc.lower()
                 if 'fee' in low_desc or 'комисс' in low_desc:
                     amount = -abs(amount)
@@ -3692,7 +3870,6 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if len(local_result) > len(best):
             best = local_result
 
-    # Дедуп
     seen = set()
     deduped: List[Dict] = []
     for r in best:
@@ -3710,11 +3887,6 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Парсер PDF UniCredit Bank (ČR/SR).
     Шапка: Datum | Valuta | Transakce | Příjmy | Výděje
-    Пример:
-        29.06.2026  ÚROK  16,56
-                    bonusový úrok za 05/26
-        30.06.2026  KREDITNÍ ÚROK  18,50
-                    Hrubý úrok za období 01.06.26 - 30.06.26
     """
     result: List[Dict] = []
     full_text = pdf_all_text(file_content)
@@ -3835,7 +4007,6 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             })
             i = j
 
-    # Fallback — табличный разбор
     if not result:
         tables = pdf_all_tables(file_content)
         for table in tables:
@@ -3899,7 +4070,7 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict]:
-    """CSV/XLSX UniCredit: шапка From Account;Amount;Booking Date;...;Name"""
+    """CSV/XLSX UniCredit."""
     result: List[Dict] = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -4006,17 +4177,9 @@ def parse_twohills_unicredit(file_content, account_name):
 # ==================== ČSAS PDF ====================
 
 def parse_csas_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер выписок Česká spořitelna.
-    Формат:
-        PŘEHLED POHYBŮ NA ÚČTU        Počáteční zůstatek:    69 453.78
-        Zaúčtováno  Položka             Číslo protiúčtu       Variabilní symbol      Částka
-        18.06.2026  Tuzemská odchozí úhrada  7755-77629341/0710  11697237     -1 651.00
-        30.06.2026  Ceny za služby         Za vedení účtu Klasik ČS              -149.00
-    """
+    """Парсер выписок Česká spořitelna."""
     result: List[Dict] = []
 
-    # Предпочтительно координатная реконструкция для табличных ČSAS-PDF
     coord_lines = _pdf_lines_with_coords(file_content)
     normal_text = pdf_all_text(file_content)
 
@@ -4177,7 +4340,6 @@ def parse_csas_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if len(local) > len(best):
             best = local
 
-    # Fallback — табличный разбор
     if not best:
         tables = pdf_all_tables(file_content)
         for table in tables:
@@ -4362,7 +4524,6 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
     if result:
         return result
 
-    # Текстовый fallback
     full_text = pdf_all_text(file_content)
     if not full_text:
         return []
@@ -5192,7 +5353,7 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
     if result:
         return result
 
-    # 2) PDF-текст — общий regex
+    # 2) PDF-текст
     full_text = pdf_all_text(file_content)
     if full_text:
         line_re = re.compile(
@@ -5363,10 +5524,7 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
     return result# ==================== ČSOB (CSV/XLSX) ====================
 
 def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер выписок ČSOB (CSV).
-    Шапка: Account number;...;Posting date;...;Amount;...
-    """
+    """Парсер выписок ČSOB (CSV)."""
     transactions: List[Dict] = []
     content = read_text_with_encoding(file_content)
     lines = [l.rstrip('\r').strip() for l in content.split('\n') if l.strip()]
@@ -6286,7 +6444,6 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
             if result:
                 return result
 
-    # Fallback — текст
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     if not lines:
@@ -7236,7 +7393,7 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
 def get_parser_by_ext(account_name: str, ext: str):
     """
     Возвращает (parser, key) для имени счёта и расширения.
-    Порядок ветвлений критичен: specifical-first, потом общие.
+    Порядок: specifical-first, потом общие.
     """
     low = account_name.lower()
     is_kapital_saida = ('kapital' in low) or ('saida' in low and 'azn' in low)
@@ -7260,7 +7417,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_n26_pdf, 'n26_pdf'
         if is_paysera:
             return parse_paysera_pdf, 'paysera_pdf'
-        # Jenisov → ČSAS (Česká spořitelna)
         if is_jenisov:
             return parse_csas_pdf, 'csas_pdf'
         if is_csas:
@@ -7282,7 +7438,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_mkb_pdf, 'mkb_pdf'
         if 'rak' in low and 'bank' in low:
             return parse_rak_bank_pdf, 'rak_bank_pdf'
-        # B1_Estate = UniCredit, в имени счёта нет "unicredit"
         if ('unicredit' in low or 'garpiz' in low or 'twohills' in low
                 or 'koruna' in low or 'b1 estate' in low or 'b1_estate' in low
                 or 'b1estate' in low or 'b1uc' in low):
@@ -7529,7 +7684,6 @@ def _get_universal_for_type(real_type: str):
 def get_parser_chain(account_name: str,
                      real_type: str,
                      filename: str) -> List[Tuple[Callable, str]]:
-    """Цепочка кандидатов: специфичный → другие форматы → универсальный → any."""
     chain: List[Tuple[Callable, str]] = []
     seen_keys: set = set()
 
