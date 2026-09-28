@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 app_streamlit.py — Аналитик банковских выписок.
-Полностью переписанная с нуля версия (v2):
+Полностью переписанная с нуля версия (v3):
+  - КОРРЕКТНЫЙ разбор дат: DD/MM, MM/DD, YYYY-MM-DD, текстовые месяцы
+  - эвристика MM/DD для FIO / Stalkin (американский формат)
   - координатная реконструкция PDF + устойчивость к склейке таблиц
   - корректный разбор Paysera (PDF и DOCX-табличная склейка)
   - корректный разбор N26 (PDF с CID-мусором и DOCX с OCR-ошибками)
@@ -890,15 +892,103 @@ _MONTHS_ES = {
     'dic': 12, 'diciembre': 12,
 }
 
+_MONTHS_LV = {
+    'janv': 1, 'janvār': 1, 'janvari': 1, 'janvaris': 1,
+    'febr': 2, 'februār': 2, 'februari': 2, 'februaris': 2,
+    'mart': 3, 'marts': 3, 'marta': 3,
+    'apr': 4, 'aprīl': 4, 'aprili': 4, 'aprilis': 4,
+    'mai': 5, 'maijs': 5,
+    'jūn': 6, 'jūnij': 6, 'junijs': 6,
+    'jūl': 7, 'jūlij': 7, 'julijs': 7,
+    'aug': 8, 'augusts': 8,
+    'sept': 9, 'septembr': 9, 'septembris': 9,
+    'okt': 10, 'oktobr': 10, 'oktobris': 10,
+    'nov': 11, 'novembr': 11, 'novembris': 11,
+    'dec': 12, 'decembr': 12, 'decembris': 12,
+}
+
 _ALL_MONTHS: Dict[str, int] = {}
 _ALL_MONTHS.update(_MONTHS_RU)
 _ALL_MONTHS.update(_MONTHS_EN)
 _ALL_MONTHS.update(_MONTHS_CS)
 _ALL_MONTHS.update(_MONTHS_ES)
+_ALL_MONTHS.update(_MONTHS_LV)
 
 
-def parse_date(date_str) -> str:
-    """Возвращает дату в формате ДД-ММ-ГГГГ или ''."""
+# ---------- Список счетов, где даты идут в формате MM/DD/YYYY ----------
+# FIO banka (ČR) отдаёт CSV/PDF-выписки в американском формате.
+# Для всех остальных банков работает эвристика по компонентам.
+_AMBIGUOUS_US_ACCOUNTS = (
+    'stalkin',           # Stalkin_ML2_CZK_FIO
+    'fio',               # любые FIO-выписки
+)
+
+
+def _is_ambiguous_us_account(account_name: str) -> bool:
+    """
+    True, если для этого счёта нужно трактовать даты вида DD/MM/YYYY
+    как MM/DD/YYYY (американский формат). Используется как «жёсткий»
+    признак — срабатывает раньше эвристики.
+    """
+    if not account_name:
+        return False
+    low = account_name.lower()
+    return any(marker in low for marker in _AMBIGUOUS_US_ACCOUNTS)
+
+
+def _parse_date_components(a: int, b: int, y: str,
+                           account_name: str = '',
+                           prefer_us: bool = False) -> str:
+    """
+    Разбирает пару (a, b) как (day, month) ИЛИ (month, day).
+
+    Логика:
+      1) Если явно задан prefer_us (американский формат) — a=month, b=day.
+      2) Если a > 12 и b <= 12 — это точно DD/MM.
+      3) Если b > 12 и a <= 12 — это точно MM/DD.
+      4) Если оба <= 12 — используем account_name:
+         - для FIO/Stalkin — MM/DD;
+         - иначе — DD/MM (европейский приоритет).
+      5) Если оба > 12 — дата невозможна, возвращаем ''.
+    """
+    if a > 12 and b > 12:
+        return ''
+
+    # Явный американский формат
+    if prefer_us:
+        if a <= 12 and b <= 31:
+            return f"{b:02d}-{a:02d}-{y}"
+
+    # Однозначные случаи
+    if a > 12 and b <= 12:
+        return f"{a:02d}-{b:02d}-{y}"
+    if b > 12 and a <= 12:
+        return f"{b:02d}-{a:02d}-{y}"
+
+    # Оба <= 12 — решаем по имени счёта
+    if _is_ambiguous_us_account(account_name):
+        return f"{b:02d}-{a:02d}-{y}"
+
+    # По умолчанию — европейский DD/MM
+    return f"{a:02d}-{b:02d}-{y}"
+
+
+def parse_date(date_str, account_name: str = '') -> str:
+    """
+    Возвращает дату в формате ДД-ММ-ГГГГ или ''.
+
+    ВАЖНО: для выписок FIO (Stalkin_ML2_CZK_FIO и др.) автоматически
+    распознаётся американский формат MM/DD/YYYY — для этого нужно
+    передать account_name (второй аргумент).
+
+    Поддерживаемые форматы:
+      - DD.MM.YYYY, DD/MM/YYYY, DD-MM-YYYY
+      - MM/DD/YYYY (для FIO/Stalkin и при однозначных случаях)
+      - YYYY-MM-DD (ISO)
+      - YYYYMMDD (8 цифр подряд)
+      - Excel serial date (5 цифр, 40000..50000)
+      - «12 сентября 2026», «Sep 12 2026», «12.09.2026 г.» и т.п.
+    """
     if date_str is None:
         return ''
     try:
@@ -906,6 +996,9 @@ def parse_date(date_str) -> str:
             return ''
     except Exception:
         pass
+
+    prefer_us = _is_ambiguous_us_account(account_name)
+
     s = str(date_str).strip()
     if not s or s.lower() in ['nan', '-', 'none', 'null', 'nat', 'n/a']:
         return ''
@@ -922,9 +1015,11 @@ def parse_date(date_str) -> str:
     if s.endswith('.0'):
         s = s[:-2]
 
+    # 8 цифр подряд — YYYYMMDD
     if s.isdigit() and len(s) == 8:
         return f"{s[6:8]}-{s[4:6]}-{s[:4]}"
 
+    # Excel serial date
     if s.isdigit() and len(s) == 5 and 40000 <= int(s) <= 50000:
         try:
             base = datetime(1899, 12, 30)
@@ -933,26 +1028,35 @@ def parse_date(date_str) -> str:
         except Exception:
             pass
 
+    # Основной паттерн: DD/MM/YYYY, MM/DD/YYYY, DD.MM.YYYY, DD-MM-YYYY,
+    # DD/MM/YY, MM/DD/YY и т.п.
     m = re.match(r'^(\d{1,2})[\./\-](\d{1,2})[\./\-](\d{2,4})$', s)
     if m:
-        d, mo, y = m.groups()
+        a, b, y = m.groups()
         if len(y) == 2:
             y = f"20{y}"
         try:
-            return f"{int(d):02d}-{int(mo):02d}-{y}"
+            ai = int(a)
+            bi = int(b)
         except Exception:
             return ''
+        return _parse_date_components(
+            ai, bi, y, account_name=account_name, prefer_us=prefer_us
+        )
 
+    # ISO: YYYY-MM-DD
     m = re.match(r'^(\d{4})-(\d{2})-(\d{2})', s)
     if m:
         y, mo, d = m.groups()
         return f"{d}-{mo}-{y}"
 
+    # YYYYMMDD «склеенный»
     m = re.match(r'^(\d{4})(\d{2})(\d{2})', s)
     if m:
         y, mo, d = m.groups()
         return f"{d}-{mo}-{y}"
 
+    # Текстовый месяц: «12 сентября 2026», «Sep 12 2026» и т.п.
     m = re.match(
         r'^(\d{1,2})\s+([A-Za-zА-Яа-яЁё]+)\.?,?\s+(\d{4})\s*г?\.?$',
         s
@@ -964,13 +1068,26 @@ def parse_date(date_str) -> str:
             mo = _ALL_MONTHS[mon_key]
             return f"{int(d):02d}-{mo:02d}-{y}"
 
+    # strptime-фоллбэк
     for fmt in ["%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d-%b-%y",
                 "%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%Y.%m.%d", "%d-%m-%Y",
-                "%Y%m%d", "%d.%m.%y", "%d/%m/%y"]:
+                "%Y%m%d", "%d.%m.%y", "%d/%m/%y", "%m/%d/%Y", "%m/%d/%y"]:
         try:
-            return datetime.strptime(s, fmt).strftime("%d-%m-%Y")
+            dt = datetime.strptime(s, fmt)
+            if fmt in ("%m/%d/%Y", "%m/%d/%y"):
+                mm = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2,4})$', s)
+                if mm:
+                    a, b, y = mm.groups()
+                    if len(y) == 2:
+                        y = f"20{y}"
+                    return _parse_date_components(
+                        int(a), int(b), y,
+                        account_name=account_name, prefer_us=prefer_us
+                    )
+            return dt.strftime("%d-%m-%Y")
         except Exception:
             continue
+
     return s
 
 
@@ -995,7 +1112,6 @@ def _normalize_ocr_amount_str(s: str) -> str:
     """
     if not s:
         return s
-    # Сначала нормализуем разделители
     out_chars: List[str] = []
     for ch in s:
         if ch in _OCR_DIGIT_MAP and any(c.isdigit() for c in s):
@@ -1012,12 +1128,11 @@ def _find_ocr_amount(text: str) -> Optional[float]:
     """
     if not text:
         return None
-    # Точный паттерн с € после числа
     pat = re.compile(
         r'(-?)\s*'
-        r'(\d{1,3}(?:[\s\u00a0]\d{3})*)'          # целая часть (1-3 цифры, возможно с пробелами)
-        r'([,.]\s*)'                              # разделитель
-        r'([0-9OoОoEeSsBbZz]{1,3})'               # дробная часть (может содержать OCR-мусор)
+        r'(\d{1,3}(?:[\s\u00a0]\d{3})*)'
+        r'([,.]\s*)'
+        r'([0-9OoОoEeSsBbZz]{1,3})'
         r'\s*(€|EUR|eur)'
     )
     m = pat.search(text)
@@ -1025,19 +1140,15 @@ def _find_ocr_amount(text: str) -> Optional[float]:
         return None
     sign = m.group(1)
     int_part = m.group(2).replace(' ', '').replace('\u00a0', '')
-    sep = m.group(3)
     frac_raw = m.group(4)
     frac = _normalize_ocr_amount_str(frac_raw)
-    # Убираем всё нецифровое
     frac = re.sub(r'\D', '', frac)
     if not frac:
         return None
-    # Нормализуем длину дробной части: "90" → 90, "9" → 90, "900" → 90
     if len(frac) == 1:
         frac = frac + '0'
     elif len(frac) > 2:
         frac = frac[:2]
-    # Проверим целую часть
     if not int_part:
         int_part = '0'
     try:
@@ -1062,7 +1173,6 @@ def parse_amount(amount_str) -> float:
     if s.lower() in ('', 'nan', '-', 'none', 'null', 'n/a'):
         return 0.0
 
-    # Сначала пробуем восстановить OCR-ошибки (например, "16,e0")
     ocr_val = _find_ocr_amount(s)
     if ocr_val is not None:
         return ocr_val
@@ -1102,9 +1212,7 @@ def parse_amount(amount_str) -> float:
         return -abs(v) if is_negative else abs(v)
     except Exception:
         return 0.0
-
-
-def format_amount(amount: float) -> str:
+      def format_amount(amount: float) -> str:
     """Форматирует сумму с пробелами-разделителями и запятой."""
     if amount is None:
         return "0,00"
@@ -1140,7 +1248,6 @@ def to_float_amount(v) -> float:
     s = str(v).strip()
     if not s or s.lower() in ('nan', 'none', 'null'):
         return 0.0
-    # Сначала OCR-нормализация
     ocr_val = _find_ocr_amount(s)
     if ocr_val is not None:
         return ocr_val
@@ -1459,9 +1566,10 @@ def _is_service_word_line(line: str) -> bool:
         cnt = sum(1 for w in words if w in header_words)
         if cnt >= 2 and cnt >= len(words) - 1:
             return True
-    return False# ==================== PDF-УТИЛИТЫ ====================
-# Ключевое: pdf_all_text умеет обходить CID-мусор через extract_words,
-# а _pdf_lines_with_coords даёт устойчивую реконструкцию строк.
+    return False
+
+
+# ==================== PDF-УТИЛИТЫ ====================
 
 _CID_PATTERN = re.compile(r'\(cid:\d+\)')
 
@@ -1580,7 +1688,6 @@ def pdf_all_text(file_content: bytes) -> str:
       4) pdfminer.high_level.extract_text()
       5) если всё ещё CID-мусор → координатная реконструкция
     """
-    # --- 1. Обычный extract_text ---
     parts_primary: List[str] = []
     try:
         with pdfplumber.open(BytesIO(file_content)) as pdf:
@@ -1595,7 +1702,6 @@ def pdf_all_text(file_content: bytes) -> str:
         parts_primary = []
     primary = '\n'.join(parts_primary).replace('\ufeff', '').replace('\xa0', ' ')
 
-    # --- 2. Если нет CID-мусора, primary — приоритетный источник ---
     if primary.strip() and not _text_has_cid_junk(primary):
         coord_lines = _pdf_lines_with_coords(file_content)
         if coord_lines:
@@ -1611,7 +1717,6 @@ def pdf_all_text(file_content: bytes) -> str:
                 return coord_text
         return primary
 
-    # --- 3. Layout-текст ---
     parts_layout: List[str] = []
     try:
         with pdfplumber.open(BytesIO(file_content)) as pdf:
@@ -1628,7 +1733,6 @@ def pdf_all_text(file_content: bytes) -> str:
     if layout_text.strip() and not _text_has_cid_junk(layout_text):
         return layout_text
 
-    # --- 4. pdfminer ---
     if _PDFMINER_AVAILABLE:
         try:
             fallback = pdfminer_extract_text(BytesIO(file_content))
@@ -1639,7 +1743,6 @@ def pdf_all_text(file_content: bytes) -> str:
         except Exception:
             pass
 
-    # --- 5. Если CID-мусор — координатная реконструкция ---
     if _text_has_cid_junk(primary) or _text_has_cid_junk(layout_text) or not primary.strip():
         coord_lines = _pdf_lines_with_coords(file_content)
         if coord_lines:
@@ -1709,7 +1812,6 @@ def _split_glued_line(line: str) -> List[str]:
     if len(tokens) >= 2:
         return tokens
     return [line]
-
 
 # ==================== СЛОВАРИ ПЕРЕВОДОВ ====================
 
@@ -2890,7 +2992,10 @@ def extract_counterparty_smart(description: str,
 
     cp = _to_scalar_str(cp)
     desc = _to_scalar_str(desc)
-    return (cp, desc)# ==================== WISE PDF ====================
+    return (cp, desc)
+
+
+# ==================== WISE PDF ====================
 
 def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
@@ -2926,7 +3031,6 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         rf'(\d{{1,2}}\s+{month_alt}\.?\s+\d{{4}}\s*г?\.?)',
         re.IGNORECASE
     )
-    # Две суммы в конце: operation balance
     two_amounts_re = re.compile(
         r'^(.*?)\s+(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s+(\d[\d\s\u00a0]*[.,]\d{2})\s*$'
     )
@@ -2977,7 +3081,7 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
             dm = date_re.search(line_s)
             if dm:
-                d = parse_date(dm.group(1))
+                d = parse_date(dm.group(1), account_name=account_name)
                 if d:
                     current_date = d
 
@@ -2991,14 +3095,16 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
                 op_date = None
                 if dm:
-                    op_date = parse_date(dm.group(1))
+                    op_date = parse_date(dm.group(1), account_name=account_name)
                 if not op_date:
                     op_date = current_date
                 if not op_date:
                     for j in range(max(0, i - 5), i):
                         dm2 = date_re.search(raw_lines[j])
                         if dm2:
-                            op_date = parse_date(dm2.group(1))
+                            op_date = parse_date(
+                                dm2.group(1), account_name=account_name
+                            )
                             if op_date:
                                 break
                 if not op_date:
@@ -3089,8 +3195,6 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
     best: List[Dict] = []
 
-    # Паттерн: "… Fecha de valor DD.MM.YYYY [DD.MM.YYYY] <amount> €"
-    # amount может содержать OCR-ошибки: -16,e0 / -16,90 / 16,90
     fecha_pattern = re.compile(
         r'^(.*?)'
         r'\s+Fecha\s+de\s+valor\s+(\d{2}\.\d{2}\.\d{4})'
@@ -3100,7 +3204,6 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         re.IGNORECASE
     )
 
-    # Паттерн без Fecha: "… DD.MM.YYYY <amount> €"
     no_fecha_pattern = re.compile(
         r'^(.*?)'
         r'\s+(\d{2}\.\d{2}\.\d{4})'
@@ -3139,7 +3242,6 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if any(w in low for w in skip_markers):
                 continue
 
-            # Пробуем паттерны в порядке приоритета
             desc = ''
             date = ''
             amount = 0.0
@@ -3148,7 +3250,7 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             m = fecha_pattern.match(line)
             if m:
                 desc = m.group(1).strip()
-                date = parse_date(m.group(2))
+                date = parse_date(m.group(2), account_name=account_name)
                 amount = parse_amount(m.group(4))
                 matched = True
 
@@ -3156,7 +3258,7 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 m = no_fecha_pattern.match(line)
                 if m:
                     desc = m.group(1).strip()
-                    date = parse_date(m.group(2))
+                    date = parse_date(m.group(2), account_name=account_name)
                     amount = parse_amount(m.group(4))
                     matched = True
 
@@ -3213,7 +3315,6 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
         return []
     result: List[Dict] = []
 
-    # Ищем все фрагменты "… Fecha de valor DD.MM.YYYY [DD.MM.YYYY] <amount> €"
     pattern = re.compile(
         r'([A-Za-z0-9][^\n]{3,500}?)'
         r'(?:Fecha de valor\s+)?'
@@ -3227,7 +3328,7 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
     for m in pattern.finditer(full_text):
         try:
             desc = re.sub(r'\s+', ' ', m.group(1)).strip()
-            date = parse_date(m.group(2))
+            date = parse_date(m.group(2), account_name=account_name)
             amount = parse_amount(m.group(4))
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
@@ -3250,7 +3351,6 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
         except Exception:
             continue
 
-    # Fallback — простой поиск "… <amount> €" без Fecha
     if not result:
         pattern2 = re.compile(
             r'(n26[^\n]{3,300}?)'
@@ -3263,7 +3363,7 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
         for m in pattern2.finditer(full_text):
             try:
                 desc = re.sub(r'\s+', ' ', m.group(1)).strip()
-                date = parse_date(m.group(2))
+                date = parse_date(m.group(2), account_name=account_name)
                 amount = parse_amount(m.group(3))
                 if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
@@ -3281,14 +3381,12 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
     return result
-
-
-# ==================== PAYSERA PDF (устойчив к склейке таблиц) ====================
+  # ==================== PAYSERA PDF (устойчив к склейке таблиц) ====================
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Парсер PDF Paysera.
-    Ключевое отличие от предыдущих версий:
+    Ключевое отличие:
       - блок = окно вокруг "Recipient / Payer (Code)" + "Start balance:" / строки с датой;
       - каждая операция имеет тип (Transfer/Commission fee) и дату-время;
       - сумма берётся из пары "Amount and currency Balance" — ПЕРВАЯ после получателя;
@@ -3312,7 +3410,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     if not sources:
         return result
 
-    # "Transfer" / "Commission fee" с последующей датой
     op_block_re = re.compile(
         r'(Transfer|Commission\s+fee)\s+'
         r'(\d{4}-\d{2}-\d{2})\s+'
@@ -3321,7 +3418,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         re.IGNORECASE
     )
 
-    # Все суммы с валютой: "-5.00 EUR", "5000.00 EUR", "67.71 EUR"
     amount_re = re.compile(
         r'(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s*(EUR|USD|CZK|GBP|PLN)',
         re.IGNORECASE
@@ -3340,21 +3436,16 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         full_text = _CID_PATTERN.sub(' ', full_text)
         full_text = re.sub(r'[ \t]+', ' ', full_text)
 
-        # Склеиваем всё в один текст, но сохраняем переносы
         lines = full_text.split('\n')
-
-        # Проходим по тексту и находим ВСЕ позиции, где встречается "Transfer" или "Commission fee"
-        # с последующей датой-временем.
         full_flat = ' '.join(lines)
 
-        # Список всех "якорей" операций: (start_pos, type, date, time)
         anchors: List[Dict] = []
         for m in op_block_re.finditer(full_flat):
             anchors.append({
                 'start': m.start(),
                 'end': m.end(),
                 'type': m.group(1).strip(),
-                'date': parse_date(m.group(2)),
+                'date': parse_date(m.group(2), account_name=account_name),
                 'time': m.group(3),
             })
 
@@ -3363,14 +3454,11 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
         local: List[Dict] = []
 
-        # Для каждой пары якорей (текущий — следующий) разбираем окно между ними
         for i, a in enumerate(anchors):
-            # Окно: от конца якоря до начала следующего якоря (или до конца текста)
             win_start = a['end']
             win_end = anchors[i + 1]['start'] if i + 1 < len(anchors) else len(full_flat)
             window = full_flat[win_start:win_end]
 
-            # Ищем Purpose of payment (может быть сразу после операции)
             purpose = ''
             pm = purpose_re.search(window)
             if pm:
@@ -3378,11 +3466,9 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 purpose = re.sub(r'\s+', ' ', purpose)
                 purpose = purpose.rstrip('.').strip()
 
-            # Получатель: до первой суммы-с-валютой
             first_amt = amount_re.search(window)
             recipient_zone = window[:first_amt.start()] if first_amt else window[:500]
 
-            # Чистим зону получателя от служебных слов и дат
             recipient_zone = re.sub(
                 r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(\s+[+\-]\d{4})?',
                 ' ', recipient_zone
@@ -3394,9 +3480,7 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 r'Purpose\s+of\s+payment)\b',
                 ' ', recipient_zone, flags=re.IGNORECASE
             )
-            # Убираем голые большие числа (Payment ID, Statement No.)
             recipient_zone = re.sub(r'\b\d{6,}\b', ' ', recipient_zone)
-            # Убираем IBAN/EVP коды
             recipient_zone = re.sub(r'\(?\s*EVP\d+\s*\)?', ' ', recipient_zone)
             recipient_zone = re.sub(r'\b[A-Z]{2}\d{2}[A-Z0-9]{8,}\b', ' ', recipient_zone)
             recipient_zone = re.sub(r'\(\s*\d{6,}\s*\)', ' ', recipient_zone)
@@ -3404,45 +3488,29 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             recipient_zone = re.sub(r'\s+', ' ', recipient_zone).strip()
             cp = recipient_zone.strip(' .,;:-')
 
-            # Если контрагент не найден — пробуем Purpose
             if not cp or len(cp) < 2 or re.fullmatch(r'[\d\s.,\-/\\]+', cp):
                 cp = purpose
 
-            # Сумма операции: ПЕРВАЯ сумма-с-валютой в окне
             amount = 0.0
             if first_amt:
                 raw_amt = first_amt.group(1).strip()
                 amount = parse_amount(raw_amt)
-                # Баланс (число без знака сразу после операции) не должен попадать
-                # Проверяем: если первый матч — это просто "67.71 EUR" без знака
-                # и рядом (после) есть ещё одна сумма, а сама операция "Transfer",
-                # то вычислим знак по контексту: Transfer → минус, Commission fee → минус.
-                # В формате Paysera операционная сумма всегда со знаком минус для Transfer/Commission fee
-                # (исходящие), а положительные суммы (5000.00) идут БЕЗ явного +.
                 if a['type'].lower().startswith('commission'):
                     amount = -abs(amount)
                 else:
-                    # Transfer: знак '-' ожидается в исходнике
                     if '-' in raw_amt:
                         amount = -abs(amount)
                     elif raw_amt.strip().startswith('+'):
                         amount = abs(amount)
                     else:
-                        # Если получитель — BS PROPERTY (входящий), сумма без минуса → приход
-                        # Эвристика: если это Transfer и сумма > 100, но нет минуса — вероятно приход
-                        # В реальности Paysera ставит знак явно.
-                        # Оставляем как есть, но не превращаем в минус без нужды.
                         amount = abs(amount)
 
-            # Если сумма не найдена — пропускаем
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
 
-            # Проверяем, что это не строка баланса
             if purpose and _is_service_line(purpose) and not cp:
                 continue
 
-            # Формируем итогового контрагента
             cp_final, _ = extract_counterparty_smart(
                 purpose if purpose else cp, account_name, cp, '', cp
             )
@@ -3460,7 +3528,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if len(local) > len(best_result):
             best_result = local
 
-    # Дедуп
     seen = set()
     deduped: List[Dict] = []
     for r in best_result:
@@ -3490,8 +3557,6 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
     except Exception:
         return []
 
-    # Собираем ВСЕ тексты из ячеек таблиц + параграфы, БЕЗ дедупликации —
-    # потом схлопнем повторы в одну длинную строку через уникальные последовательности.
     raw_chunks: List[str] = []
     for table in doc.tables:
         for row in table.rows:
@@ -3507,7 +3572,6 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
     if not raw_chunks:
         return []
 
-    # Схлопываем повторы: если ячейка повторяется много раз подряд — оставляем один раз.
     dedup_chunks: List[str] = []
     last = None
     for c in raw_chunks:
@@ -3517,10 +3581,8 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
     full_text = ' '.join(dedup_chunks).replace('\ufeff', '').replace('\xa0', ' ')
     full_text = re.sub(r'\s+', ' ', full_text)
 
-    # Дополнительно схлопываем "A | A | A" → "A"
     full_text = re.sub(r'(\b[^\s|]{2,})\s*\|\s*(?:\1\s*\|\s*)+', r'\1 ', full_text)
 
-    # Все якоря: "Transfer DD.MM.YYYY HH:MM:SS +TZ" и "Commission fee DD.MM.YYYY HH:MM:SS +TZ"
     op_block_re = re.compile(
         r'(Transfer|Commission\s+fee)\s+'
         r'(\d{4}-\d{2}-\d{2})\s+'
@@ -3544,12 +3606,11 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
             'start': m.start(),
             'end': m.end(),
             'type': m.group(1).strip(),
-            'date': parse_date(m.group(2)),
+            'date': parse_date(m.group(2), account_name=account_name),
             'time': m.group(3),
         })
 
     if not anchors:
-        # Fallback — без якорей, ищем по строкам
         return _parse_paysera_docx_fallback(full_text, account_name)
 
     for i, a in enumerate(anchors):
@@ -3563,11 +3624,9 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
             purpose = pm.group(1).strip()
             purpose = re.sub(r'\s+', ' ', purpose)
 
-        # Получатель — до первой суммы-с-валютой
         first_amt = amount_re.search(window)
         recipient_zone = window[:first_amt.start()] if first_amt else window[:500]
 
-        # Чистим зону получателя
         recipient_zone = re.sub(
             r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(\s+[+\-]\d{4})?',
             ' ', recipient_zone
@@ -3589,7 +3648,6 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
         if not cp or len(cp) < 2 or re.fullmatch(r'[\d\s.,\-/\\]+', cp):
             cp = purpose
 
-        # Сумма: первая сумма-с-валютой в окне
         amount = 0.0
         if first_amt:
             raw_amt = first_amt.group(1).strip()
@@ -3619,7 +3677,6 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
             'Описание': purpose if purpose else cp
         })
 
-    # Дедуп
     seen = set()
     deduped: List[Dict] = []
     for r in result:
@@ -3642,10 +3699,9 @@ def _parse_paysera_docx_fallback(full_text: str, account_name: str) -> List[Dict
     date_re = re.compile(r'(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})')
 
     for m in date_re.finditer(full_text):
-        date = parse_date(m.group(1))
+        date = parse_date(m.group(1), account_name=account_name)
         if not date:
             continue
-        # Окно после даты-времени
         window = full_text[m.end(): m.end() + 400]
         first_amt = amount_re.search(window)
         if not first_amt:
@@ -3787,7 +3843,7 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         local_result: List[Dict] = []
 
         for op in operations:
-            date = parse_date(op['date_str'])
+            date = parse_date(op['date_str'], account_name=account_name)
             if not date:
                 continue
 
@@ -3934,7 +3990,7 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 i += 1
                 continue
 
-            date = parse_date(m.group(1))
+            date = parse_date(m.group(1), account_name=account_name)
             if not date:
                 i += 1
                 continue
@@ -4026,7 +4082,7 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     joined = ' '.join(cells)
                     if _is_service_line(joined):
                         continue
-                    date = parse_date(cells[0]) if cells else ''
+                    date = parse_date(cells[0], account_name=account_name) if cells else ''
                     if not date:
                         continue
                     amounts: List[str] = []
@@ -4115,7 +4171,8 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
             date = parse_date(
-                parts[ci['date']] if ci['date'] < len(parts) else ''
+                parts[ci['date']] if ci['date'] < len(parts) else '',
+                account_name=account_name
             )
             if not date:
                 continue
@@ -4238,7 +4295,7 @@ def parse_csas_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 i += 1
                 continue
 
-            date = parse_date(m.group(1))
+            date = parse_date(m.group(1), account_name=account_name)
             if not date:
                 i += 1
                 continue
@@ -4353,7 +4410,7 @@ def parse_csas_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     joined
                 )
                 if m:
-                    date = parse_date(m.group(1))
+                    date = parse_date(m.group(1), account_name=account_name)
                     desc = m.group(2).strip()
                     amount = parse_amount(m.group(3))
                     if not date or amount == 0.0:
@@ -4396,7 +4453,7 @@ def parse_jenhor_unelma_pdf(file_content: bytes, account_name: str) -> List[Dict
     )
     for m in pattern.finditer(full_text):
         try:
-            date = parse_date(m.group(1).strip())
+            date = parse_date(m.group(1).strip(), account_name=account_name)
             desc = re.sub(r'\s+', ' ', m.group(2)).strip()
             amount = parse_amount(m.group(3).strip())
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
@@ -4473,7 +4530,7 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
                     return cells[idx_c]
                 return ''
 
-            date = parse_date(_cell('date'))
+            date = parse_date(_cell('date'), account_name=account_name)
             if not date or not re.match(r'^\d{2}-\d{2}-\d{4}$', date):
                 continue
 
@@ -4536,7 +4593,7 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
         re.MULTILINE
     )
     for m in line_re.finditer(full_text):
-        date = parse_date(m.group(1))
+        date = parse_date(m.group(1), account_name=account_name)
         if not date:
             continue
         g2 = m.group(2)
@@ -4604,7 +4661,7 @@ def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if len(row) < 6:
                 continue
             try:
-                date = parse_date(row[0])
+                date = parse_date(row[0], account_name=account_name)
                 if not date:
                     continue
                 desc = row[3] if len(row) > 3 else ''
@@ -4663,7 +4720,8 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         for row in table[header_idx + 1:]:
             try:
                 date = parse_date(
-                    row[ci.get('date', 1)] if ci.get('date', 1) < len(row) else ''
+                    row[ci.get('date', 1)] if ci.get('date', 1) < len(row) else '',
+                    account_name=account_name
                 )
                 if not date:
                     continue
@@ -4700,7 +4758,7 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if len(row) < 4:
                 continue
             try:
-                date = parse_date(row[3])
+                date = parse_date(row[3], account_name=account_name)
                 if not date:
                     continue
                 amount = parse_amount(row[1] if len(row) > 1 else '')
@@ -4737,7 +4795,7 @@ def parse_bluor_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     )
     for m in pattern.finditer(full_text):
         try:
-            date = parse_date(m.group(1))
+            date = parse_date(m.group(1), account_name=account_name)
             desc = re.sub(r'\s+', ' ', m.group(3)).strip()
             amount = parse_amount(m.group(4))
             ttype = m.group(6)
@@ -4779,7 +4837,7 @@ def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result: List[Dict] = []
     for m in pattern.finditer(full_text):
         try:
-            date = parse_date(m.group(1).strip())
+            date = parse_date(m.group(1).strip(), account_name=account_name)
             code = m.group(2).strip()
             desc = re.sub(r'\s+', ' ', m.group(3)).strip()
             amount = parse_amount(m.group(4))
@@ -4817,7 +4875,7 @@ def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     )
     for m in pattern.finditer(full_text):
         try:
-            date = parse_date(m.group(1))
+            date = parse_date(m.group(1), account_name=account_name)
             amount = parse_amount(m.group(3))
             desc = re.sub(r'\s+', ' ', m.group(5)).strip()
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
@@ -4855,7 +4913,7 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if not m:
             i += 1
             continue
-        date = parse_date(m.group(1))
+        date = parse_date(m.group(1), account_name=account_name)
         if not date:
             i += 1
             continue
@@ -4961,7 +5019,8 @@ def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         for row in table[header_idx + 1:]:
             try:
                 date = parse_date(
-                    row[ci.get('date', 0)] if ci.get('date', 0) < len(row) else ''
+                    row[ci.get('date', 0)] if ci.get('date', 0) < len(row) else '',
+                    account_name=account_name
                 )
                 if not date:
                     continue
@@ -5006,7 +5065,7 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if len(row) < 3:
                 continue
             try:
-                date = parse_date(row[0])
+                date = parse_date(row[0], account_name=account_name)
                 if not date:
                     continue
                 amount = parse_amount(row[2])
@@ -5025,9 +5084,7 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
     return result
-
-
-# ==================== УНИВЕРСАЛЬНЫЕ PDF / XLSX / DOCX ====================
+  # ==================== УНИВЕРСАЛЬНЫЕ PDF / XLSX / DOCX ====================
 
 def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
     result: List[Dict] = []
@@ -5065,7 +5122,8 @@ def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
             continue
         for row in table[header_idx + 1:]:
             try:
-                date = parse_date(row[date_i] if date_i < len(row) else '')
+                date = parse_date(row[date_i] if date_i < len(row) else '',
+                                  account_name=account_name)
                 if not date:
                     continue
                 amount = parse_amount(row[amount_i] if amount_i < len(row) else '')
@@ -5127,7 +5185,7 @@ def parse_xlsx_universal(file_content: bytes, account_name: str) -> List[Dict]:
             dstr = safe_str(row.iloc[ci['date']]) if ci['date'] < len(row) else ''
             if not dstr:
                 continue
-            date = parse_date(dstr)
+            date = parse_date(dstr, account_name=account_name)
             if not date:
                 continue
             av = row.iloc[ci['amount']] if ci['amount'] < len(row) else None
@@ -5181,7 +5239,8 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
         for row in table.rows[1:]:
             cells = [c.text.strip() for c in row.cells]
             try:
-                date = parse_date(cells[date_i] if date_i < len(cells) else '')
+                date = parse_date(cells[date_i] if date_i < len(cells) else '',
+                                  account_name=account_name)
                 if not date:
                     continue
                 amount = parse_amount(cells[amount_i] if amount_i < len(cells) else '')
@@ -5213,7 +5272,7 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
     )
     for m in pattern.finditer(full_text):
         try:
-            date = parse_date(m.group(1))
+            date = parse_date(m.group(1), account_name=account_name)
             desc = re.sub(r'\s+', ' ', m.group(2)).strip()
             amount = parse_amount(m.group(3))
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
@@ -5271,7 +5330,7 @@ def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
         if ci['date'] >= len(parts) or ci['amount'] >= len(parts):
             continue
         try:
-            date = parse_date(parts[ci['date']])
+            date = parse_date(parts[ci['date']], account_name=account_name)
             if not date:
                 continue
             amount = parse_amount(parts[ci['amount']])
@@ -5312,7 +5371,7 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
             date = None
             date_i = -1
             for i in range(min(3, len(row))):
-                d = parse_date(row[i])
+                d = parse_date(row[i], account_name=account_name)
                 if d and re.match(r'^\d{2}-\d{2}-\d{4}$', d):
                     date = d
                     date_i = i
@@ -5364,7 +5423,7 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
         )
         for m in line_re.finditer(full_text):
             try:
-                date = parse_date(m.group(1))
+                date = parse_date(m.group(1), account_name=account_name)
                 if not date:
                     continue
                 mid = m.group(2).strip()
@@ -5397,7 +5456,7 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
             date = None
             date_i = -1
             for i, v in enumerate(row.values):
-                d = parse_date(v)
+                d = parse_date(v, account_name=account_name)
                 if d and re.match(r'^\d{2}-\d{2}-\d{4}$', d):
                     date = d
                     date_i = i
@@ -5452,7 +5511,7 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 date = None
                 date_i = -1
                 for i, p in enumerate(parts[:4]):
-                    d = parse_date(p)
+                    d = parse_date(p, account_name=account_name)
                     if d and re.match(r'^\d{2}-\d{2}-\d{4}$', d):
                         date = d
                         date_i = i
@@ -5504,7 +5563,7 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
         )
         for m in pattern.finditer(docx_text):
             try:
-                date = parse_date(m.group(1))
+                date = parse_date(m.group(1), account_name=account_name)
                 desc = re.sub(r'\s+', ' ', m.group(2)).strip()
                 amount = parse_amount(m.group(3))
                 if not date or amount == 0.0 or not _is_reasonable_amount(amount):
@@ -5521,7 +5580,10 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
 
-    return result# ==================== ČSOB (CSV/XLSX) ====================
+    return result
+
+
+# ==================== ČSOB (CSV/XLSX) ====================
 
 def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
     """Парсер выписок ČSOB (CSV)."""
@@ -5547,7 +5609,7 @@ def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
         if len(parts) < 7:
             continue
         try:
-            date = parse_date(safe_str(parts[4]))
+            date = parse_date(safe_str(parts[4]), account_name=account_name)
             if not date:
                 continue
             amount_str = safe_str(parts[6])
@@ -5693,7 +5755,8 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 if st and st != 'COMPLETED':
                     continue
             date = parse_date(
-                parts[ci['date']] if ci['date'] < len(parts) else ''
+                parts[ci['date']] if ci['date'] < len(parts) else '',
+                account_name=account_name
             )
             if not date:
                 continue
@@ -5834,7 +5897,7 @@ def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
             m = re.match(r'(\d{4}-\d{2}-\d{2})', dstr)
             if m:
                 dstr = m.group(1)
-            date = parse_date(dstr)
+            date = parse_date(dstr, account_name=account_name)
             if not date:
                 continue
             av = row.iloc[ci['amount']] if ci['amount'] < len(row) else None
@@ -5929,7 +5992,7 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
             date = None
             date_idx = -1
             for i in range(min(5, len(parts))):
-                d = parse_date(parts[i])
+                d = parse_date(parts[i], account_name=account_name)
                 if d and re.match(r'^\d{2}-\d{2}-\d{4}$', d):
                     date = d
                     date_idx = i
@@ -6071,7 +6134,7 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
             continue
         if not date_raw and not debit_raw and not credit_raw and not desc_raw:
             continue
-        date = parse_date(date_raw)
+        date = parse_date(date_raw, account_name=account_name)
         if not date or not re.match(r'^\d{2}-\d{2}-\d{4}$', date):
             continue
         debit_val = parse_amount(debit_raw) if debit_raw else 0.0
@@ -6163,7 +6226,7 @@ def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[
         if 'tarix' in joined_low \
                 and ('məxaric' in joined_low or 'mədaxil' in joined_low):
             continue
-        date = parse_date(parts[date_i])
+        date = parse_date(parts[date_i], account_name=account_name)
         if not date or not re.match(r'^\d{2}-\d{2}-\d{4}$', date):
             continue
         debit_val = parse_amount(parts[debit_i]) if debit_i < len(parts) else 0.0
@@ -6249,7 +6312,7 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
             dstr = safe_str(row.iloc[ci['date']]) if ci['date'] < len(row) else ''
             if not dstr:
                 continue
-            date = parse_date(dstr)
+            date = parse_date(dstr, account_name=account_name)
             if not date:
                 continue
             amount = 0.0
@@ -6407,7 +6470,7 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                         if ci['date'] < len(row) else ''
                     if not dstr:
                         continue
-                    date = parse_date(dstr)
+                    date = parse_date(dstr, account_name=account_name)
                     if not date:
                         continue
                     amount = 0.0
@@ -6490,7 +6553,7 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
         if date_idx >= len(parts):
             continue
         try:
-            date = parse_date(parts[date_idx])
+            date = parse_date(parts[date_idx], account_name=account_name)
             if not date:
                 continue
             amount = 0.0
@@ -6570,7 +6633,8 @@ def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict]:
             continue
         try:
             date = parse_date(
-                parts[ci['date']] if ci['date'] < len(parts) else ''
+                parts[ci['date']] if ci['date'] < len(parts) else '',
+                account_name=account_name
             )
             if not date:
                 continue
@@ -6659,7 +6723,7 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
             dstr = safe_str(row.iloc[ci['date']]) if ci['date'] < len(row) else ''
             if not dstr:
                 continue
-            date = parse_date(dstr)
+            date = parse_date(dstr, account_name=account_name)
             if not date:
                 continue
             desc = safe_str(row.iloc[ci['description']]) \
@@ -6717,7 +6781,7 @@ def parse_rak_bank(file_content: bytes, account_name: str) -> List[Dict]:
         if len(parts) < 3:
             continue
         try:
-            date = parse_date(parts[0])
+            date = parse_date(parts[0], account_name=account_name)
             if not date:
                 continue
             amount = parse_amount(parts[2].replace(',', '.'))
@@ -6738,9 +6802,16 @@ def parse_rak_bank(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== STALKIN FIO CSV ====================
+# ==================== STALKIN FIO CSV (MM/DD/YYYY!) ====================
 
 def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер выписок FIO banka (Stalkin_ML2_CZK_FIO и др.).
+
+    КРИТИЧНО: FIO отдаёт CSV с датами в американском формате MM/DD/YYYY.
+    Поэтому parse_date вызывается с account_name — это включает
+    приоритет MM/DD для счётов с 'fio'/'stalkin' в имени.
+    """
     result: List[Dict] = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -6760,7 +6831,8 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
         if len(parts) < 3:
             continue
         try:
-            date = parse_date(parts[0])
+            # ЯВНО передаём account_name → для FIO/Stalkin сработает MM/DD
+            date = parse_date(parts[0], account_name=account_name)
             if not date:
                 continue
             amount = parse_amount(parts[1])
@@ -6771,7 +6843,9 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
             cp = parts[3] if len(parts) > 3 else ''
             if _is_service_line(desc):
                 continue
-            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            cp_final, _ = extract_counterparty_smart(
+                desc, account_name, cp, ''
+            )
             result.append({
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
@@ -6839,7 +6913,7 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
                     if not _is_service_line(desc_val):
                         cp, _ = extract_counterparty_smart(desc_val, account_name)
                         transactions.append({
-                            'Дата': parse_date(str(current_date)),
+                            'Дата': parse_date(str(current_date), account_name=account_name),
                             'Сумма': amt,
                             'Контрагент': cp if cp else '',
                             'Наименование счета': account_name,
@@ -6877,7 +6951,7 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
             if not _is_service_line(desc_val):
                 cp, _ = extract_counterparty_smart(desc_val, account_name)
                 transactions.append({
-                    'Дата': parse_date(str(current_date)),
+                    'Дата': parse_date(str(current_date), account_name=account_name),
                     'Сумма': amt,
                     'Контрагент': cp if cp else '',
                     'Наименование счета': account_name,
@@ -6926,7 +7000,7 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
                     if not _is_service_line(full_desc):
                         cp, _ = extract_counterparty_smart(full_desc, account_name)
                         result.append({
-                            'Дата': parse_date(str(state['date'])),
+                            'Дата': parse_date(str(state['date']), account_name=account_name),
                             'Сумма': amt,
                             'Контрагент': cp if cp else '',
                             'Наименование счета': account_name,
@@ -6975,7 +7049,7 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
     )
     for m in pattern.finditer(normalized):
         try:
-            date = parse_date(m.group(1).strip())
+            date = parse_date(m.group(1).strip(), account_name=account_name)
             code = m.group(2).strip()
             desc = re.sub(r'\s+', ' ', m.group(3)).strip()
             amount = parse_amount(m.group(4))
@@ -7016,7 +7090,7 @@ def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict
         if len(parts) < 3:
             continue
         try:
-            date = parse_date(parts[0])
+            date = parse_date(parts[0], account_name=account_name)
             if not date:
                 continue
             amount = parse_amount(parts[1])
@@ -7143,7 +7217,7 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
             if not cp_final:
                 cp_final = 'Česká spořitelna'
             result.append({
-                'Дата': parse_date(date_found) if date_found else '',
+                'Дата': parse_date(date_found, account_name=account_name) if date_found else '',
                 'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
@@ -7167,7 +7241,7 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
             )
             if not m:
                 continue
-            date = parse_date(m.group(1))
+            date = parse_date(m.group(1), account_name=account_name)
             amount = parse_amount(m.group(3))
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
@@ -7230,7 +7304,7 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
             )
             if not m:
                 continue
-            date = parse_date(m.group(1))
+            date = parse_date(m.group(1), account_name=account_name)
             amount = parse_amount(
                 cells[amount_idx] if amount_idx < len(cells) else ''
             )
@@ -7274,7 +7348,7 @@ def parse_saida_n26_csv(file_content: bytes, account_name: str) -> List[Dict]:
         if len(parts) < 3:
             continue
         try:
-            date = parse_date(parts[0])
+            date = parse_date(parts[0], account_name=account_name)
             if not date:
                 continue
             amount = parse_amount(parts[1].replace(',', '.'))
@@ -7352,7 +7426,7 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
             dstr = safe_str(row.iloc[ci['date']]) if ci['date'] < len(row) else ''
             if not dstr:
                 continue
-            date = parse_date(dstr)
+            date = parse_date(dstr, account_name=account_name)
             if not date:
                 continue
             av = row.iloc[ci['amount']] if ci['amount'] < len(row) else None
@@ -8035,7 +8109,10 @@ def build_combined_excel(df_display: pd.DataFrame,
 
     wb.save(output)
     output.seek(0)
-    return output# ==================== ОБРАБОТКА ЗАГРУЖЕННЫХ ФАЙЛОВ ====================
+    return output
+
+
+# ==================== ОБРАБОТКА ЗАГРУЖЕННЫХ ФАЙЛОВ ====================
 
 def _files_signature(uploaded_files) -> str:
     h = hashlib.md5()
@@ -8445,7 +8522,7 @@ def _render_ai_assistant_tab():
     st.markdown("### 🤖 AI-ассистент (DeepSeek AI)")
     st.caption(
         "Задавайте вопросы по коду, данным и обработке выписок. "
-        "Ассистент видит только то, что вы ему напишете — "
+        "Ассистент видит только то, что вы ему напишите — "
         "файлы не отправляются автоматически."
     )
 
@@ -8645,6 +8722,56 @@ def _render_ai_assistant_tab():
                     )
 
 
+# ==================== SELF-TEST ДЛЯ ДАТ ====================
+
+def _self_test_dates() -> bool:
+    """
+    Проверка разбора дат. Возвращает True, если все тесты пройдены.
+    """
+    cases = [
+        # FIO / Stalkin — MM/DD/YYYY
+        ('09/04/2026', 'Stalkin_ML2_CZK_FIO', '04-09-2026'),
+        ('09/12/2026', 'Stalkin_ML2_CZK_FIO', '12-09-2026'),
+        ('09/17/2026', 'Stalkin_ML2_CZK_FIO', '17-09-2026'),
+        ('09/20/2026', 'Stalkin_ML2_CZK_FIO', '20-09-2026'),
+        ('09/21/2026', 'Stalkin_ML2_CZK_FIO', '21-09-2026'),
+        ('09/24/2026', 'Stalkin_ML2_CZK_FIO', '24-09-2026'),
+        # FIO неоднозначная: 12/09 = 9 декабря (MM/DD)
+        ('12/09/2026', 'Stalkin_ML2_CZK_FIO', '09-12-2026'),
+        # Не-FIO неоднозначная: 12/09 = 12 сентября (DD/MM)
+        ('12/09/2026', 'UniCredit_CZK', '12-09-2026'),
+        # Однозначные по компонентам
+        ('17/09/2026', 'UniCredit_CZK', '17-09-2026'),
+        ('09/17/2026', 'UniCredit_CZK', '17-09-2026'),
+        ('25/12/2026', 'CSOB_CZK', '25-12-2026'),
+        ('12/25/2026', 'CSOB_CZK', '25-12-2026'),
+        # Чешский формат
+        ('04.09.2026', 'CSOB_CZK', '04-09-2026'),
+        ('31.12.2026', 'CSOB_CZK', '31-12-2026'),
+        # ISO
+        ('2026-09-04', 'Wise_EUR', '04-09-2026'),
+        ('2026-12-31', 'Wise_EUR', '31-12-2026'),
+        # 8 цифр
+        ('20260904', 'X', '04-09-2026'),
+        # Текстовые
+        ('12 сентября 2026', '', '12-09-2026'),
+        ('Sep 12 2026', '', '12-09-2026'),
+        # Excel serial (примерно сентябрь 2026)
+        ('46265', '', '07-09-2026'),
+    ]
+    print("=== SELF-TEST parse_date ===")
+    all_ok = True
+    for inp, acc, expected in cases:
+        got = parse_date(inp, account_name=acc)
+        status = "✅" if got == expected else "❌"
+        if got != expected:
+            all_ok = False
+        print(f"{status}  parse_date({inp!r}, acc={acc!r}) = "
+              f"{got!r}  (ожидалось {expected!r})")
+    print("=== РЕЗУЛЬТАТ:", "OK" if all_ok else "ЕСТЬ ОШИБКИ", "===")
+    return all_ok
+
+
 # ==================== ГЛАВНЫЙ ИНТЕРФЕЙС ====================
 
 def main():
@@ -8668,6 +8795,13 @@ def main():
             st.caption(
                 "Проверьте DeepSeek-токен во вкладке «AI-ассистент»."
             )
+        st.markdown("---")
+        if st.button("🧪 Проверить разбор дат", key="self_test_dates_btn"):
+            ok = _self_test_dates()
+            if ok:
+                st.success("Все тесты дат пройдены ✅")
+            else:
+                st.error("Есть ошибки в разборе дат ❌")
         st.markdown("---")
         st.caption(
             "Программа работает локально. Файлы выписок не отправляются "
