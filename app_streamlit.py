@@ -1212,7 +1212,9 @@ def parse_amount(amount_str) -> float:
         return -abs(v) if is_negative else abs(v)
     except Exception:
         return 0.0
-      def format_amount(amount: float) -> str:
+
+
+def format_amount(amount: float) -> str:
     """Форматирует сумму с пробелами-разделителями и запятой."""
     if amount is None:
         return "0,00"
