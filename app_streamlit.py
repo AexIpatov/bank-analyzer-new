@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 app_streamlit.py — Аналитик банковских выписок.
-v4: ИСПРАВЛЕНА агрессивная дедупликация, которая теряла легитимные операции.
-    Все парсеры теперь присваивают _source_index каждой строке, и дедупликация
-    идёт по (Дата, Сумма, Контрагент, Описание, source_index) — это сохраняет
-    ВСЕ операции, включая повторяющиеся комиссии Industra, Revolut CSV, Paysera.
+v5: ИСПРАВЛЕНЫ парсеры Revolut PDF, Wise PDF, Paysera PDF, N26 PDF, CSAS PDF.
+    - Revolut PDF: работа по координатам слов, без склейки соседних операций.
+    - Wise PDF: корректный разбор многострочных операций, кэшбэк сохраняется.
+    - Paysera PDF: очистка контрагента от дат и HTML-тегов <br>.
+    - N26 PDF: исправлен regex для N26 Metal Membership.
+    - CSAS PDF: чистка описаний от служебных строк.
+    - Общая очистка: удаление <br>, HTML-сущностей, дублей фрагментов.
+    - Дедупликация по _source_index сохранена.
 """
 
 import streamlit as st
@@ -45,12 +49,7 @@ except ImportError:
 # ==================== БЕЗОПАСНАЯ ДЕДУПЛИКАЦИЯ ====================
 
 def _assign_source_indices(rows: List[Dict], start: int = 0) -> List[Dict]:
-    """
-    Присваивает каждой строке уникальный _source_index.
-    Это позволяет дедупликации различать ЛЕГИТИМНЫЕ повторы
-    (например, две одинаковые комиссии -0.36 в Industra)
-    от реальных дубликатов (одна и та же строка файла, попавшая дважды).
-    """
+    """Присваивает каждой строке уникальный _source_index."""
     for i, r in enumerate(rows):
         if '_source_index' not in r:
             r['_source_index'] = start + i
@@ -58,21 +57,12 @@ def _assign_source_indices(rows: List[Dict], start: int = 0) -> List[Dict]:
 
 
 def _dedup_by_source_index(rows: List[Dict]) -> List[Dict]:
-    """
-    Безопасная дедупликация: убирает только полные дубликаты,
-    у которых совпадает (Дата, Сумма, Контрагент, Описание, _source_index).
-
-    НЕ схлопывает разные транзакции с одинаковыми датой/суммой/описанием —
-    таких в банковских выписках МНОГО (комиссии, повторные платежи).
-
-    Если _source_index не задан — строка НЕ удаляется (защита от потери).
-    """
+    """Безопасная дедупликация по (Дата, Сумма, Контрагент, Описание, _source_index)."""
     seen = set()
     result: List[Dict] = []
-    for i, r in enumerate(rows):
+    for r in rows:
         src_idx = r.get('_source_index', None)
         if src_idx is None:
-            # Нет индекса — не схлопываем, оставляем как есть
             r_clean = {k: v for k, v in r.items() if not k.startswith('_source_')}
             result.append(r_clean)
             continue
@@ -89,6 +79,25 @@ def _dedup_by_source_index(rows: List[Dict]) -> List[Dict]:
         r_clean = {k: v for k, v in r.items() if not k.startswith('_source_')}
         result.append(r_clean)
     return result
+
+
+# ==================== ОЧИСТКА PDF-АРТЕФАКТОВ ====================
+
+def _clean_pdf_artifacts(text: str) -> str:
+    """Удаляет типовые PDF-артефакты: <br>, HTML-сущности, CID-мусор."""
+    if not text:
+        return ''
+    s = str(text)
+    s = re.sub(r'<br\s*/?>', ' ', s, flags=re.IGNORECASE)
+    s = re.sub(r'</?[a-zA-Z][^>]{0,50}>', ' ', s)
+    s = re.sub(r'&nbsp;', ' ', s)
+    s = re.sub(r'&amp;', '&', s)
+    s = re.sub(r'&lt;', '<', s)
+    s = re.sub(r'&gt;', '>', s)
+    s = _CID_PATTERN.sub(' ', s)
+    s = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', s)
+    s = re.sub(r'[ \t\u00a0]+', ' ', s)
+    return s.strip()
 
 
 # ==================== НАСТРОЙКА СТРАНИЦЫ ====================
@@ -1548,13 +1557,15 @@ def _is_service_word_line(line: str) -> bool:
         cnt = sum(1 for w in words if w in header_words)
         if cnt >= 2 and cnt >= len(words) - 1:
             return True
-    return False# ==================== PDF-УТИЛИТЫ ====================
+    return False
+
+
+# ==================== PDF-УТИЛИТЫ ====================
 
 _CID_PATTERN = re.compile(r'\(cid:\d+\)')
 
 
 def _text_has_cid_junk(text: str) -> bool:
-    """True, если текст содержит CID-мусор в значительном количестве."""
     if not text:
         return False
     cid_count = len(_CID_PATTERN.findall(text))
@@ -2928,23 +2939,34 @@ def extract_counterparty_smart(description: str,
 
     cp = _to_scalar_str(cp)
     desc = _to_scalar_str(desc)
-    return (cp, desc)# ==================== WISE PDF ====================
+    return (cp, desc)
+
+
+# ==================== WISE PDF (полностью переписан) ====================
 
 def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер Wise PDF.
+
+    Формат: многострочные блоки вида:
+        <описание> <сумма со знаком> <баланс>
+        <дата> | Карта, заканчивающаяся на XXXX | <владелец> | Транзакция: CARD-XXXX
+
+    Работаем через координаты слов и якоря дат, чтобы не склеивать
+    соседние операции и корректно ловить кэшбэк.
+    """
     result: List[Dict] = []
 
-    coord_lines = _pdf_lines_with_coords(file_content)
-    full_text_normal = pdf_all_text(file_content)
-
-    candidate_sources: List[str] = []
-    if coord_lines:
-        candidate_sources.append('\n'.join(coord_lines))
-    if full_text_normal:
-        candidate_sources.append(full_text_normal)
-
-    if not candidate_sources:
+    coord_words = _pdf_words_with_coords(file_content)
+    if not coord_words:
         return result
 
+    # Группируем слова по строкам с сохранением координат
+    words_by_page: Dict[int, List[Dict]] = {}
+    for w in coord_words:
+        words_by_page.setdefault(w['page'], []).append(w)
+
+    # Регулярка для поиска якоря-даты в строке: "30 сентября 2026 г."
     month_alt = (
         r'(?:'
         r'янв|фев|мар|апр|ма[йя]|июн|июл|авг|сен|окт|ноя|дек'
@@ -2955,143 +2977,201 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         r'september|october|november|december'
         r')'
     )
-    date_re = re.compile(
-        rf'(\d{{1,2}}\s+{month_alt}\.?\s+\d{{4}}\s*г?\.?)',
+    date_anchor_re = re.compile(
+        rf'(\d{{1,2}}\s+{month_alt}\.?\s+\d{{4}}\s*г?\.?)\s*\|',
         re.IGNORECASE
     )
-    two_amounts_re = re.compile(
-        r'^(.*?)\s+(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s+(\d[\d\s\u00a0]*[.,]\d{2})\s*$'
+    # Дата в начале строки "30 сентября 2026 г. | Карта..."
+    date_in_line_re = re.compile(
+        rf'(\d{{1,2}}\s+{month_alt}\.?\s+\d{{4}}\s*г?\.?)\s*\|'
+        rf'.*?(?:Карта|Транзакция|Пояснение)',
+        re.IGNORECASE
+    )
+    # Сумма-строка: "Транзакция по карте ... -2,06 1 431,91"
+    amount_tail_re = re.compile(
+        r'(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s+'
+        r'(\d[\d\s\u00a0]*[.,]\d{2})\s*$'
+    )
+    # Одиночная сумма в конце строки
+    single_amount_re = re.compile(
+        r'(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s*$'
     )
 
-    for src_text in candidate_sources:
-        if not src_text:
+    # Собираем строки: каждая строка = список слов с одинаковым top (±2)
+    def _group_words_into_lines(words: List[Dict], y_tol: float = 2.5) -> List[List[Dict]]:
+        if not words:
+            return []
+        sorted_w = sorted(words, key=lambda w: (w['top'], w['x0']))
+        lines: List[List[Dict]] = []
+        current_line: List[Dict] = [sorted_w[0]]
+        current_top = sorted_w[0]['top']
+        for w in sorted_w[1:]:
+            if abs(w['top'] - current_top) <= y_tol:
+                current_line.append(w)
+            else:
+                lines.append(current_line)
+                current_line = [w]
+                current_top = w['top']
+        if current_line:
+            lines.append(current_line)
+        for line in lines:
+            line.sort(key=lambda w: w['x0'])
+        return lines
+
+    # Служебные маркеры
+    skip_markers = [
+        'выписка по', 'создано:', 'владелец счета', 'swift/bic',
+        'wise — это', 'нужна помощь', 'rue du trône', 'brussels',
+        'belgium', 'eur на', 'gb+', 'описание входящие',
+    ]
+
+    # Проходим по страницам
+    for page_num in sorted(words_by_page.keys()):
+        page_words = words_by_page[page_num]
+        lines_words = _group_words_into_lines(page_words)
+        # Каждая строка — список слов, объединяем в строку с координатами
+        line_records: List[Dict] = []
+        for lw in lines_words:
+            text = ' '.join(w['text'] for w in lw)
+            text = _clean_pdf_artifacts(text)
+            if not text:
+                continue
+            top = min(w['top'] for w in lw)
+            line_records.append({'text': text, 'top': top, 'words': lw})
+
+        # Якоря — строки, содержащие "| Карта, заканчивающаяся" или "Транзакция:"
+        # но нам нужны строки с датой-описанием.
+        # Идея: идём по строкам, собираем блок от одного якоря-даты до следующего.
+
+        # Сначала найдём индексы строк, содержащих "N сентября 2026 г. |"
+        date_line_indices: List[int] = []
+        for i, lr in enumerate(line_records):
+            if date_in_line_re.search(lr['text']):
+                date_line_indices.append(i)
+
+        if not date_line_indices:
             continue
-        src_text = _CID_PATTERN.sub(' ', src_text)
-        src_text = re.sub(r'[ \t]+', ' ', src_text)
-        raw_lines = [l.rstrip() for l in src_text.split('\n') if l.strip()]
-        if not raw_lines:
-            continue
 
-        current_date = None
-        pending_desc_parts: List[str] = []
-        local_result: List[Dict] = []
+        # Блок — от date_line_indices[i] до date_line_indices[i+1] (или конца)
+        blocks: List[Tuple[int, int]] = []
+        for i, idx in enumerate(date_line_indices):
+            start = idx
+            end = date_line_indices[i + 1] if i + 1 < len(date_line_indices) else len(line_records)
+            blocks.append((start, end))
 
-        def _clean_desc_text(d: str) -> str:
-            d = date_re.sub(' ', d)
-            d = re.sub(r'Карта,\s*заканчивающаяся\s+на\s+\d+', ' ', d)
-            d = re.sub(r'Транзакция:\s*[A-Z0-9\-_]+', ' ', d)
-            d = re.sub(r'Пояснение:\s*[^|]+', ' ', d)
-            d = re.sub(r'\s+', ' ', d).strip(' .,;:-|')
-            return d
+        # В Wise блоки идут в порядке: описание+сумма СНАЧАЛА, потом дата-строка.
+        # Но иногда дата-строка идёт первой (для крупных описаний).
+        # Мы будем обрабатывать блоки: для каждого блока сначала попробуем найти
+        # сумму в строках блока (кроме дата-строки), а описание — текст до суммы.
+        # Если не получилось — попробуем предыдущий блок.
 
-        for i, line in enumerate(raw_lines):
-            line_s = line.strip()
-            if not line_s:
+        # Более надёжный подход: соберём все "операционные" куски как пары
+        # (сумма, описание). Описание — строки между дата-строкой и следующей
+        # дата-строкой. Но сумма обычно ПЕРЕД дата-строкой.
+
+        # Давайте восстановим последовательность: для каждого date_line_idx
+        # возьмём строки СНАЧАЛА — все строки между предыдущей date-строкой и текущей.
+        # Среди них найдём строку с двумя суммами (описание+сумма+баланс).
+        # Если нашли — это описание транзакции.
+
+        prev_date_idx = -1
+        for di, date_idx in enumerate(date_line_indices):
+            date_line = line_records[date_idx]['text']
+            dm = date_in_line_re.search(date_line)
+            if not dm:
+                continue
+            date_str = dm.group(1)
+            date = parse_date(date_str, account_name=account_name)
+            if not date:
                 continue
 
-            low = line_s.lower()
+            # Ищем строку с суммой в диапазоне (prev_date_idx+1 .. date_idx-1)
+            # Если такой нет — ищем в (date_idx+1 .. next_date_idx-1)
+            candidate_range_start = prev_date_idx + 1
+            candidate_range_end = date_idx
+            amount_line = None
+            amount_value = None
+            desc_parts: List[str] = []
+            found = False
 
-            if any(w in low for w in [
-                'описание входящие исходящие сумма',
-                'eur на', 'создано:', 'владелец счета',
-                'wise — это коммерческое', 'нужна помощь',
-                'rue du trône', 'brussels', 'belgium',
-                'swift/bic', 'выписка по eur',
-                'gb+',
-            ]):
-                continue
-            if re.fullmatch(r'описание\s+входящие\s+исходящие\s+сумма', low):
-                continue
-            if re.fullmatch(r'\d[\d\s\u00a0]*[.,]\d{2}\s*eur\s*', low):
-                continue
-            if _is_service_line(line_s):
-                continue
-
-            dm = date_re.search(line_s)
-            if dm:
-                d = parse_date(dm.group(1), account_name=account_name)
-                if d:
-                    current_date = d
-
-            m2 = two_amounts_re.match(line_s)
-            if m2:
-                desc_part = m2.group(1).strip()
-                amt_str = m2.group(2)
-                amt = parse_amount(amt_str)
-                if amt == 0.0:
+            # Сначала попробуем строки ДО даты
+            for j in range(candidate_range_start, candidate_range_end):
+                txt = line_records[j]['text']
+                if any(m in txt.lower() for m in skip_markers):
                     continue
-
-                op_date = None
-                if dm:
-                    op_date = parse_date(dm.group(1), account_name=account_name)
-                if not op_date:
-                    op_date = current_date
-                if not op_date:
-                    for j in range(max(0, i - 5), i):
-                        dm2 = date_re.search(raw_lines[j])
-                        if dm2:
-                            op_date = parse_date(
-                                dm2.group(1), account_name=account_name
-                            )
-                            if op_date:
-                                break
-                if not op_date:
-                    continue
-
-                desc_clean = _clean_desc_text(desc_part)
-                if pending_desc_parts:
-                    desc_clean = (' '.join(pending_desc_parts) + ' ' + desc_clean).strip()
-                if not desc_clean:
-                    desc_clean = 'Wise'
-
-                low_desc = desc_clean.lower()
-                if amt > 0 and any(w in low_desc for w in [
-                    'транзакция по карте', 'списана', 'отправлено',
-                    'card payment', 'sent'
-                ]):
-                    amt = -abs(amt)
-                if any(w in low_desc for w in [
-                    'получено', 'поступление', 'зачисление',
-                    'money received', 'money added', 'refund', 'кэшбэк'
-                ]):
-                    amt = abs(amt)
-
-                cp_final, _ = extract_counterparty_smart(desc_clean, account_name)
-                if not cp_final:
-                    cp_final = 'Wise'
-
-                local_result.append({
-                    'Дата': op_date,
-                    'Сумма': amt,
-                    'Контрагент': cp_final,
-                    'Наименование счета': account_name,
-                    'Описание': desc_clean
-                })
-                pending_desc_parts = []
-                continue
-
-            if dm:
-                continue
-
-            cleaned_line = _clean_desc_text(line_s)
-            if cleaned_line and len(cleaned_line) > 3:
-                if re.search(r'Карта,\s*заканчивающаяся\s+на\s+\d+', cleaned_line):
-                    stripped = re.sub(
-                        r'Карта,\s*заканчивающаяся\s+на\s+\d+', '',
-                        cleaned_line
-                    ).strip()
-                    if len(stripped) < 5:
+                mt = amount_tail_re.search(txt)
+                if mt:
+                    amount_line = txt
+                    amount_value = parse_amount(mt.group(1))
+                    # Описание — весь текст до первой суммы
+                    desc_part = txt[:mt.start()].strip()
+                    if desc_part:
+                        desc_parts = [desc_part]
+                    found = True
+                    break
+            # Если не нашли — ищем ПОСЛЕ даты (в пределах до следующей даты)
+            if not found:
+                next_date_idx = date_line_indices[di + 1] if di + 1 < len(date_line_indices) else len(line_records)
+                for j in range(date_idx + 1, next_date_idx):
+                    txt = line_records[j]['text']
+                    if any(m in txt.lower() for m in skip_markers):
                         continue
-                pending_desc_parts.append(cleaned_line)
+                    mt = amount_tail_re.search(txt)
+                    if mt:
+                        amount_line = txt
+                        amount_value = parse_amount(mt.group(1))
+                        desc_part = txt[:mt.start()].strip()
+                        if desc_part:
+                            desc_parts = [desc_part]
+                        found = True
+                        break
 
-        if len(local_result) > len(result):
-            result = local_result
+            if not found or amount_value is None:
+                prev_date_idx = date_idx
+                continue
 
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+            if amount_value == 0.0 or not _is_reasonable_amount(amount_value):
+                prev_date_idx = date_idx
+                continue
+
+            # Собираем остальные описательные строки: если найдены в блоке до даты,
+            # добавим остальные строки из блока в обратном порядке как доп. описание
+            # (обычно их нет, но бывает "Получено от X с пояснением").
+            # В нашем случае проще: описание = desc_parts[0].
+
+            desc_clean = ' '.join(desc_parts).strip()
+            desc_clean = re.sub(r'\s+', ' ', desc_clean)
+
+            # Определяем знак:
+            # если в описании "Кэшбэк" или "Получено от" или "Пополнение" — положительный
+            # иначе — как в сумме
+            low_desc = desc_clean.lower()
+            if 'кэшбэк' in low_desc or 'получено от' in low_desc or \
+               'пополнение' in low_desc or 'money received' in low_desc:
+                amount_value = abs(amount_value)
+            else:
+                amount_value = -abs(amount_value)
+
+            # Извлекаем контрагента
+            cp_final, _ = extract_counterparty_smart(desc_clean, account_name)
+            if not cp_final:
+                cp_final = 'Wise'
+
+            result.append({
+                'Дата': date,
+                'Сумма': amount_value,
+                'Контрагент': cp_final,
+                'Наименование счета': account_name,
+                'Описание': desc_clean,
+                '_source_index': len(result),
+            })
+            prev_date_idx = date_idx
+
+    result = _dedup_by_source_index(result)
+    return result
 
 
-# ==================== N26 PDF ====================
+# ==================== N26 PDF (исправлен Metal Membership) ====================
 
 def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result: List[Dict] = []
@@ -3110,6 +3190,7 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
     best: List[Dict] = []
 
+    # N26 Metal Membership: "N26 N26 Metal Membership Fecha de valor 27.09.2026 27.09.2026 -16,90€"
     fecha_pattern = re.compile(
         r'^(.*?)'
         r'\s+Fecha\s+de\s+valor\s+(\d{2}\.\d{2}\.\d{4})'
@@ -3119,6 +3200,7 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         re.IGNORECASE
     )
 
+    # Без "Fecha de valor": "Описание 27.09.2026 -16,90€"
     no_fecha_pattern = re.compile(
         r'^(.*?)'
         r'\s+(\d{2}\.\d{2}\.\d{4})'
@@ -3131,15 +3213,15 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         'saldo previo', 'tu nuevo saldo', 'nuevo saldo',
         'transacciones salientes', 'transacciones entrantes',
         'descripción', 'fecha de reserva', 'cantidad',
-        'emitido en', 'iban:', 'bic:', 'saida mammadbayli',
-        'malaga', 'benahavis', 'hasta', 'nº 06/2026',
-        'no 06/2026', 'n° 06/2026',
+        'emitido en', 'iban:', 'bic:', 'nº 06/2026',
+        'no 06/2026', 'n° 06/2026', 'hasta',
     ]
 
     for src_text in sources:
         if not src_text:
             continue
         src_text = _CID_PATTERN.sub(' ', src_text)
+        src_text = _clean_pdf_artifacts(src_text)
         src_text = re.sub(r'[ \t]+', ' ', src_text)
         lines = [l.strip() for l in src_text.split('\n') if l.strip()]
         if not lines:
@@ -3183,7 +3265,10 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if not date or amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
 
+            # Membership / subscription / fees — отрицательные
             if 'membership' in desc.lower() and amount > 0:
+                amount = -abs(amount)
+            if ('fee' in desc.lower() or 'subscription' in desc.lower()) and amount > 0:
                 amount = -abs(amount)
 
             desc_clean = re.sub(r'^N26\s+', '', desc, flags=re.IGNORECASE)
@@ -3206,93 +3291,18 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
-                'Описание': desc_clean
+                'Описание': desc_clean,
+                '_source_index': len(local),
             })
 
         if len(local) > len(best):
             best = local
 
-    best = _assign_source_indices(best)
-    return _dedup_by_source_index(best)
+    best = _dedup_by_source_index(best)
+    return best
 
 
-def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
-    full_text = docx_all_text(file_content)
-    if not full_text:
-        return []
-    result: List[Dict] = []
-
-    pattern = re.compile(
-        r'([A-Za-z0-9][^\n]{3,500}?)'
-        r'(?:Fecha de valor\s+)?'
-        r'(\d{2}\.\d{2}\.\d{4})'
-        r'(?:\s+(\d{2}\.\d{2}\.\d{4}))?'
-        r'\s+'
-        r'(-?[\dOoОoEeSsBbZz|][\dOoОoEeSsBbZz|.,\s\u00a0]*?)'
-        r'\s*€',
-        re.MULTILINE
-    )
-    for m in pattern.finditer(full_text):
-        try:
-            desc = re.sub(r'\s+', ' ', m.group(1)).strip()
-            date = parse_date(m.group(2), account_name=account_name)
-            amount = parse_amount(m.group(4))
-            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-                continue
-            low = desc.lower()
-            if any(w in low for w in ['saldo previo', 'nuevo saldo', 'transacciones']):
-                continue
-            if 'membership' in low and amount > 0:
-                amount = -abs(amount)
-            if _is_service_line(desc):
-                continue
-            cp_final, _ = extract_counterparty_smart(desc, account_name)
-            if not cp_final:
-                cp_final = 'N26'
-            result.append({
-                'Дата': date, 'Сумма': amount,
-                'Контрагент': cp_final,
-                'Наименование счета': account_name,
-                'Описание': desc
-            })
-        except Exception:
-            continue
-
-    if not result:
-        pattern2 = re.compile(
-            r'(n26[^\n]{3,300}?)'
-            r'(\d{2}\.\d{2}\.\d{4})'
-            r'\s+'
-            r'(-?[\dOoОoEeSsBbZz|][\dOoОoEeSsBbZz|.,\s\u00a0]*?)'
-            r'\s*€',
-            re.IGNORECASE
-        )
-        for m in pattern2.finditer(full_text):
-            try:
-                desc = re.sub(r'\s+', ' ', m.group(1)).strip()
-                date = parse_date(m.group(2), account_name=account_name)
-                amount = parse_amount(m.group(3))
-                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-                    continue
-                if 'membership' in desc.lower() and amount > 0:
-                    amount = -abs(amount)
-                cp_final, _ = extract_counterparty_smart(desc, account_name)
-                if not cp_final:
-                    cp_final = 'N26'
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp_final,
-                    'Наименование счета': account_name,
-                    'Описание': desc
-                })
-            except Exception:
-                continue
-
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
-
-
-# ==================== PAYSERA PDF ====================
+# ==================== PAYSERA PDF (исправлен) ====================
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result: List[Dict] = []
@@ -3326,7 +3336,7 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     )
 
     purpose_re = re.compile(
-        r'(?:Purpose\s+of\s+payment|Назначение\s+платежа)\s*:\s*(.*?)(?:\n|$)',
+        r'(?:Purpose\s+of\s+payment|Назначение\s+платежа)\s*:\s*(.*?)(?:\n|\.|Transfer|Commission\s+fee|$)',
         re.IGNORECASE
     )
 
@@ -3335,7 +3345,7 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     for full_text in sources:
         if not full_text:
             continue
-        full_text = _CID_PATTERN.sub(' ', full_text)
+        full_text = _clean_pdf_artifacts(full_text)
         full_text = re.sub(r'[ \t]+', ' ', full_text)
 
         lines = full_text.split('\n')
@@ -3371,9 +3381,13 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             first_amt = amount_re.search(window)
             recipient_zone = window[:first_amt.start()] if first_amt else window[:500]
 
+            # Чистим получателя от дат/номеров/IBAN
             recipient_zone = re.sub(
                 r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(\s+[+\-]\d{4})?',
                 ' ', recipient_zone
+            )
+            recipient_zone = re.sub(
+                r'\b\d{2}:\d{2}:\d{2}\b', ' ', recipient_zone
             )
             recipient_zone = re.sub(
                 r'\b(?:Statement|No\.?|Payment\s*ID|Recipient\s*/\s*Payer\s*\(Code\)|'
@@ -3403,8 +3417,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 else:
                     if '-' in raw_amt:
                         amount = -abs(amount)
-                    elif raw_amt.strip().startswith('+'):
-                        amount = abs(amount)
                     else:
                         amount = abs(amount)
 
@@ -3418,21 +3430,26 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 purpose if purpose else cp, account_name, cp, '', cp
             )
             if not cp_final:
-                cp_final = cp if cp else 'Paysera'
+                # Для Commission fee — всегда Paysera LT
+                if 'commission' in a['type'].lower():
+                    cp_final = 'Paysera LT'
+                else:
+                    cp_final = cp if cp else 'Paysera'
 
             local.append({
                 'Дата': a['date'],
                 'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
-                'Описание': purpose if purpose else cp
+                'Описание': purpose if purpose else cp,
+                '_source_index': len(local),
             })
 
         if len(local) > len(best_result):
             best_result = local
 
-    best_result = _assign_source_indices(best_result)
-    return _dedup_by_source_index(best_result)
+    best_result = _dedup_by_source_index(best_result)
+    return best_result
 
 
 # ==================== PAYSERA DOCX ====================
@@ -3519,6 +3536,7 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
             r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(\s+[+\-]\d{4})?',
             ' ', recipient_zone
         )
+        recipient_zone = re.sub(r'\b\d{2}:\d{2}:\d{2}\b', ' ', recipient_zone)
         recipient_zone = re.sub(r'\b\d{6,}\b', ' ', recipient_zone)
         recipient_zone = re.sub(r'\b[A-Z]{2}\d{2}[A-Z0-9]{8,}\b', ' ', recipient_zone)
         recipient_zone = re.sub(r'\(?\s*EVP\d+\s*\)?', ' ', recipient_zone)
@@ -3556,18 +3574,22 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
             purpose if purpose else cp, account_name, cp, '', cp
         )
         if not cp_final:
-            cp_final = cp if cp else 'Paysera'
+            if 'commission' in a['type'].lower():
+                cp_final = 'Paysera LT'
+            else:
+                cp_final = cp if cp else 'Paysera'
 
         result.append({
             'Дата': a['date'],
             'Сумма': amount,
             'Контрагент': cp_final,
             'Наименование счета': account_name,
-            'Описание': purpose if purpose else cp
+            'Описание': purpose if purpose else cp,
+            '_source_index': len(result),
         })
 
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 def _parse_paysera_docx_fallback(full_text: str, account_name: str) -> List[Dict]:
@@ -3600,28 +3622,32 @@ def _parse_paysera_docx_fallback(full_text: str, account_name: str) -> List[Dict
             'Сумма': amount,
             'Контрагент': cp_final if cp_final else 'Paysera',
             'Наименование счета': account_name,
-            'Описание': recipient_zone
+            'Описание': recipient_zone,
+            '_source_index': len(result),
         })
-    result = _assign_source_indices(result)
     return _dedup_by_source_index(result)
 
 
-# ==================== REVOLUT PDF ====================
+# ==================== REVOLUT PDF (полностью переписан) ====================
 
 def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер Revolut PDF. Использует координаты слов и табличную структуру.
+    Формат страницы:
+        Дата (UTC) | Описание | Расходы | Прибыль | Баланс
+        6 сент. 2026 | FEE | Комиссия Revolut Business • Комиссия за план Basic | €10.00 | €3 912.63
+    """
     result: List[Dict] = []
 
-    coord_lines = _pdf_lines_with_coords(file_content)
-    normal_text = pdf_all_text(file_content)
+    coord_words = _pdf_words_with_coords(file_content)
+    if not coord_words:
+        # fallback на текстовый парсер
+        return _parse_revolut_pdf_text_fallback(file_content, account_name)
 
-    sources: List[str] = []
-    if coord_lines:
-        sources.append('\n'.join(coord_lines))
-    if normal_text:
-        sources.append(normal_text)
-
-    if not sources:
-        return result
+    # Группируем по страницам
+    words_by_page: Dict[int, List[Dict]] = {}
+    for w in coord_words:
+        words_by_page.setdefault(w['page'], []).append(w)
 
     month_alt = (
         r'(?:'
@@ -3637,8 +3663,8 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         r')'
     )
     date_re = re.compile(
-        rf'(\d{{1,2}}\s+{month_alt}\.?\s+\d{{4}})\s+(.*)$',
-        re.IGNORECASE | re.MULTILINE
+        rf'^(\d{{1,2}}\s+{month_alt}\.?\s+\d{{4}})\s+(.*)$',
+        re.IGNORECASE
     )
     type_re = re.compile(r'\b(MOA|MOS|MOR|FEE|CAR|ATM|EXO|EXI|TOPUP|TRANSFER)\b')
     eur_re = re.compile(
@@ -3673,137 +3699,171 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         'получите помощь', 'отсканируйте qr-код',
     ]
 
+    def _group_words_into_lines(words: List[Dict], y_tol: float = 2.5) -> List[List[Dict]]:
+        if not words:
+            return []
+        sorted_w = sorted(words, key=lambda w: (w['top'], w['x0']))
+        lines: List[List[Dict]] = []
+        current_line: List[Dict] = [sorted_w[0]]
+        current_top = sorted_w[0]['top']
+        for w in sorted_w[1:]:
+            if abs(w['top'] - current_top) <= y_tol:
+                current_line.append(w)
+            else:
+                lines.append(current_line)
+                current_line = [w]
+                current_top = w['top']
+        if current_line:
+            lines.append(current_line)
+        for line in lines:
+            line.sort(key=lambda w: w['x0'])
+        return lines
+
     best: List[Dict] = []
 
-    for src_text in sources:
-        if not src_text:
-            continue
-        src_text = _CID_PATTERN.sub(' ', src_text)
-        src_text = re.sub(r'[ \t]+', ' ', src_text)
-        lines = [l.rstrip() for l in src_text.split('\n') if l.strip()]
+    for page_num in sorted(words_by_page.keys()):
+        page_words = words_by_page[page_num]
+        lines_words = _group_words_into_lines(page_words)
 
+        line_records: List[Dict] = []
+        for lw in lines_words:
+            text = ' '.join(w['text'] for w in lw)
+            text = _clean_pdf_artifacts(text)
+            if not text:
+                continue
+            top = min(w['top'] for w in lw)
+            line_records.append({'text': text, 'top': top, 'words': lw})
+
+        # Ищем строки-операции: содержат дату типа "6 сент. 2026" и далее описание
         operations: List[Dict] = []
-        current: Optional[Dict] = None
-
-        for line in lines:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            low = stripped.lower()
-
-            dm = date_re.search(stripped)
-            if dm:
-                if current is not None:
-                    operations.append(current)
-                current = {
-                    'date_str': dm.group(1),
-                    'after': dm.group(2).strip(),
-                    'continuation': [],
-                }
-                continue
-
-            if current is None:
-                continue
-
+        for lr in line_records:
+            text = lr['text']
+            low = text.lower()
             if any(m in low for m in skip_markers):
                 continue
-            if re.fullmatch(r'[\s€0.,]+', stripped):
-                continue
-            if re.fullmatch(r'€\s?0[.,]00', stripped):
-                continue
-            current['continuation'].append(stripped)
-
-        if current is not None:
-            operations.append(current)
-
-        local_result: List[Dict] = []
-
-        for op in operations:
-            date = parse_date(op['date_str'], account_name=account_name)
-            if not date:
-                continue
-
-            after = op['after']
-            tm = type_re.search(after)
-            ttype = ''
-            if tm:
-                ttype = tm.group(1)
-                after = after[tm.end():].strip()
-
-            eur_matches = list(eur_re.finditer(after))
-            if eur_matches:
-                amount_match = eur_matches[0]
-                amount = parse_amount(amount_match.group(0))
+            dm = date_re.match(text)
+            if dm:
+                date_str = dm.group(1)
+                rest = dm.group(2).strip()
+                # Убираем тип операции
+                tm = type_re.search(rest)
+                ttype = ''
+                if tm:
+                    ttype = tm.group(1)
+                    rest = rest[tm.end():].strip()
+                # Ищем первую сумму EUR
+                amt_matches = list(eur_re.finditer(rest))
+                if not amt_matches:
+                    continue
+                am = amt_matches[0]
+                amount = parse_amount(am.group(0))
                 if amount == 0.0 or not _is_reasonable_amount(amount):
                     continue
-                desc_main = after[:amount_match.start()].strip()
-                cont_filtered: List[str] = []
-                for c in op['continuation']:
-                    if eur_re.search(c):
-                        first_in_c = eur_re.search(c)
-                        head = c[:first_in_c.start()].strip()
-                        if head and not re.fullmatch(r'[\s€0.,]+', head):
-                            cont_filtered.append(head)
-                        break
-                    if re.fullmatch(r'[\s€0.,]+', c):
-                        continue
-                    c_low = c.lower()
-                    if any(m in c_low for m in skip_markers):
-                        continue
-                    cont_filtered.append(c)
-            else:
-                nums = re.findall(r'-?\s?\d[\d\s\u00a0]*[.,]\d{2}', after)
-                if not nums:
-                    joined_cont = ' '.join(op['continuation'])
-                    nums = re.findall(r'-?\s?\d[\d\s\u00a0]*[.,]\d{2}', joined_cont)
-                    if not nums:
-                        continue
-                    amount = parse_amount(nums[0])
-                    desc_main = after.strip()
-                    cont_filtered = op['continuation']
-                else:
-                    amount = parse_amount(nums[0])
-                    desc_main = after
-                    for n in nums:
-                        desc_main = desc_main.replace(n, '')
-                    desc_main = re.sub(r'\s+', ' ', desc_main).strip()
-                    cont_filtered = op['continuation']
-
-                if amount == 0.0 or not _is_reasonable_amount(amount):
-                    continue
-
-            parts = [desc_main] + cont_filtered
-            desc = ' '.join(p for p in parts if p)
-            desc = re.sub(r'\s+', ' ', desc).strip()
-            desc = desc.strip(' •')
-
-            if ttype in ('MOA', 'MOR', 'TOPUP'):
-                amount = abs(amount)
-            elif ttype in ('MOS', 'FEE', 'CAR', 'ATM', 'EXO'):
-                amount = -abs(amount)
-            else:
-                low_desc = desc.lower()
-                if 'fee' in low_desc or 'комисс' in low_desc:
+                desc = rest[:am.start()].strip()
+                # Чистим описание от повторяющихся фрагментов
+                desc = re.sub(r'\s+', ' ', desc).strip(' •')
+                # Определяем знак
+                if ttype in ('MOA', 'MOR', 'TOPUP'):
+                    amount = abs(amount)
+                elif ttype in ('MOS', 'FEE', 'CAR', 'ATM', 'EXO'):
                     amount = -abs(amount)
+                else:
+                    low_desc = desc.lower()
+                    if 'fee' in low_desc or 'комисс' in low_desc:
+                        amount = -abs(amount)
+                    else:
+                        amount = -abs(amount)  # по умолчанию расход
+                date = parse_date(date_str, account_name=account_name)
+                if not date:
+                    continue
+                if _is_service_line(desc):
+                    continue
+                cp_final, _ = extract_counterparty_smart(desc, account_name)
+                operations.append({
+                    'Дата': date,
+                    'Сумма': amount,
+                    'Контрагент': cp_final if cp_final else '',
+                    'Наименование счета': account_name,
+                    'Описание': desc,
+                    '_source_index': len(operations),
+                })
 
-            if _is_service_line(desc):
-                continue
+        if len(operations) > len(best):
+            best = operations
 
-            cp_final, _ = extract_counterparty_smart(desc, account_name)
+    if not best:
+        return _parse_revolut_pdf_text_fallback(file_content, account_name)
 
-            local_result.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': cp_final if cp_final else '',
-                'Наименование счета': account_name,
-                'Описание': desc
-            })
+    best = _dedup_by_source_index(best)
+    return best
 
-        if len(local_result) > len(best):
-            best = local_result
 
-    best = _assign_source_indices(best)
-    return _dedup_by_source_index(best)
+def _parse_revolut_pdf_text_fallback(file_content: bytes, account_name: str) -> List[Dict]:
+    """Текстовый fallback для Revolut PDF, если координатный парсер не сработал."""
+    result: List[Dict] = []
+    full_text = pdf_all_text(file_content)
+    if not full_text:
+        return result
+    full_text = _clean_pdf_artifacts(full_text)
+
+    month_alt = (
+        r'(?:'
+        r'янв|фев|мар|апр|ма[йя]|июн|июл|авг|сен|окт|ноя|дек'
+        r'|января|февраля|марта|апреля|мая|июня|июля|августа|'
+        r'сентября|октября|ноября|декабря'
+        r'|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec'
+        r'|january|february|march|april|june|july|august|'
+        r'september|october|november|december'
+        r'|led|úno|bře|dub|kvě|čvn|čvc|srp|zář|říj|lis|pro'
+        r')'
+    )
+    date_re = re.compile(
+        rf'(\d{{1,2}}\s+{month_alt}\.?\s+\d{{4}})\s+(.*?)$',
+        re.IGNORECASE | re.MULTILINE
+    )
+    type_re = re.compile(r'\b(MOA|MOS|MOR|FEE|CAR|ATM|EXO|EXI|TOPUP|TRANSFER)\b')
+    eur_re = re.compile(
+        r'(-?\s?€\s?\d[\d\s\u00a0]*[.,]\d{2}|-?\d[\d\s\u00a0]*[.,]\d{2}\s?€)'
+    )
+
+    for m in date_re.finditer(full_text):
+        date = parse_date(m.group(1), account_name=account_name)
+        if not date:
+            continue
+        rest = m.group(2).strip()
+        tm = type_re.search(rest)
+        ttype = ''
+        if tm:
+            ttype = tm.group(1)
+            rest = rest[tm.end():].strip()
+        amt_matches = list(eur_re.finditer(rest))
+        if not amt_matches:
+            continue
+        am = amt_matches[0]
+        amount = parse_amount(am.group(0))
+        if amount == 0.0 or not _is_reasonable_amount(amount):
+            continue
+        desc = rest[:am.start()].strip()
+        desc = re.sub(r'\s+', ' ', desc).strip(' •')
+        if ttype in ('MOA', 'MOR', 'TOPUP'):
+            amount = abs(amount)
+        elif ttype in ('MOS', 'FEE', 'CAR', 'ATM', 'EXO'):
+            amount = -abs(amount)
+        else:
+            if 'fee' in desc.lower() or 'комисс' in desc.lower():
+                amount = -abs(amount)
+        if _is_service_line(desc):
+            continue
+        cp_final, _ = extract_counterparty_smart(desc, account_name)
+        result.append({
+            'Дата': date,
+            'Сумма': amount,
+            'Контрагент': cp_final if cp_final else '',
+            'Наименование счета': account_name,
+            'Описание': desc,
+            '_source_index': len(result),
+        })
+    return _dedup_by_source_index(result)
 
 
 # ==================== UNICREDIT PDF ====================
@@ -3924,7 +3984,8 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
-                'Описание': desc_full
+                'Описание': desc_full,
+                '_source_index': len(result),
             })
             i = j
 
@@ -3974,13 +4035,14 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                         'Дата': date, 'Сумма': amount,
                         'Контрагент': cp_final,
                         'Наименование счета': account_name,
-                        'Описание': desc
+                        'Описание': desc,
+                        '_source_index': len(result),
                     })
                 except Exception:
                     continue
 
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict]:
@@ -4061,12 +4123,13 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 def parse_unicredit_b1(file_content, account_name):
@@ -4110,7 +4173,7 @@ def parse_csas_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     for src_text in sources:
         if not src_text:
             continue
-        src_text = _CID_PATTERN.sub(' ', src_text)
+        src_text = _clean_pdf_artifacts(src_text)
         lines = src_text.split('\n')
 
         start_idx = -1
@@ -4246,7 +4309,8 @@ def parse_csas_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
-                'Описание': desc_full
+                'Описание': desc_full,
+                '_source_index': len(local),
             })
 
             i = j
@@ -4281,11 +4345,12 @@ def parse_csas_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                         'Дата': date, 'Сумма': amount,
                         'Контрагент': cp_final,
                         'Наименование счета': account_name,
-                        'Описание': desc
+                        'Описание': desc,
+                        '_source_index': len(best),
                     })
 
-    best = _assign_source_indices(best)
-    return _dedup_by_source_index(best)
+    best = _dedup_by_source_index(best)
+    return best
 
 
 def parse_jenhor_unelma_csas_pdf(file_content, account_name):
@@ -4323,12 +4388,13 @@ def parse_jenhor_unelma_pdf(file_content: bytes, account_name: str) -> List[Dict
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== KAPITAL BANK SAIDA ====================
@@ -4425,12 +4491,13 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
                 'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
 
     if result:
-        result = _assign_source_indices(result)
-        return _dedup_by_source_index(result)
+        result = _dedup_by_source_index(result)
+        return result
 
     full_text = pdf_all_text(file_content)
     if not full_text:
@@ -4488,11 +4555,12 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
             'Сумма': amount,
             'Контрагент': cp_final,
             'Наименование счета': account_name,
-            'Описание': desc
+            'Описание': desc,
+            '_source_index': len(result),
         })
 
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== MASHREQ PDF ====================
@@ -4527,12 +4595,13 @@ def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
-                    'Описание': desc
+                    'Описание': desc,
+                    '_source_index': len(result),
                 })
             except Exception:
                 continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== MKB PDF ====================
@@ -4586,12 +4655,13 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
-                    'Описание': desc
+                    'Описание': desc,
+                    '_source_index': len(result),
                 })
             except Exception:
                 continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== WIO PDF ====================
@@ -4618,12 +4688,13 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
-                    'Описание': desc
+                    'Описание': desc,
+                    '_source_index': len(result),
                 })
             except Exception:
                 continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== BLUOR PDF ====================
@@ -4664,12 +4735,13 @@ def parse_bluor_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp if cp else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== REGINA ALFA PDF ====================
@@ -4699,12 +4771,13 @@ def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp if cp else '',
                 'Наименование счета': account_name,
-                'Описание': full_desc
+                'Описание': full_desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== TINKOFF PDF ====================
@@ -4736,12 +4809,13 @@ def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp if cp else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== INDUSTRA PDF ====================
@@ -4807,12 +4881,13 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
-                'Описание': desc_full
+                'Описание': desc_full,
+                '_source_index': len(result),
             })
         i = j
 
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 def parse_industra_plavas1(file_content, account_name):
@@ -4824,22 +4899,17 @@ def parse_industra_kl59(file_content, account_name):
 
 
 def parse_industra_an14(file_content, account_name):
-    return parse_industra_pdf(file_content, account_name)# ==================== INDUSTRA XLS/XLSX/CSV ====================
+    return parse_industra_pdf(file_content, account_name)
+
+
+# ==================== INDUSTRA XLS/XLSX/CSV ====================
 
 def parse_industra_xls(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Парсер Excel/CSV-выписок Industra Bank (SIA PĻAVAS 1, AN14, KL59 и др.).
-    Формат: .xls, .xlsx или .csv с колонками:
-        Darījuma datums | Valutēšanas datums | Darījuma numurs | Darījuma reference |
-        Darījuma veids | Saņēmējs / Maksātājs | ... | Informācija par darījumu |
-        Debets(D) | Kredīts(C)
-    Каждая строка — отдельная транзакция. Комиссии идут отдельными строками.
-    ВАЖНО: комиссии -0.36 повторяются, поэтому дедупликация идёт через
-    _source_index (уникальный номер строки), чтобы не потерять повторы.
     """
     result: List[Dict] = []
 
-    # ---------- 1. Читаем Excel (.xls / .xlsx) ----------
     df = None
     if _is_real_xls(file_content):
         try:
@@ -4870,11 +4940,9 @@ def parse_industra_xls(file_content: bytes, account_name: str) -> List[Dict]:
         except Exception:
             df = None
 
-    # ---------- 2. Если Excel не получился — пробуем как CSV ----------
     if df is None or df.empty:
         return _parse_industra_csv_fallback(file_content, account_name)
 
-    # ---------- 3. Ищем строку заголовка ----------
     header_row = -1
     for idx, row in df.iterrows():
         if idx > 60:
@@ -4892,7 +4960,6 @@ def parse_industra_xls(file_content: bytes, account_name: str) -> List[Dict]:
     if header_row == -1:
         return _parse_industra_csv_fallback(file_content, account_name)
 
-    # ---------- 4. Определяем индексы колонок ----------
     hdr_vals = [str(v).strip() if pd.notna(v) else ''
                 for v in df.iloc[header_row].values]
     date_i = -1
@@ -4931,7 +4998,6 @@ def parse_industra_xls(file_content: bytes, account_name: str) -> List[Dict]:
     if desc_i == -1:
         desc_i = 10
 
-    # ---------- 5. Обходим строки с уникальным source_index ----------
     src_idx_counter = 0
     for idx in range(header_row + 1, len(df)):
         row = df.iloc[idx]
@@ -4949,7 +5015,6 @@ def parse_industra_xls(file_content: bytes, account_name: str) -> List[Dict]:
         if not date_raw:
             continue
 
-        # Пропускаем строки с итогами
         joined_row = ' '.join(
             [str(v).strip() if pd.notna(v) else '' for v in row.values]
         ).lower()
@@ -4987,24 +5052,20 @@ def parse_industra_xls(file_content: bytes, account_name: str) -> List[Dict]:
         cp = _get(cp_i)
         desc = _get(desc_i)
 
-        # Пропускаем служебные строки, но НЕ комиссии
         if desc and _is_service_line(desc):
             continue
 
-        # Извлекаем контрагента
         cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
         if not cp_final:
             cp_final = 'Industra Bank'
 
-        # Уникальный source_index для КАЖДОЙ строки —
-        # это сохранит все повторяющиеся комиссии -0.36
         result.append({
             'Дата': date,
             'Сумма': amount,
             'Контрагент': cp_final,
             'Наименование счета': account_name,
             'Описание': desc,
-            '_source_index': src_idx_counter
+            '_source_index': src_idx_counter,
         })
         src_idx_counter += 1
 
@@ -5123,7 +5184,7 @@ def _parse_industra_csv_fallback(file_content: bytes, account_name: str) -> List
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
                 'Описание': desc,
-                '_source_index': src_idx_counter
+                '_source_index': src_idx_counter,
             })
             src_idx_counter += 1
         except Exception:
@@ -5194,15 +5255,16 @@ def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
-                    'Описание': desc
+                    'Описание': desc,
+                    '_source_index': len(result),
                 })
             except Exception:
                 continue
         if result:
-            result = _assign_source_indices(result)
-            return _dedup_by_source_index(result)
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+            result = _dedup_by_source_index(result)
+            return result
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== RAK BANK PDF ====================
@@ -5229,12 +5291,13 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
-                    'Описание': desc
+                    'Описание': desc,
+                    '_source_index': len(result),
                 })
             except Exception:
                 continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== УНИВЕРСАЛЬНЫЕ PDF / XLSX / DOCX ====================
@@ -5291,12 +5354,13 @@ def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
-                    'Описание': desc
+                    'Описание': desc,
+                    '_source_index': len(result),
                 })
             except Exception:
                 continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 def parse_xlsx_universal(file_content: bytes, account_name: str) -> List[Dict]:
@@ -5359,12 +5423,13 @@ def parse_xlsx_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
@@ -5410,13 +5475,14 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
-                    'Описание': desc
+                    'Описание': desc,
+                    '_source_index': len(result),
                 })
             except Exception:
                 continue
     if result:
-        result = _assign_source_indices(result)
-        return _dedup_by_source_index(result)
+        result = _dedup_by_source_index(result)
+        return result
     full_text = docx_all_text(file_content)
     if not full_text:
         return result
@@ -5440,12 +5506,13 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
@@ -5504,12 +5571,13 @@ def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== АБСОЛЮТНЫЙ FALLBACK ====================
@@ -5518,7 +5586,6 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
     """Последний шанс: пробуем извлечь хоть что-то из любого формата."""
     result: List[Dict] = []
 
-    # 1) PDF-таблицы
     tables = pdf_all_tables(file_content)
     for table in tables:
         if not table or len(table) < 2:
@@ -5565,13 +5632,13 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
     if result:
-        result = _assign_source_indices(result)
-        return _dedup_by_source_index(result)
+        result = _dedup_by_source_index(result)
+        return result
 
-    # 2) PDF-текст
     full_text = pdf_all_text(file_content)
     if full_text:
         line_re = re.compile(
@@ -5598,15 +5665,15 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                     'Дата': date, 'Сумма': amt,
                     'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
-                    'Описание': mid
+                    'Описание': mid,
+                    '_source_index': len(result),
                 })
             except Exception:
                 continue
         if result:
-            result = _assign_source_indices(result)
-            return _dedup_by_source_index(result)
+            result = _dedup_by_source_index(result)
+            return result
 
-    # 3) XLSX
     df = read_xlsx(file_content)
     if df is not None and not df.empty:
         for idx, row in df.iterrows():
@@ -5652,13 +5719,13 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         if result:
-            result = _assign_source_indices(result)
-            return _dedup_by_source_index(result)
+            result = _dedup_by_source_index(result)
+            return result
 
-    # 4) Текстовая строка с разделителями
     content = read_text_with_encoding(file_content)
     if content:
         lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -5707,14 +5774,14 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
-                    'Описание': desc
+                    'Описание': desc,
+                    '_source_index': len(result),
                 })
                 break
         if result:
-            result = _assign_source_indices(result)
-            return _dedup_by_source_index(result)
+            result = _dedup_by_source_index(result)
+            return result
 
-    # 5) DOCX
     docx_text = docx_all_text(file_content)
     if docx_text:
         pattern = re.compile(
@@ -5737,13 +5804,14 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                     'Дата': date, 'Сумма': amount,
                     'Контрагент': cp_final if cp_final else '',
                     'Наименование счета': account_name,
-                    'Описание': desc
+                    'Описание': desc,
+                    '_source_index': len(result),
                 })
             except Exception:
                 continue
 
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== ČSOB (CSV/XLSX) ====================
@@ -5815,12 +5883,13 @@ def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
-                'Описание': description
+                'Описание': description,
+                '_source_index': len(transactions),
             })
         except Exception:
             continue
-    transactions = _assign_source_indices(transactions)
-    return _dedup_by_source_index(transactions)
+    transactions = _dedup_by_source_index(transactions)
+    return transactions
 
 
 def parse_dzibik_main_csob(file_content, account_name):
@@ -5860,8 +5929,7 @@ def parse_koruna_strojka_eur_csob(file_content, account_name):
 def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Парсер Revolut CSV/XLSX. Обходит ВСЕ строки исходного файла,
-    присваивая каждой уникальный source_index — это сохраняет все транзакции,
-    включая повторяющиеся TOPUP/TRANSFER/FEE.
+    присваивая каждой уникальный source_index.
     """
     result: List[Dict] = []
     content = read_text_with_encoding(file_content)
@@ -5962,7 +6030,7 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': full_desc,
-                '_source_index': src_idx_counter
+                '_source_index': src_idx_counter,
             })
             src_idx_counter += 1
         except Exception:
@@ -5987,8 +6055,7 @@ def parse_revolut_plavas(file_content, account_name):
 def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Парсер Paysera XLSX/CSV. Обходит ВСЕ строки файла,
-    присваивая каждой уникальный source_index — это сохраняет повторы
-    (например, две операции по 100 EUR в один день).
+    присваивая каждой уникальный source_index.
     """
     result: List[Dict] = []
     df = read_xlsx(file_content, sheet_name='Worksheet')
@@ -6103,7 +6170,7 @@ def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
                 'Описание': desc,
-                '_source_index': src_idx_counter
+                '_source_index': src_idx_counter,
             })
             src_idx_counter += 1
         except Exception:
@@ -6217,12 +6284,13 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp if cp else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 def parse_bsr_bluor_2(file_content, account_name):
@@ -6349,10 +6417,11 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
             'Сумма': amount,
             'Контрагент': cp_final,
             'Наименование счета': account_name,
-            'Описание': desc
+            'Описание': desc,
+            '_source_index': len(result),
         })
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[Dict]:
@@ -6428,10 +6497,11 @@ def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[
             'Дата': date, 'Сумма': amount,
             'Контрагент': cp_final,
             'Наименование счета': account_name,
-            'Описание': desc
+            'Описание': desc,
+            '_source_index': len(result),
         })
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== MASHREQ XLSX ====================
@@ -6523,12 +6593,13 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== MKB (XLS/XLSX) ====================
@@ -6678,13 +6749,14 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                         'Дата': date, 'Сумма': amount,
                         'Контрагент': cp_final if cp_final else '',
                         'Наименование счета': account_name,
-                        'Описание': (f"{ttype} | {desc}" if ttype else desc)
+                        'Описание': (f"{ttype} | {desc}" if ttype else desc),
+                        '_source_index': len(result),
                     })
                 except Exception:
                     continue
             if result:
-                result = _assign_source_indices(result)
-                return _dedup_by_source_index(result)
+                result = _dedup_by_source_index(result)
+                return result
 
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -6759,12 +6831,13 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': (f"{ttype} | {desc}" if ttype else desc)
+                'Описание': (f"{ttype} | {desc}" if ttype else desc),
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 def parse_budapest_eur_mkb(file_content: bytes, account_name: str) -> List[Dict]:
@@ -6837,12 +6910,13 @@ def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': full
+                'Описание': full,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== PASHA BANK XLSX ====================
@@ -6944,12 +7018,13 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== RAK BANK CSV ====================
@@ -6977,12 +7052,13 @@ def parse_rak_bank(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== STALKIN FIO CSV ====================
@@ -7025,12 +7101,13 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== REGINA ALFA XLSX / DOCX ====================
@@ -7093,7 +7170,8 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
                             'Сумма': amt,
                             'Контрагент': cp if cp else '',
                             'Наименование счета': account_name,
-                            'Описание': desc_val
+                            'Описание': desc_val,
+                            '_source_index': len(transactions),
                         })
             current_date = date_val
             current_desc = ''
@@ -7131,10 +7209,11 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
                     'Сумма': amt,
                     'Контрагент': cp if cp else '',
                     'Наименование счета': account_name,
-                    'Описание': desc_val
+                    'Описание': desc_val,
+                    '_source_index': len(transactions),
                 })
-    transactions = _assign_source_indices(transactions)
-    return _dedup_by_source_index(transactions)
+    transactions = _dedup_by_source_index(transactions)
+    return transactions
 
 
 def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]:
@@ -7181,7 +7260,8 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
                             'Сумма': amt,
                             'Контрагент': cp if cp else '',
                             'Наименование счета': account_name,
-                            'Описание': full_desc
+                            'Описание': full_desc,
+                            '_source_index': len(result),
                         })
             state['date'] = None
             state['code'] = ''
@@ -7214,8 +7294,8 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
                         state['amount'] = a_clean.group(1)
         flush()
     if result:
-        result = _assign_source_indices(result)
-        return _dedup_by_source_index(result)
+        result = _dedup_by_source_index(result)
+        return result
     full_text = docx_all_text(file_content)
     if not full_text:
         return []
@@ -7241,12 +7321,13 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp if cp else '',
                 'Наименование счета': account_name,
-                'Описание': full_desc
+                'Описание': full_desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== JENHOR UNELMA CSV / DOCX ====================
@@ -7286,12 +7367,13 @@ def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dict]:
@@ -7401,7 +7483,8 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                 'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
     if not result:
         for para in doc.paragraphs:
@@ -7435,10 +7518,11 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== TINKOFF DOCX ====================
@@ -7502,12 +7586,13 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp if cp else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 # ==================== SAIDA N26 / WISE (CSV/XLSX) ====================
@@ -7544,12 +7629,13 @@ def parse_saida_n26_csv(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+    result = _dedup_by_source_index(result)
+    return result
 
 
 def parse_saida_wise(file_content, account_name):
@@ -7638,17 +7724,20 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': full_desc
+                'Описание': full_desc,
+                '_source_index': len(result),
             })
         except Exception:
             continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)# ==================== МАРШРУТИЗАЦИЯ ПАРСЕРОВ ====================
+    result = _dedup_by_source_index(result)
+    return result
+
+
+# ==================== МАРШРУТИЗАЦИЯ ПАРСЕРОВ ====================
 
 def get_parser_by_ext(account_name: str, ext: str):
     """
     Возвращает (parser, key) для имени счёта и расширения.
-    Порядок: specifical-first, потом общие.
     """
     low = account_name.lower()
     is_kapital_saida = ('kapital' in low) or ('saida' in low and 'azn' in low)
@@ -7662,7 +7751,6 @@ def get_parser_by_ext(account_name: str, ext: str):
     is_industra = ('industra' in low) or ('plavas' in low) \
                   or ('p1 statement' in low) or ('kl59' in low)
 
-    # ---------- PDF ----------
     if ext == '.pdf':
         if is_kapital_saida:
             return parse_kapital_saida_pdf, 'kapital_saida_pdf'
@@ -7704,7 +7792,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_pasha_bank_pdf, 'pasha_bank_pdf'
         return parse_pdf_universal, 'pdf_universal'
 
-    # ---------- DOCX ----------
     if ext == '.docx':
         if is_kapital_saida:
             return parse_kapital_saida_xlsx, 'kapital_saida_xlsx'
@@ -7726,7 +7813,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_tinkoff_docx, 'tinkoff_docx'
         return parse_docx_universal, 'docx_universal'
 
-    # ---------- XLSX / XLS ----------
     if ext in ('.xlsx', '.xls'):
         if is_kapital_saida:
             return parse_kapital_saida_xlsx, 'kapital_saida_xlsx'
@@ -7823,7 +7909,6 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_wio_business, 'wio_business'
         return parse_xlsx_universal, 'xlsx_universal'
 
-    # ---------- CSV ----------
     if ext == '.csv':
         if is_kapital_saida:
             return parse_kapital_saida_azn_csv, 'kapital_saida_azn_csv'
@@ -8505,7 +8590,6 @@ def _render_results(result: Dict):
     with c3:
         st.metric("📉 Расходы", format_amount(expense))
 
-    # --- Детализация по счетам (диагностика) ---
     st.markdown("---")
     st.markdown("### 📋 Операции по счетам (диагностика)")
     try:
@@ -8706,7 +8790,10 @@ def _render_results(result: Dict):
     if failed:
         st.warning(f"⚠️ Не удалось обработать: {len(failed)} файлов")
         for f in failed:
-            st.write(f"- {f}")# ==================== AI-АССИСТЕНТ ====================
+            st.write(f"- {f}")
+
+
+# ==================== AI-АССИСТЕНТ ====================
 
 def _render_ai_assistant_tab():
     st.markdown("### 🤖 AI-ассистент (DeepSeek AI)")
@@ -8916,38 +9003,26 @@ def _render_ai_assistant_tab():
 # ==================== SELF-TEST ДЛЯ ДАТ ====================
 
 def _self_test_dates() -> bool:
-    """
-    Проверка разбора дат. Возвращает True, если все тесты пройдены.
-    """
     cases = [
-        # FIO / Stalkin — MM/DD/YYYY
         ('09/04/2026', 'Stalkin_ML2_CZK_FIO', '04-09-2026'),
         ('09/12/2026', 'Stalkin_ML2_CZK_FIO', '12-09-2026'),
         ('09/17/2026', 'Stalkin_ML2_CZK_FIO', '17-09-2026'),
         ('09/20/2026', 'Stalkin_ML2_CZK_FIO', '20-09-2026'),
         ('09/21/2026', 'Stalkin_ML2_CZK_FIO', '21-09-2026'),
         ('09/24/2026', 'Stalkin_ML2_CZK_FIO', '24-09-2026'),
-        # FIO неоднозначная: 12/09 = 9 декабря (MM/DD)
         ('12/09/2026', 'Stalkin_ML2_CZK_FIO', '09-12-2026'),
-        # Не-FIO неоднозначная: 12/09 = 12 сентября (DD/MM)
         ('12/09/2026', 'UniCredit_CZK', '12-09-2026'),
-        # Однозначные по компонентам
         ('17/09/2026', 'UniCredit_CZK', '17-09-2026'),
         ('09/17/2026', 'UniCredit_CZK', '17-09-2026'),
         ('25/12/2026', 'CSOB_CZK', '25-12-2026'),
         ('12/25/2026', 'CSOB_CZK', '25-12-2026'),
-        # Чешский формат
         ('04.09.2026', 'CSOB_CZK', '04-09-2026'),
         ('31.12.2026', 'CSOB_CZK', '31-12-2026'),
-        # ISO
         ('2026-09-04', 'Wise_EUR', '04-09-2026'),
         ('2026-12-31', 'Wise_EUR', '31-12-2026'),
-        # 8 цифр
         ('20260904', 'X', '04-09-2026'),
-        # Текстовые
         ('12 сентября 2026', '', '12-09-2026'),
         ('Sep 12 2026', '', '12-09-2026'),
-        # Excel serial (примерно сентябрь 2026)
         ('46265', '', '07-09-2026'),
     ]
     print("=== SELF-TEST parse_date ===")
