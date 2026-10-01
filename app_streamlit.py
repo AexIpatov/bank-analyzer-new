@@ -1,16 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 app_streamlit.py — Аналитик банковских выписок.
-Полностью переписанная с нуля версия (v3):
-  - КОРРЕКТНЫЙ разбор дат: DD/MM, MM/DD, YYYY-MM-DD, текстовые месяцы
-  - эвристика MM/DD для FIO / Stalkin (американский формат)
-  - координатная реконструкция PDF + устойчивость к склейке таблиц
-  - корректный разбор Paysera (PDF и DOCX-табличная склейка)
-  - корректный разбор N26 (PDF с CID-мусором и DOCX с OCR-ошибками)
-  - жёсткая нормализация сумм вида "16,e0", "-16,e0€"
-  - фильтрация служебных строк и дублирующихся ячеек
-  - DeepSeek AI (перевод, категории, отладка)
-  - ИСПРАВЛЕНО: корректный парсер Industra Bank (.xls/.xlsx/.csv)
+v4: ИСПРАВЛЕНА агрессивная дедупликация, которая теряла легитимные операции.
+    Все парсеры теперь присваивают _source_index каждой строке, и дедупликация
+    идёт по (Дата, Сумма, Контрагент, Описание, source_index) — это сохраняет
+    ВСЕ операции, включая повторяющиеся комиссии Industra, Revolut CSV, Paysera.
 """
 
 import streamlit as st
@@ -46,6 +40,55 @@ try:
 except ImportError:
     _OPENAI_SDK_AVAILABLE = False
     OpenAI = None  # type: ignore
+
+
+# ==================== БЕЗОПАСНАЯ ДЕДУПЛИКАЦИЯ ====================
+
+def _assign_source_indices(rows: List[Dict], start: int = 0) -> List[Dict]:
+    """
+    Присваивает каждой строке уникальный _source_index.
+    Это позволяет дедупликации различать ЛЕГИТИМНЫЕ повторы
+    (например, две одинаковые комиссии -0.36 в Industra)
+    от реальных дубликатов (одна и та же строка файла, попавшая дважды).
+    """
+    for i, r in enumerate(rows):
+        if '_source_index' not in r:
+            r['_source_index'] = start + i
+    return rows
+
+
+def _dedup_by_source_index(rows: List[Dict]) -> List[Dict]:
+    """
+    Безопасная дедупликация: убирает только полные дубликаты,
+    у которых совпадает (Дата, Сумма, Контрагент, Описание, _source_index).
+
+    НЕ схлопывает разные транзакции с одинаковыми датой/суммой/описанием —
+    таких в банковских выписках МНОГО (комиссии, повторные платежи).
+
+    Если _source_index не задан — строка НЕ удаляется (защита от потери).
+    """
+    seen = set()
+    result: List[Dict] = []
+    for i, r in enumerate(rows):
+        src_idx = r.get('_source_index', None)
+        if src_idx is None:
+            # Нет индекса — не схлопываем, оставляем как есть
+            r_clean = {k: v for k, v in r.items() if not k.startswith('_source_')}
+            result.append(r_clean)
+            continue
+        key = (
+            str(r.get('Дата', '')),
+            round(float(r.get('Сумма', 0.0)), 2),
+            str(r.get('Контрагент', '')),
+            str(r.get('Описание', '')),
+            src_idx,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        r_clean = {k: v for k, v in r.items() if not k.startswith('_source_')}
+        result.append(r_clean)
+    return result
 
 
 # ==================== НАСТРОЙКА СТРАНИЦЫ ====================
@@ -3044,16 +3087,8 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if len(local_result) > len(result):
             result = local_result
 
-    seen = set()
-    deduped: List[Dict] = []
-    for r in result:
-        key = (r['Дата'], round(r['Сумма'], 2),
-               r['Контрагент'][:30], r['Описание'][:50])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(r)
-    return deduped
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== N26 PDF ====================
@@ -3177,15 +3212,8 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if len(local) > len(best):
             best = local
 
-    seen = set()
-    deduped: List[Dict] = []
-    for r in best:
-        key = (r['Дата'], round(r['Сумма'], 2), r['Описание'][:50])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(r)
-    return deduped
+    best = _assign_source_indices(best)
+    return _dedup_by_source_index(best)
 
 
 def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
@@ -3259,7 +3287,9 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
                 })
             except Exception:
                 continue
-    return result
+
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== PAYSERA PDF ====================
@@ -3401,16 +3431,8 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if len(local) > len(best_result):
             best_result = local
 
-    seen = set()
-    deduped: List[Dict] = []
-    for r in best_result:
-        key = (r['Дата'], round(r['Сумма'], 2),
-               r['Контрагент'], r['Описание'][:60])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(r)
-    return deduped
+    best_result = _assign_source_indices(best_result)
+    return _dedup_by_source_index(best_result)
 
 
 # ==================== PAYSERA DOCX ====================
@@ -3544,16 +3566,8 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
             'Описание': purpose if purpose else cp
         })
 
-    seen = set()
-    deduped: List[Dict] = []
-    for r in result:
-        key = (r['Дата'], round(r['Сумма'], 2),
-               r['Контрагент'], r['Описание'][:60])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(r)
-    return deduped
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 def _parse_paysera_docx_fallback(full_text: str, account_name: str) -> List[Dict]:
@@ -3588,7 +3602,8 @@ def _parse_paysera_docx_fallback(full_text: str, account_name: str) -> List[Dict
             'Наименование счета': account_name,
             'Описание': recipient_zone
         })
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== REVOLUT PDF ====================
@@ -3787,15 +3802,8 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if len(local_result) > len(best):
             best = local_result
 
-    seen = set()
-    deduped: List[Dict] = []
-    for r in best:
-        key = (r['Дата'], r['Сумма'], r['Контрагент'], r['Описание'])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(r)
-    return deduped
+    best = _assign_source_indices(best)
+    return _dedup_by_source_index(best)
 
 
 # ==================== UNICREDIT PDF ====================
@@ -3971,15 +3979,8 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 except Exception:
                     continue
 
-    seen = set()
-    deduped: List[Dict] = []
-    for r in result:
-        key = (r['Дата'], round(r['Сумма'], 2), r['Описание'])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(r)
-    return deduped
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict]:
@@ -4064,7 +4065,8 @@ def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 def parse_unicredit_b1(file_content, account_name):
@@ -4282,15 +4284,8 @@ def parse_csas_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                         'Описание': desc
                     })
 
-    seen = set()
-    deduped: List[Dict] = []
-    for r in best:
-        key = (r['Дата'], round(r['Сумма'], 2), r['Контрагент'], r['Описание'])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(r)
-    return deduped
+    best = _assign_source_indices(best)
+    return _dedup_by_source_index(best)
 
 
 def parse_jenhor_unelma_csas_pdf(file_content, account_name):
@@ -4332,7 +4327,8 @@ def parse_jenhor_unelma_pdf(file_content: bytes, account_name: str) -> List[Dict
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== KAPITAL BANK SAIDA ====================
@@ -4433,7 +4429,8 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
             })
 
     if result:
-        return result
+        result = _assign_source_indices(result)
+        return _dedup_by_source_index(result)
 
     full_text = pdf_all_text(file_content)
     if not full_text:
@@ -4494,15 +4491,8 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
             'Описание': desc
         })
 
-    seen = set()
-    deduped: List[Dict] = []
-    for r in result:
-        key = (r['Дата'], round(r['Сумма'], 2), r['Контрагент'], r['Описание'])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(r)
-    return deduped
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== MASHREQ PDF ====================
@@ -4541,7 +4531,8 @@ def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 })
             except Exception:
                 continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== MKB PDF ====================
@@ -4599,7 +4590,8 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 })
             except Exception:
                 continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== WIO PDF ====================
@@ -4630,7 +4622,8 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 })
             except Exception:
                 continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== BLUOR PDF ====================
@@ -4675,7 +4668,8 @@ def parse_bluor_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== REGINA ALFA PDF ====================
@@ -4709,7 +4703,8 @@ def parse_regina_alfa_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== TINKOFF PDF ====================
@@ -4745,7 +4740,8 @@ def parse_tinkoff_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== INDUSTRA PDF ====================
@@ -4815,15 +4811,8 @@ def parse_industra_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             })
         i = j
 
-    seen = set()
-    deduped: List[Dict] = []
-    for r in result:
-        key = (r['Дата'], round(r['Сумма'], 2), r['Контрагент'], r['Описание'])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(r)
-    return deduped
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 def parse_industra_plavas1(file_content, account_name):
@@ -4835,10 +4824,7 @@ def parse_industra_kl59(file_content, account_name):
 
 
 def parse_industra_an14(file_content, account_name):
-    return parse_industra_pdf(file_content, account_name)
-
-
-# ==================== INDUSTRA XLS/XLSX/CSV (НОВЫЙ ПАРСЕР) ====================
+    return parse_industra_pdf(file_content, account_name)# ==================== INDUSTRA XLS/XLSX/CSV ====================
 
 def parse_industra_xls(file_content: bytes, account_name: str) -> List[Dict]:
     """
@@ -4848,6 +4834,8 @@ def parse_industra_xls(file_content: bytes, account_name: str) -> List[Dict]:
         Darījuma veids | Saņēmējs / Maksātājs | ... | Informācija par darījumu |
         Debets(D) | Kredīts(C)
     Каждая строка — отдельная транзакция. Комиссии идут отдельными строками.
+    ВАЖНО: комиссии -0.36 повторяются, поэтому дедупликация идёт через
+    _source_index (уникальный номер строки), чтобы не потерять повторы.
     """
     result: List[Dict] = []
 
@@ -4893,8 +4881,7 @@ def parse_industra_xls(file_content: bytes, account_name: str) -> List[Dict]:
             break
         vals = [str(v).strip() if pd.notna(v) else '' for v in row.values]
         joined = ' '.join(vals).lower()
-        has_date = ('darījuma datums' in joined) or ('darījuma datums' in joined) \
-                   or ('darijuma datums' in joined)
+        has_date = ('darījuma datums' in joined) or ('darijuma datums' in joined)
         has_debit = 'debets' in joined or 'debets(d)' in joined
         has_credit = 'kredīts' in joined or 'kredīts(c)' in joined \
                      or 'kredits' in joined
@@ -4944,7 +4931,8 @@ def parse_industra_xls(file_content: bytes, account_name: str) -> List[Dict]:
     if desc_i == -1:
         desc_i = 10
 
-    # ---------- 5. Обходим строки ----------
+    # ---------- 5. Обходим строки с уникальным source_index ----------
+    src_idx_counter = 0
     for idx in range(header_row + 1, len(df)):
         row = df.iloc[idx]
         n = len(row)
@@ -4971,7 +4959,9 @@ def parse_industra_xls(file_content: bytes, account_name: str) -> List[Dict]:
             continue
         if 'konta pārskats' in joined_row or 'konta parskats' in joined_row:
             continue
-        if 'neapmaksāta komisija' in joined_row or 'komisija' == joined_row.strip():
+        if 'neapmaksāta komisija' in joined_row:
+            continue
+        if joined_row.strip() == 'komisija':
             continue
 
         date = parse_date(date_raw, account_name=account_name)
@@ -4997,7 +4987,7 @@ def parse_industra_xls(file_content: bytes, account_name: str) -> List[Dict]:
         cp = _get(cp_i)
         desc = _get(desc_i)
 
-        # Пропускаем служебные строки
+        # Пропускаем служебные строки, но НЕ комиссии
         if desc and _is_service_line(desc):
             continue
 
@@ -5006,24 +4996,19 @@ def parse_industra_xls(file_content: bytes, account_name: str) -> List[Dict]:
         if not cp_final:
             cp_final = 'Industra Bank'
 
+        # Уникальный source_index для КАЖДОЙ строки —
+        # это сохранит все повторяющиеся комиссии -0.36
         result.append({
             'Дата': date,
             'Сумма': amount,
             'Контрагент': cp_final,
             'Наименование счета': account_name,
-            'Описание': desc
+            'Описание': desc,
+            '_source_index': src_idx_counter
         })
+        src_idx_counter += 1
 
-    # ---------- 6. Дедупликация ----------
-    seen = set()
-    deduped: List[Dict] = []
-    for r in result:
-        key = (r['Дата'], round(r['Сумма'], 2), r['Контрагент'], r['Описание'])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(r)
-    return deduped
+    return _dedup_by_source_index(result)
 
 
 def _parse_industra_csv_fallback(file_content: bytes, account_name: str) -> List[Dict]:
@@ -5048,7 +5033,6 @@ def _parse_industra_csv_fallback(file_content: bytes, account_name: str) -> List
         return []
 
     sample = lines[header_idx]
-    # Определяем разделитель
     sep = '\t' if '\t' in sample else (';' if ';' in sample else ',')
     hdr = _split_line(sample, sep)
 
@@ -5088,6 +5072,7 @@ def _parse_industra_csv_fallback(file_content: bytes, account_name: str) -> List
     if desc_i == -1:
         desc_i = 10
 
+    src_idx_counter = 0
     for line in lines[header_idx + 1:]:
         parts = _split_line(line, sep)
         if len(parts) <= max(date_i, 0):
@@ -5137,20 +5122,14 @@ def _parse_industra_csv_fallback(file_content: bytes, account_name: str) -> List
                 'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': src_idx_counter
             })
+            src_idx_counter += 1
         except Exception:
             continue
 
-    seen = set()
-    deduped: List[Dict] = []
-    for r in result:
-        key = (r['Дата'], round(r['Сумма'], 2), r['Контрагент'], r['Описание'])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(r)
-    return deduped
+    return _dedup_by_source_index(result)
 
 
 # ==================== PASHA BANK PDF ====================
@@ -5220,8 +5199,10 @@ def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
         if result:
-            return result
-    return result
+            result = _assign_source_indices(result)
+            return _dedup_by_source_index(result)
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== RAK BANK PDF ====================
@@ -5252,7 +5233,11 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 })
             except Exception:
                 continue
-    return result# ==================== УНИВЕРСАЛЬНЫЕ PDF / XLSX / DOCX ====================
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
+
+
+# ==================== УНИВЕРСАЛЬНЫЕ PDF / XLSX / DOCX ====================
 
 def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
     result: List[Dict] = []
@@ -5310,7 +5295,8 @@ def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 })
             except Exception:
                 continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 def parse_xlsx_universal(file_content: bytes, account_name: str) -> List[Dict]:
@@ -5377,7 +5363,8 @@ def parse_xlsx_universal(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
@@ -5428,7 +5415,8 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
     if result:
-        return result
+        result = _assign_source_indices(result)
+        return _dedup_by_source_index(result)
     full_text = docx_all_text(file_content)
     if not full_text:
         return result
@@ -5456,7 +5444,8 @@ def parse_docx_universal(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
@@ -5519,7 +5508,8 @@ def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== АБСОЛЮТНЫЙ FALLBACK ====================
@@ -5578,7 +5568,8 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 'Описание': desc
             })
     if result:
-        return result
+        result = _assign_source_indices(result)
+        return _dedup_by_source_index(result)
 
     # 2) PDF-текст
     full_text = pdf_all_text(file_content)
@@ -5612,7 +5603,8 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
         if result:
-            return result
+            result = _assign_source_indices(result)
+            return _dedup_by_source_index(result)
 
     # 3) XLSX
     df = read_xlsx(file_content)
@@ -5663,7 +5655,8 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 'Описание': desc
             })
         if result:
-            return result
+            result = _assign_source_indices(result)
+            return _dedup_by_source_index(result)
 
     # 4) Текстовая строка с разделителями
     content = read_text_with_encoding(file_content)
@@ -5718,7 +5711,8 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 })
                 break
         if result:
-            return result
+            result = _assign_source_indices(result)
+            return _dedup_by_source_index(result)
 
     # 5) DOCX
     docx_text = docx_all_text(file_content)
@@ -5748,13 +5742,13 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
 
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== ČSOB (CSV/XLSX) ====================
 
 def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
-    """Парсер выписок ČSOB (CSV)."""
     transactions: List[Dict] = []
     content = read_text_with_encoding(file_content)
     lines = [l.rstrip('\r').strip() for l in content.split('\n') if l.strip()]
@@ -5825,7 +5819,8 @@ def parse_csob_generic(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return transactions
+    transactions = _assign_source_indices(transactions)
+    return _dedup_by_source_index(transactions)
 
 
 def parse_dzibik_main_csob(file_content, account_name):
@@ -5863,6 +5858,11 @@ def parse_koruna_strojka_eur_csob(file_content, account_name):
 # ==================== REVOLUT GENERIC (CSV/XLSX) ====================
 
 def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер Revolut CSV/XLSX. Обходит ВСЕ строки исходного файла,
+    присваивая каждой уникальный source_index — это сохраняет все транзакции,
+    включая повторяющиеся TOPUP/TRANSFER/FEE.
+    """
     result: List[Dict] = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -5913,6 +5913,7 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
     if 'state' not in ci:
         ci['state'] = 4
 
+    src_idx_counter = 0
     for line in lines[header + 1:]:
         parts = _split_line(line, sep)
         if len(parts) < 6:
@@ -5960,11 +5961,13 @@ def parse_revolut_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': full_desc
+                'Описание': full_desc,
+                '_source_index': src_idx_counter
             })
+            src_idx_counter += 1
         except Exception:
             continue
-    return result
+    return _dedup_by_source_index(result)
 
 
 def parse_revolut_an14(file_content, account_name):
@@ -5982,6 +5985,11 @@ def parse_revolut_plavas(file_content, account_name):
 # ==================== PAYSERA GENERIC (XLSX/CSV) ====================
 
 def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер Paysera XLSX/CSV. Обходит ВСЕ строки файла,
+    присваивая каждой уникальный source_index — это сохраняет повторы
+    (например, две операции по 100 EUR в один день).
+    """
     result: List[Dict] = []
     df = read_xlsx(file_content, sheet_name='Worksheet')
     if df is None or df.empty:
@@ -6046,6 +6054,7 @@ def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
     if 'type' not in ci:
         ci['type'] = 11
 
+    src_idx_counter = 0
     for idx in range(header_row + 1, len(df)):
         row = df.iloc[idx]
         rv = [x for x in row.values if pd.notna(x)]
@@ -6093,11 +6102,13 @@ def parse_paysera_generic(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': desc
+                'Описание': desc,
+                '_source_index': src_idx_counter
             })
+            src_idx_counter += 1
         except Exception:
             continue
-    return result
+    return _dedup_by_source_index(result)
 
 
 def parse_paysera_baltic_xlsx(file_content, account_name):
@@ -6210,7 +6221,8 @@ def _parse_bluor_csv(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 def parse_bsr_bluor_2(file_content, account_name):
@@ -6277,7 +6289,6 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
     if code_i == -1:
         code_i = 6
 
-    seen_keys = set()
     for idx in range(header_row + 1, len(df)):
         row = df.iloc[idx]
         n = len(row)
@@ -6333,10 +6344,6 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
         cp_final, _ = extract_counterparty_smart(desc, account_name)
         if not cp_final:
             cp_final = 'Kapital Bank'
-        key = (date, round(amount, 2), cp_final, desc)
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
         result.append({
             'Дата': date,
             'Сумма': amount,
@@ -6344,7 +6351,8 @@ def parse_kapital_saida_xlsx(file_content: bytes, account_name: str) -> List[Dic
             'Наименование счета': account_name,
             'Описание': desc
         })
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[Dict]:
@@ -6422,7 +6430,8 @@ def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[
             'Наименование счета': account_name,
             'Описание': desc
         })
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== MASHREQ XLSX ====================
@@ -6518,7 +6527,8 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== MKB (XLS/XLSX) ====================
@@ -6673,7 +6683,8 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                 except Exception:
                     continue
             if result:
-                return result
+                result = _assign_source_indices(result)
+                return _dedup_by_source_index(result)
 
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -6752,7 +6763,8 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 def parse_budapest_eur_mkb(file_content: bytes, account_name: str) -> List[Dict]:
@@ -6829,7 +6841,8 @@ def parse_wio_business(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== PASHA BANK XLSX ====================
@@ -6935,7 +6948,8 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== RAK BANK CSV ====================
@@ -6967,16 +6981,13 @@ def parse_rak_bank(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== STALKIN FIO CSV ====================
 
 def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер выписок FIO banka (Stalkin_ML2_CZK_FIO и др.).
-    КРИТИЧНО: FIO отдаёт CSV с датами в американском формате MM/DD/YYYY.
-    """
     result: List[Dict] = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -7018,7 +7029,8 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== REGINA ALFA XLSX / DOCX ====================
@@ -7121,7 +7133,8 @@ def parse_regina_alfa_xlsx(file_content: bytes, account_name: str) -> List[Dict]
                     'Наименование счета': account_name,
                     'Описание': desc_val
                 })
-    return transactions
+    transactions = _assign_source_indices(transactions)
+    return _dedup_by_source_index(transactions)
 
 
 def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]:
@@ -7201,7 +7214,8 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
                         state['amount'] = a_clean.group(1)
         flush()
     if result:
-        return result
+        result = _assign_source_indices(result)
+        return _dedup_by_source_index(result)
     full_text = docx_all_text(file_content)
     if not full_text:
         return []
@@ -7231,7 +7245,8 @@ def parse_regina_alfa_docx(file_content: bytes, account_name: str) -> List[Dict]
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== JENHOR UNELMA CSV / DOCX ====================
@@ -7275,7 +7290,8 @@ def parse_jenhor_unelma_csv(file_content: bytes, account_name: str) -> List[Dict
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dict]:
@@ -7421,7 +7437,8 @@ def parse_jenhor_unelma_docx(file_content: bytes, account_name: str) -> List[Dic
                 'Наименование счета': account_name,
                 'Описание': desc
             })
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== TINKOFF DOCX ====================
@@ -7489,7 +7506,8 @@ def parse_tinkoff_docx(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 # ==================== SAIDA N26 / WISE (CSV/XLSX) ====================
@@ -7530,7 +7548,8 @@ def parse_saida_n26_csv(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)
 
 
 def parse_saida_wise(file_content, account_name):
@@ -7623,7 +7642,8 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result# ==================== МАРШРУТИЗАЦИЯ ПАРСЕРОВ ====================
+    result = _assign_source_indices(result)
+    return _dedup_by_source_index(result)# ==================== МАРШРУТИЗАЦИЯ ПАРСЕРОВ ====================
 
 def get_parser_by_ext(account_name: str, ext: str):
     """
@@ -8484,6 +8504,19 @@ def _render_results(result: Dict):
         st.metric("📈 Доходы", format_amount(income))
     with c3:
         st.metric("📉 Расходы", format_amount(expense))
+
+    # --- Детализация по счетам (диагностика) ---
+    st.markdown("---")
+    st.markdown("### 📋 Операции по счетам (диагностика)")
+    try:
+        if 'Наименование банка' in df_raw.columns:
+            counts = df_raw.groupby('Наименование банка').size().reset_index(
+                name='Количество операций'
+            )
+            counts = counts.sort_values('Количество операций', ascending=False)
+            st.dataframe(counts, use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.warning(f"Не удалось построить диагностику по счетам: {e}")
 
     st.markdown("---")
     st.markdown("### 🤖 AI-обогащение транзакций (DeepSeek AI)")
