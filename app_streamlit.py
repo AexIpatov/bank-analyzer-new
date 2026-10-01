@@ -10,6 +10,7 @@ app_streamlit.py — Аналитик банковских выписок.
   - жёсткая нормализация сумм вида "16,e0", "-16,e0€"
   - фильтрация служебных строк и дублирующихся ячеек
   - DeepSeek AI (перевод, категории, отладка)
+  - ИСПРАВЛЕНО: корректный парсер Industra Bank (.xls/.xlsx/.csv)
 """
 
 import streamlit as st
@@ -915,21 +916,13 @@ _ALL_MONTHS.update(_MONTHS_ES)
 _ALL_MONTHS.update(_MONTHS_LV)
 
 
-# ---------- Список счетов, где даты идут в формате MM/DD/YYYY ----------
-# FIO banka (ČR) отдаёт CSV/PDF-выписки в американском формате.
-# Для всех остальных банков работает эвристика по компонентам.
 _AMBIGUOUS_US_ACCOUNTS = (
-    'stalkin',           # Stalkin_ML2_CZK_FIO
-    'fio',               # любые FIO-выписки
+    'stalkin',
+    'fio',
 )
 
 
 def _is_ambiguous_us_account(account_name: str) -> bool:
-    """
-    True, если для этого счёта нужно трактовать даты вида DD/MM/YYYY
-    как MM/DD/YYYY (американский формат). Используется как «жёсткий»
-    признак — срабатывает раньше эвристики.
-    """
     if not account_name:
         return False
     low = account_name.lower()
@@ -939,56 +932,25 @@ def _is_ambiguous_us_account(account_name: str) -> bool:
 def _parse_date_components(a: int, b: int, y: str,
                            account_name: str = '',
                            prefer_us: bool = False) -> str:
-    """
-    Разбирает пару (a, b) как (day, month) ИЛИ (month, day).
-
-    Логика:
-      1) Если явно задан prefer_us (американский формат) — a=month, b=day.
-      2) Если a > 12 и b <= 12 — это точно DD/MM.
-      3) Если b > 12 и a <= 12 — это точно MM/DD.
-      4) Если оба <= 12 — используем account_name:
-         - для FIO/Stalkin — MM/DD;
-         - иначе — DD/MM (европейский приоритет).
-      5) Если оба > 12 — дата невозможна, возвращаем ''.
-    """
     if a > 12 and b > 12:
         return ''
 
-    # Явный американский формат
     if prefer_us:
         if a <= 12 and b <= 31:
             return f"{b:02d}-{a:02d}-{y}"
 
-    # Однозначные случаи
     if a > 12 and b <= 12:
         return f"{a:02d}-{b:02d}-{y}"
     if b > 12 and a <= 12:
         return f"{b:02d}-{a:02d}-{y}"
 
-    # Оба <= 12 — решаем по имени счёта
     if _is_ambiguous_us_account(account_name):
         return f"{b:02d}-{a:02d}-{y}"
 
-    # По умолчанию — европейский DD/MM
     return f"{a:02d}-{b:02d}-{y}"
 
 
 def parse_date(date_str, account_name: str = '') -> str:
-    """
-    Возвращает дату в формате ДД-ММ-ГГГГ или ''.
-
-    ВАЖНО: для выписок FIO (Stalkin_ML2_CZK_FIO и др.) автоматически
-    распознаётся американский формат MM/DD/YYYY — для этого нужно
-    передать account_name (второй аргумент).
-
-    Поддерживаемые форматы:
-      - DD.MM.YYYY, DD/MM/YYYY, DD-MM-YYYY
-      - MM/DD/YYYY (для FIO/Stalkin и при однозначных случаях)
-      - YYYY-MM-DD (ISO)
-      - YYYYMMDD (8 цифр подряд)
-      - Excel serial date (5 цифр, 40000..50000)
-      - «12 сентября 2026», «Sep 12 2026», «12.09.2026 г.» и т.п.
-    """
     if date_str is None:
         return ''
     try:
@@ -1015,11 +977,9 @@ def parse_date(date_str, account_name: str = '') -> str:
     if s.endswith('.0'):
         s = s[:-2]
 
-    # 8 цифр подряд — YYYYMMDD
     if s.isdigit() and len(s) == 8:
         return f"{s[6:8]}-{s[4:6]}-{s[:4]}"
 
-    # Excel serial date
     if s.isdigit() and len(s) == 5 and 40000 <= int(s) <= 50000:
         try:
             base = datetime(1899, 12, 30)
@@ -1028,8 +988,6 @@ def parse_date(date_str, account_name: str = '') -> str:
         except Exception:
             pass
 
-    # Основной паттерн: DD/MM/YYYY, MM/DD/YYYY, DD.MM.YYYY, DD-MM-YYYY,
-    # DD/MM/YY, MM/DD/YY и т.п.
     m = re.match(r'^(\d{1,2})[\./\-](\d{1,2})[\./\-](\d{2,4})$', s)
     if m:
         a, b, y = m.groups()
@@ -1044,19 +1002,16 @@ def parse_date(date_str, account_name: str = '') -> str:
             ai, bi, y, account_name=account_name, prefer_us=prefer_us
         )
 
-    # ISO: YYYY-MM-DD
     m = re.match(r'^(\d{4})-(\d{2})-(\d{2})', s)
     if m:
         y, mo, d = m.groups()
         return f"{d}-{mo}-{y}"
 
-    # YYYYMMDD «склеенный»
     m = re.match(r'^(\d{4})(\d{2})(\d{2})', s)
     if m:
         y, mo, d = m.groups()
         return f"{d}-{mo}-{y}"
 
-    # Текстовый месяц: «12 сентября 2026», «Sep 12 2026» и т.п.
     m = re.match(
         r'^(\d{1,2})\s+([A-Za-zА-Яа-яЁё]+)\.?,?\s+(\d{4})\s*г?\.?$',
         s
@@ -1068,7 +1023,6 @@ def parse_date(date_str, account_name: str = '') -> str:
             mo = _ALL_MONTHS[mon_key]
             return f"{int(d):02d}-{mo:02d}-{y}"
 
-    # strptime-фоллбэк
     for fmt in ["%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d-%b-%y",
                 "%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%Y.%m.%d", "%d-%m-%Y",
                 "%Y%m%d", "%d.%m.%y", "%d/%m/%y", "%m/%d/%Y", "%m/%d/%y"]:
@@ -1091,8 +1045,6 @@ def parse_date(date_str, account_name: str = '') -> str:
     return s
 
 
-# ---------- Нормализация OCR-ошибок суммы ----------
-
 _OCR_DIGIT_MAP = {
     'o': '0', 'O': '0', 'О': '0',
     'l': '1', 'I': '1', '|': '1',
@@ -1104,12 +1056,6 @@ _OCR_DIGIT_MAP = {
 
 
 def _normalize_ocr_amount_str(s: str) -> str:
-    """
-    Исправляет OCR-ошибки в строке суммы:
-      - заменяет 'e' на '9', 'o' на '0' и т.п. внутри числа
-      - убирает пробелы внутри тысяч
-    Работает только с фрагментом, содержащим цифры и запятую/точку.
-    """
     if not s:
         return s
     out_chars: List[str] = []
@@ -1122,10 +1068,6 @@ def _normalize_ocr_amount_str(s: str) -> str:
 
 
 def _find_ocr_amount(text: str) -> Optional[float]:
-    """
-    Ищет сумму с OCR-ошибками вроде "-16,e0€" или "16,e0".
-    Возвращает float или None.
-    """
     if not text:
         return None
     pat = re.compile(
@@ -1161,7 +1103,6 @@ def _find_ocr_amount(text: str) -> Optional[float]:
 
 
 def parse_amount(amount_str) -> float:
-    """Парсит сумму: возвращает положительное число, если не было '-'."""
     if amount_str is None:
         return 0.0
     try:
@@ -1215,7 +1156,6 @@ def parse_amount(amount_str) -> float:
 
 
 def format_amount(amount: float) -> str:
-    """Форматирует сумму с пробелами-разделителями и запятой."""
     if amount is None:
         return "0,00"
     try:
@@ -1237,7 +1177,6 @@ def format_amount(amount: float) -> str:
 
 
 def to_float_amount(v) -> float:
-    """Универсальное преобразование в float."""
     if v is None:
         return 0.0
     if isinstance(v, (int, float)):
@@ -1279,7 +1218,6 @@ def safe_str(v) -> str:
 
 
 def _to_scalar_str(v: Any) -> str:
-    """Безопасно приводит любое значение к строке."""
     if v is None:
         return ''
     try:
@@ -1343,7 +1281,6 @@ def _cell_is_numeric(v) -> bool:
 
 
 def _split_line(line: str, sep: str) -> List[str]:
-    """CSV-разбор строки с поддержкой кавычек."""
     parts = []
     cur = ''
     inq = False
@@ -1568,16 +1505,13 @@ def _is_service_word_line(line: str) -> bool:
         cnt = sum(1 for w in words if w in header_words)
         if cnt >= 2 and cnt >= len(words) - 1:
             return True
-    return False
-
-
-# ==================== PDF-УТИЛИТЫ ====================
+    return False# ==================== PDF-УТИЛИТЫ ====================
 
 _CID_PATTERN = re.compile(r'\(cid:\d+\)')
 
 
 def _text_has_cid_junk(text: str) -> bool:
-    """True, если текст содержит CID-мусор в значимом количестве."""
+    """True, если текст содержит CID-мусор в значительном количестве."""
     if not text:
         return False
     cid_count = len(_CID_PATTERN.findall(text))
@@ -1587,11 +1521,6 @@ def _text_has_cid_junk(text: str) -> bool:
 
 
 def _pdf_words_with_coords(file_content: bytes) -> List[Dict]:
-    """
-    Извлекает все слова со всех страниц с координатами.
-    Возвращает список словарей:
-        {page, x0, x1, top, bottom, text, size}
-    """
     out: List[Dict] = []
     try:
         with pdfplumber.open(BytesIO(file_content)) as pdf:
@@ -1638,11 +1567,6 @@ def _pdf_words_with_coords(file_content: bytes) -> List[Dict]:
 
 
 def _words_to_lines(words: List[Dict], y_tol: float = 3.0) -> List[str]:
-    """
-    Собирает физические строки по координатам top.
-    Слова одной строки группируются по int(round(top / y_tol)),
-    внутри группы сортируются по x0.
-    """
     if not words:
         return []
     lines_map: Dict[int, List[Dict]] = {}
@@ -1670,10 +1594,6 @@ def _words_to_lines(words: List[Dict], y_tol: float = 3.0) -> List[str]:
 
 
 def _pdf_lines_with_coords(file_content: bytes) -> List[str]:
-    """
-    Полная координатная реконструкция строк:
-    каждая физическая строка = слова с одинаковым top (±3pt), отсортированные по x0.
-    """
     words = _pdf_words_with_coords(file_content)
     if not words:
         return []
@@ -1681,15 +1601,6 @@ def _pdf_lines_with_coords(file_content: bytes) -> List[str]:
 
 
 def pdf_all_text(file_content: bytes) -> str:
-    """
-    Многоуровневое извлечение текста из PDF.
-    Порядок:
-      1) pdfplumber.extract_text() — обычный
-      2) если CID-мусор → координатная реконструкция (extract_words)
-      3) pdfplumber.extract_text(layout=True)
-      4) pdfminer.high_level.extract_text()
-      5) если всё ещё CID-мусор → координатная реконструкция
-    """
     parts_primary: List[str] = []
     try:
         with pdfplumber.open(BytesIO(file_content)) as pdf:
@@ -1758,7 +1669,6 @@ def pdf_all_text(file_content: bytes) -> str:
 
 
 def pdf_all_text_layout(file_content: bytes) -> str:
-    """Только layout-текст (сохраняет позиции колонок)."""
     parts: List[str] = []
     try:
         with pdfplumber.open(BytesIO(file_content)) as pdf:
@@ -1775,7 +1685,6 @@ def pdf_all_text_layout(file_content: bytes) -> str:
 
 
 def pdf_all_tables(file_content: bytes) -> List[List[List[str]]]:
-    """Все таблицы со всех страниц PDF."""
     tables_out: List[List[List[str]]] = []
     try:
         with pdfplumber.open(BytesIO(file_content)) as pdf:
@@ -1795,15 +1704,10 @@ def pdf_all_tables(file_content: bytes) -> List[List[List[str]]]:
 
 
 def pdf_all_words(file_content: bytes) -> List[Dict]:
-    """Публичная обёртка над _pdf_words_with_coords."""
     return _pdf_words_with_coords(file_content)
 
 
 def _split_glued_line(line: str) -> List[str]:
-    """
-    Иногда PDF-парсер клеит соседние колонки без пробела.
-    Разбиваем по границе цифра→буква и буква→цифра.
-    """
     if not line:
         return [line]
     tokens = re.split(
@@ -1815,10 +1719,10 @@ def _split_glued_line(line: str) -> List[str]:
         return tokens
     return [line]
 
+
 # ==================== СЛОВАРИ ПЕРЕВОДОВ ====================
 
 _PHRASE_DICT: Dict[str, str] = {
-    # --- EN ---
     "value added tax - output": "НДС к уплате",
     "value added tax - input": "НДС к возмещению",
     "value added tax": "НДС",
@@ -1901,7 +1805,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "debit turnover": "дебетовый оборот",
     "credit turnover": "кредитовый оборот",
 
-    # --- Бренды/сервисы ---
     "tiktok ads": "реклама TikTok",
     "tiktok": "TikTok",
     "google *ads": "GOOGLE *ADS",
@@ -1965,7 +1868,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "valstybės įmonė": "государственное предприятие",
     "advokatu profesine bendrija": "адвокатское профессиональное объединение",
 
-    # --- LV ---
     "apmaksa par rēķinu nr.": "оплата по счёту №",
     "apmaksa par rekinu nr.": "оплата по счёту №",
     "apmaksa par pakalpojumiem objekta": "оплата за услуги объекта",
@@ -2075,7 +1977,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "veids": "тип",
     "statuss": "статус",
 
-    # --- CS ---
     "trvalý příkaz": "постоянное поручение",
     "vklad hotovosti": "внесение наличных",
     "výběr hotovosti": "снятие наличных",
@@ -2130,7 +2031,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "zůstatek": "остаток",
     "pohyby": "операции",
 
-    # --- HU ---
     "készpénzfelvétel": "снятие наличных",
     "készpénzbefizetés": "внесение наличных",
     "kártyás fizetés": "оплата картой",
@@ -2185,7 +2085,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "befizetés": "внесение",
     "kifizetés": "выплата",
 
-    # --- AZ ---
     "hesaba mədaxil": "зачисление на счёт",
     "hesaba medaxil": "зачисление на счёт",
     "dövrün sonuna balans": "остаток на конец периода",
@@ -2203,7 +2102,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "dovlet vergi xidmeti": "государственная налоговая служба",
     "sms xidməti": "SMS-сервис",
 
-    # --- LT ---
     "sąskaitos palaikymo mokestis": "плата за обслуживание счёта",
     "išankstinė sąskaita": "предварительный счёт",
     "sąskaita faktūra": "счёт-фактура",
@@ -2215,7 +2113,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "pajamos": "доходы",
     "išlaidos": "расходы",
 
-    # --- ES ---
     "saldo previo": "предыдущий баланс",
     "transacciones salientes": "исходящие операции",
     "transacciones entrantes": "входящие операции",
@@ -2226,7 +2123,6 @@ _PHRASE_DICT: Dict[str, str] = {
     "descripción": "описание",
     "emitido en": "выпущено",
 
-    # --- прочее ---
     "плата за обслуживание счета": "плата за обслуживание счёта",
     "остаток в начале": "остаток на начало",
     "остаток в конце": "остаток на конец",
@@ -2237,7 +2133,6 @@ _PHRASE_DICT: Dict[str, str] = {
 }
 
 _WORD_DICT: Dict[str, str] = {
-    # --- EN ---
     "fee": "комиссия", "fees": "комиссии",
     "payment": "платёж", "payments": "платежи",
     "transfer": "перевод", "transfers": "переводы",
@@ -2261,7 +2156,6 @@ _WORD_DICT: Dict[str, str] = {
     "card": "карта", "outgoing": "исходящий",
     "incoming": "входящий",
 
-    # --- CS ---
     "poplatek": "комиссия", "úrok": "проценты",
     "převod": "перевод", "vklad": "внесение",
     "výběr": "снятие", "platba": "платёж",
@@ -2280,7 +2174,6 @@ _WORD_DICT: Dict[str, str] = {
     "služby": "услуги", "vedení účtu": "ведение счёта",
     "za": "за", "období": "период",
 
-    # --- LV ---
     "apmaksa": "оплата", "apmaksas": "оплаты", "apmaksāts": "оплачено",
     "rēķins": "счёт", "rēķina": "счёта", "rēķinu": "счёт", "rēķini": "счета",
     "rekins": "счёт", "rekina": "счёта", "rekinu": "счёт", "rekini": "счета",
@@ -2334,7 +2227,6 @@ _WORD_DICT: Dict[str, str] = {
     "pārskaitījums": "перевод", "pārskaitījuma": "перевода",
     "pārskaitīt": "перевести", "pārskaitīts": "переведено",
 
-    # --- HU ---
     "fizetés": "платёж", "átutalás": "перевод",
     "bejövő": "входящий", "kimenő": "исходящий",
     "díj": "сбор", "jutalék": "комиссия",
@@ -2352,7 +2244,6 @@ _WORD_DICT: Dict[str, str] = {
     "megbízás": "поручение", "befizetés": "внесение",
     "kifizetés": "выплата",
 
-    # --- LT ---
     "mokestis": "сбор", "sąskaita": "счёт",
     "pavedimas": "поручение", "mokėjimas": "платёж",
     "pajamos": "доходы", "išlaidos": "расходы",
@@ -2492,8 +2383,6 @@ def _looks_like_bank_name(s: str) -> bool:
     return any(w in low for w in _BANK_WORDS)
 
 
-# --- 14 спец-парсеров извлечения контрагента ---
-
 def _extract_revolut_name(desc: str,
                            account_name: str = '',
                            payer: str = '',
@@ -2529,7 +2418,6 @@ def _extract_paysera_name(desc: str,
                            payer: str = '',
                            beneficiary: str = '',
                            raw_cp: str = '') -> str:
-    """Paysera: чистим контрагента от даты-времени, ID, IBAN, EVP-кодов."""
     if raw_cp:
         c = str(raw_cp).strip()
         if c and c.lower() not in ('nan', 'none', 'n/a', '-', ''):
@@ -2592,13 +2480,26 @@ def _extract_industra_name(desc: str,
     low = desc.lower()
     if 'комиссия за банковскую операцию' in low:
         return 'Industra Bank'
+    if 'komisija par bankas operāciju' in low:
+        return 'Industra Bank'
     if 'проводка мемориальным ордером' in low:
+        return 'Industra Bank'
+    if 'kontējums ar memoriālo orderi' in low:
+        return 'Industra Bank'
+    if 'bankas komisija' in low:
         return 'Industra Bank'
     m = re.search(r'(?:Исходящее перечисление|Перечисление между клиентами банка|'
                   r'Зачисление входящего платежа на счет клиента)\s*,\s*'
                   r'([^,]+)', desc, re.IGNORECASE)
     if m:
         cleaned = _clean_counterparty_name(m.group(1), keep_full=True)
+        if cleaned:
+            return cleaned
+    m2 = re.search(r'(?:Izejošais pārskaitījums|Pārskaitījums starp bankas klientiem|'
+                   r'Ienākoša maksājuma uzskaitīšana klientam)\s*,\s*'
+                   r'([^,]+)', desc, re.IGNORECASE)
+    if m2:
+        cleaned = _clean_counterparty_name(m2.group(1), keep_full=True)
         if cleaned:
             return cleaned
     return ''
@@ -2844,7 +2745,6 @@ def _extract_csas_name(desc: str, account_name: str = '') -> str:
 
 
 def _extract_name_by_patterns(desc: str) -> str:
-    """Универсальные шаблоны. НЕ жадные, с ограничением длины."""
     if not desc:
         return ''
     s = str(desc)[:500]
@@ -2871,7 +2771,6 @@ def _extract_name_by_patterns(desc: str) -> str:
             cleaned = _clean_counterparty_name(cand, keep_full=True)
             if cleaned and len(cleaned) >= 2 and not _looks_like_bank_name(cleaned):
                 return cleaned
-    # Wise-паттерн: "списана <Merchant> <City>"
     m = re.search(
         r'списан[ао]?\s+(?:на\s+сумму\s+[\d\s.,]+\s*[A-Z]{0,3},?\s*)?'
         r'([A-Za-zÀ-ÿĀ-žА-Яа-яЁё][A-Za-zÀ-ÿĀ-žА-Яа-яЁё0-9\.\-\' ]{2,60}?)'
@@ -2892,14 +2791,9 @@ def extract_counterparty_smart(description: str,
                                 beneficiary: str = '',
                                 raw_cp: str = '',
                                 sender_name: str = '') -> Tuple[str, str]:
-    """
-    Главный диспетчер извлечения контрагента.
-    Возвращает (имя контрагента, описание).
-    """
     desc = (description or '').strip()
     acc_low = (account_name or '').lower()
 
-    # 1) Прямые кандидаты из колонок
     for cand in (raw_cp, beneficiary, sender_name, payer):
         if not cand:
             continue
@@ -2916,7 +2810,6 @@ def extract_counterparty_smart(description: str,
     if not desc:
         return ('', '')
 
-    # 2) Спец-парсеры по банку
     cp = ''
 
     is_csas_acc = ('csas' in acc_low) or ('čsas' in acc_low) or ('jenisov' in acc_low)
@@ -2929,7 +2822,8 @@ def extract_counterparty_smart(description: str,
         cp = _extract_revolut_name(desc, account_name, payer, beneficiary, sender_name)
     if not cp and 'paysera' in acc_low:
         cp = _extract_paysera_name(desc, account_name, payer, beneficiary, raw_cp)
-    if not cp and ('industra' in acc_low or 'plavas' in acc_low or 'kl59' in acc_low):
+    if not cp and ('industra' in acc_low or 'plavas' in acc_low or 'kl59' in acc_low
+                   or 'an14_estate_eur_industra' in acc_low):
         cp = _extract_industra_name(desc, account_name, payer, beneficiary, raw_cp)
 
     if not cp and is_csas_acc:
@@ -2963,11 +2857,9 @@ def extract_counterparty_smart(description: str,
     if not cp and 'wise' in acc_low:
         cp = _extract_wio_name(desc)
 
-    # 3) Универсальные шаблоны
     if not cp:
         cp = _extract_name_by_patterns(desc)
 
-    # 4) Эвристика: осмысленный фрагмент
     if not cp:
         parts = re.split(r'[|•;]', desc)
         for p in parts:
@@ -2982,7 +2874,6 @@ def extract_counterparty_smart(description: str,
                 if cp:
                     break
 
-    # 5) Имя банка из названия счёта — крайний fallback
     if not cp:
         m = re.search(
             r'\b(CSOB|UniCredit|Revolut|Tinkoff|Paysera|Wise|BluOr|Industra|'
@@ -2994,17 +2885,9 @@ def extract_counterparty_smart(description: str,
 
     cp = _to_scalar_str(cp)
     desc = _to_scalar_str(desc)
-    return (cp, desc)
-
-
-# ==================== WISE PDF ====================
+    return (cp, desc)# ==================== WISE PDF ====================
 
 def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер PDF Wise (EUR-баланс).
-    Использует координатную реконструкцию, надёжно ловит
-    две суммы в конце строки: операция + баланс.
-    """
     result: List[Dict] = []
 
     coord_lines = _pdf_lines_with_coords(file_content)
@@ -3173,14 +3056,9 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return deduped
 
 
-# ==================== N26 PDF (устойчив к CID и -16,e0€) ====================
+# ==================== N26 PDF ====================
 
 def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер PDF N26 (испанский формат).
-    Устойчив к CID-мусору и к OCR-ошибкам вида "-16,e0€".
-    Формат строки: "N26 N26 Metal Membership Fecha de valor 27.06.2026 27.06.2026 -16,90€"
-    """
     result: List[Dict] = []
 
     coord_lines = _pdf_lines_with_coords(file_content)
@@ -3311,7 +3189,6 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
-    """Парсер DOCX N26 (учитывает OCR-ошибки вида '-16,e0€')."""
     full_text = docx_all_text(file_content)
     if not full_text:
         return []
@@ -3383,18 +3260,11 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
             except Exception:
                 continue
     return result
-  # ==================== PAYSERA PDF (устойчив к склейке таблиц) ====================
+
+
+# ==================== PAYSERA PDF ====================
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер PDF Paysera.
-    Ключевое отличие:
-      - блок = окно вокруг "Recipient / Payer (Code)" + "Start balance:" / строки с датой;
-      - каждая операция имеет тип (Transfer/Commission fee) и дату-время;
-      - сумма берётся из пары "Amount and currency Balance" — ПЕРВАЯ после получателя;
-      - баланс "67.71 EUR" (число без знака) не путается с операцией.
-    Устойчив к склейке таблицы в одну длинную строку.
-    """
     result: List[Dict] = []
 
     coord_lines = _pdf_lines_with_coords(file_content)
@@ -3413,7 +3283,7 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         return result
 
     op_block_re = re.compile(
-        r'(Transfer|Commission\s+fee)\s+'
+        r'(Transfer|Commission\s+fee|Перевод|Комиссионная\s+плата)\s+'
         r'(\d{4}-\d{2}-\d{2})\s+'
         r'(\d{2}:\d{2}:\d{2})\s*'
         r'(?:\+0200|\+0300|\+0000)?',
@@ -3497,7 +3367,8 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if first_amt:
                 raw_amt = first_amt.group(1).strip()
                 amount = parse_amount(raw_amt)
-                if a['type'].lower().startswith('commission'):
+                if a['type'].lower().startswith('commission') or \
+                   a['type'].lower().startswith('комиссион'):
                     amount = -abs(amount)
                 else:
                     if '-' in raw_amt:
@@ -3542,16 +3413,9 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return deduped
 
 
-# ==================== PAYSERA DOCX (табличная склейка + дубли ячеек) ====================
+# ==================== PAYSERA DOCX ====================
 
 def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер Paysera DOCX.
-    Особенность: конвертация из PDF в DOCX портит таблицу —
-    дублирует ячейки многократно и склеивает суммы с балансом.
-    Формат: "Transfer 2026-06-01 08:31:44 +0200 1738895382 844408244 FELSŐ... HU43... -3000.00 EUR 67.71 EUR Purpose of payment: Loan agreement"
-    Также бывает OCR-склейка типа "-5.00 EUR 8754.54 EUR".
-    """
     result: List[Dict] = []
 
     try:
@@ -3586,7 +3450,7 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
     full_text = re.sub(r'(\b[^\s|]{2,})\s*\|\s*(?:\1\s*\|\s*)+', r'\1 ', full_text)
 
     op_block_re = re.compile(
-        r'(Transfer|Commission\s+fee)\s+'
+        r'(Transfer|Commission\s+fee|Перевод|Комиссионная\s+плата)\s+'
         r'(\d{4}-\d{2}-\d{2})\s+'
         r'(\d{2}:\d{2}:\d{2})\s*'
         r'(?:\+0200|\+0300|\+0000)?',
@@ -3654,7 +3518,8 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
         if first_amt:
             raw_amt = first_amt.group(1).strip()
             amount = parse_amount(raw_amt)
-            if a['type'].lower().startswith('commission'):
+            if a['type'].lower().startswith('commission') or \
+               a['type'].lower().startswith('комиссион'):
                 amount = -abs(amount)
             else:
                 if '-' in raw_amt:
@@ -3692,7 +3557,6 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def _parse_paysera_docx_fallback(full_text: str, account_name: str) -> List[Dict]:
-    """Fallback для Paysera DOCX без якорей."""
     result: List[Dict] = []
     amount_re = re.compile(
         r'(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s*(EUR|USD|CZK|GBP|PLN)',
@@ -3730,11 +3594,6 @@ def _parse_paysera_docx_fallback(full_text: str, account_name: str) -> List[Dict
 # ==================== REVOLUT PDF ====================
 
 def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер PDF Revolut.
-    Описание собирается из нескольких строк до первой €-суммы,
-    не режется по первому вхождению € или •.
-    """
     result: List[Dict] = []
 
     coord_lines = _pdf_lines_with_coords(file_content)
@@ -3942,10 +3801,6 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== UNICREDIT PDF ====================
 
 def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    Парсер PDF UniCredit Bank (ČR/SR).
-    Шапка: Datum | Valuta | Transakce | Příjmy | Výděje
-    """
     result: List[Dict] = []
     full_text = pdf_all_text(file_content)
     if not full_text:
@@ -4128,7 +3983,6 @@ def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_unicredit_generic(file_content: bytes, account_name: str) -> List[Dict]:
-    """CSV/XLSX UniCredit."""
     result: List[Dict] = []
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
@@ -4236,7 +4090,6 @@ def parse_twohills_unicredit(file_content, account_name):
 # ==================== ČSAS PDF ====================
 
 def parse_csas_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """Парсер выписок Česká spořitelna."""
     result: List[Dict] = []
 
     coord_lines = _pdf_lines_with_coords(file_content)
@@ -4485,7 +4338,6 @@ def parse_jenhor_unelma_pdf(file_content: bytes, account_name: str) -> List[Dict
 # ==================== KAPITAL BANK SAIDA ====================
 
 def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """Kapital bank Saida (AZN) PDF."""
     result: List[Dict] = []
     tables = pdf_all_tables(file_content)
     for table in tables:
@@ -4986,6 +4838,321 @@ def parse_industra_an14(file_content, account_name):
     return parse_industra_pdf(file_content, account_name)
 
 
+# ==================== INDUSTRA XLS/XLSX/CSV (НОВЫЙ ПАРСЕР) ====================
+
+def parse_industra_xls(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Парсер Excel/CSV-выписок Industra Bank (SIA PĻAVAS 1, AN14, KL59 и др.).
+    Формат: .xls, .xlsx или .csv с колонками:
+        Darījuma datums | Valutēšanas datums | Darījuma numurs | Darījuma reference |
+        Darījuma veids | Saņēmējs / Maksātājs | ... | Informācija par darījumu |
+        Debets(D) | Kredīts(C)
+    Каждая строка — отдельная транзакция. Комиссии идут отдельными строками.
+    """
+    result: List[Dict] = []
+
+    # ---------- 1. Читаем Excel (.xls / .xlsx) ----------
+    df = None
+    if _is_real_xls(file_content):
+        try:
+            import xlrd  # noqa: F401
+            try:
+                wb = xlrd.open_workbook(
+                    file_contents=file_content,
+                    ignore_workbook_corruption=True
+                )
+                sheet = wb.sheet_by_index(0)
+                data = []
+                for r in range(sheet.nrows):
+                    data.append([sheet.cell_value(r, c)
+                                 for c in range(sheet.ncols)])
+                df = pd.DataFrame(data)
+            except TypeError:
+                df = pd.read_excel(BytesIO(file_content), header=None, engine='xlrd')
+        except Exception:
+            df = None
+        if df is None or df.empty:
+            try:
+                df = pd.read_excel(BytesIO(file_content), header=None, engine='openpyxl')
+            except Exception:
+                df = None
+    elif _is_real_xlsx(file_content):
+        try:
+            df = pd.read_excel(BytesIO(file_content), header=None, engine='openpyxl')
+        except Exception:
+            df = None
+
+    # ---------- 2. Если Excel не получился — пробуем как CSV ----------
+    if df is None or df.empty:
+        return _parse_industra_csv_fallback(file_content, account_name)
+
+    # ---------- 3. Ищем строку заголовка ----------
+    header_row = -1
+    for idx, row in df.iterrows():
+        if idx > 60:
+            break
+        vals = [str(v).strip() if pd.notna(v) else '' for v in row.values]
+        joined = ' '.join(vals).lower()
+        has_date = ('darījuma datums' in joined) or ('darījuma datums' in joined) \
+                   or ('darijuma datums' in joined)
+        has_debit = 'debets' in joined or 'debets(d)' in joined
+        has_credit = 'kredīts' in joined or 'kredīts(c)' in joined \
+                     or 'kredits' in joined
+        if has_date and (has_debit or has_credit):
+            header_row = idx
+            break
+
+    if header_row == -1:
+        return _parse_industra_csv_fallback(file_content, account_name)
+
+    # ---------- 4. Определяем индексы колонок ----------
+    hdr_vals = [str(v).strip() if pd.notna(v) else ''
+                for v in df.iloc[header_row].values]
+    date_i = -1
+    cp_i = -1
+    desc_i = -1
+    debit_i = -1
+    credit_i = -1
+
+    for i, h in enumerate(hdr_vals):
+        hl = h.lower().strip()
+        if 'darījuma datums' in hl or 'darijuma datums' in hl:
+            if date_i == -1:
+                date_i = i
+        elif 'saņēmējs' in hl or 'maksātājs' in hl \
+                or 'sanemejs' in hl or 'maksatajs' in hl:
+            if cp_i == -1:
+                cp_i = i
+        elif 'informācija' in hl or 'informacija' in hl:
+            if desc_i == -1:
+                desc_i = i
+        elif 'debets' in hl or 'debets(d)' in hl:
+            if debit_i == -1:
+                debit_i = i
+        elif 'kredīts' in hl or 'kredīts(c)' in hl or 'kredits' in hl:
+            if credit_i == -1:
+                credit_i = i
+
+    if date_i == -1:
+        date_i = 0
+    if debit_i == -1:
+        debit_i = 11
+    if credit_i == -1:
+        credit_i = 12
+    if cp_i == -1:
+        cp_i = 5
+    if desc_i == -1:
+        desc_i = 10
+
+    # ---------- 5. Обходим строки ----------
+    for idx in range(header_row + 1, len(df)):
+        row = df.iloc[idx]
+        n = len(row)
+
+        def _get(ci: int):
+            if 0 <= ci < n:
+                v = row.iloc[ci]
+                if pd.isna(v):
+                    return ''
+                return str(v).strip()
+            return ''
+
+        date_raw = _get(date_i)
+        if not date_raw:
+            continue
+
+        # Пропускаем строки с итогами
+        joined_row = ' '.join(
+            [str(v).strip() if pd.notna(v) else '' for v in row.values]
+        ).lower()
+        if 'debeta apgrozījums' in joined_row or 'kredīta apgrozījums' in joined_row:
+            continue
+        if 'sākuma atlikums' in joined_row or 'beigu atlikums' in joined_row:
+            continue
+        if 'konta pārskats' in joined_row or 'konta parskats' in joined_row:
+            continue
+        if 'neapmaksāta komisija' in joined_row or 'komisija' == joined_row.strip():
+            continue
+
+        date = parse_date(date_raw, account_name=account_name)
+        if not date or not re.match(r'^\d{2}-\d{2}-\d{4}$', date):
+            continue
+
+        debit_raw = _get(debit_i)
+        credit_raw = _get(credit_i)
+        debit_val = parse_amount(debit_raw) if debit_raw else 0.0
+        credit_val = parse_amount(credit_raw) if credit_raw else 0.0
+
+        amount = 0.0
+        if credit_val != 0.0 and abs(credit_val) >= abs(debit_val):
+            amount = abs(credit_val)
+        elif debit_val != 0.0:
+            amount = -abs(debit_val)
+        else:
+            continue
+
+        if not _is_reasonable_amount(amount):
+            continue
+
+        cp = _get(cp_i)
+        desc = _get(desc_i)
+
+        # Пропускаем служебные строки
+        if desc and _is_service_line(desc):
+            continue
+
+        # Извлекаем контрагента
+        cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+        if not cp_final:
+            cp_final = 'Industra Bank'
+
+        result.append({
+            'Дата': date,
+            'Сумма': amount,
+            'Контрагент': cp_final,
+            'Наименование счета': account_name,
+            'Описание': desc
+        })
+
+    # ---------- 6. Дедупликация ----------
+    seen = set()
+    deduped: List[Dict] = []
+    for r in result:
+        key = (r['Дата'], round(r['Сумма'], 2), r['Контрагент'], r['Описание'])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(r)
+    return deduped
+
+
+def _parse_industra_csv_fallback(file_content: bytes, account_name: str) -> List[Dict]:
+    """Fallback: если Industra-файл оказался CSV/текстом."""
+    result: List[Dict] = []
+    content = read_text_with_encoding(file_content)
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+    if not lines:
+        return []
+
+    header_idx = -1
+    for i, l in enumerate(lines[:60]):
+        low = l.lower()
+        has_date = ('darījuma datums' in low) or ('darijuma datums' in low)
+        has_debit = 'debets' in low or 'debets(d)' in low
+        has_credit = 'kredīts' in low or 'kredīts(c)' in low or 'kredits' in low
+        if has_date and (has_debit or has_credit):
+            header_idx = i
+            break
+
+    if header_idx == -1:
+        return []
+
+    sample = lines[header_idx]
+    # Определяем разделитель
+    sep = '\t' if '\t' in sample else (';' if ';' in sample else ',')
+    hdr = _split_line(sample, sep)
+
+    date_i = -1
+    cp_i = -1
+    desc_i = -1
+    debit_i = -1
+    credit_i = -1
+
+    for i, h in enumerate(hdr):
+        hl = h.lower().strip()
+        if 'darījuma datums' in hl or 'darijuma datums' in hl:
+            if date_i == -1:
+                date_i = i
+        elif 'saņēmējs' in hl or 'maksātājs' in hl \
+                or 'sanemejs' in hl or 'maksatajs' in hl:
+            if cp_i == -1:
+                cp_i = i
+        elif 'informācija' in hl or 'informacija' in hl:
+            if desc_i == -1:
+                desc_i = i
+        elif 'debets' in hl or 'debets(d)' in hl:
+            if debit_i == -1:
+                debit_i = i
+        elif 'kredīts' in hl or 'kredīts(c)' in hl or 'kredits' in hl:
+            if credit_i == -1:
+                credit_i = i
+
+    if date_i == -1:
+        date_i = 0
+    if debit_i == -1:
+        debit_i = 11
+    if credit_i == -1:
+        credit_i = 12
+    if cp_i == -1:
+        cp_i = 5
+    if desc_i == -1:
+        desc_i = 10
+
+    for line in lines[header_idx + 1:]:
+        parts = _split_line(line, sep)
+        if len(parts) <= max(date_i, 0):
+            continue
+
+        joined_row = ' '.join(parts).lower()
+        if 'debeta apgrozījums' in joined_row or 'kredīta apgrozījums' in joined_row:
+            continue
+        if 'sākuma atlikums' in joined_row or 'beigu atlikums' in joined_row:
+            continue
+        if 'konta pārskats' in joined_row or 'konta parskats' in joined_row:
+            continue
+
+        try:
+            date = parse_date(parts[date_i], account_name=account_name)
+            if not date or not re.match(r'^\d{2}-\d{2}-\d{4}$', date):
+                continue
+
+            debit_val = parse_amount(parts[debit_i]) \
+                if 0 <= debit_i < len(parts) else 0.0
+            credit_val = parse_amount(parts[credit_i]) \
+                if 0 <= credit_i < len(parts) else 0.0
+
+            amount = 0.0
+            if credit_val != 0.0 and abs(credit_val) >= abs(debit_val):
+                amount = abs(credit_val)
+            elif debit_val != 0.0:
+                amount = -abs(debit_val)
+            else:
+                continue
+
+            if not _is_reasonable_amount(amount):
+                continue
+
+            cp = parts[cp_i] if 0 <= cp_i < len(parts) else ''
+            desc = parts[desc_i] if 0 <= desc_i < len(parts) else ''
+
+            if desc and _is_service_line(desc):
+                continue
+
+            cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            if not cp_final:
+                cp_final = 'Industra Bank'
+
+            result.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': cp_final,
+                'Наименование счета': account_name,
+                'Описание': desc
+            })
+        except Exception:
+            continue
+
+    seen = set()
+    deduped: List[Dict] = []
+    for r in result:
+        key = (r['Дата'], round(r['Сумма'], 2), r['Контрагент'], r['Описание'])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(r)
+    return deduped
+
+
 # ==================== PASHA BANK PDF ====================
 
 def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
@@ -5085,8 +5252,7 @@ def parse_rak_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 })
             except Exception:
                 continue
-    return result
-  # ==================== УНИВЕРСАЛЬНЫЕ PDF / XLSX / DOCX ====================
+    return result# ==================== УНИВЕРСАЛЬНЫЕ PDF / XLSX / DOCX ====================
 
 def parse_pdf_universal(file_content: bytes, account_name: str) -> List[Dict]:
     result: List[Dict] = []
@@ -6804,15 +6970,12 @@ def parse_rak_bank(file_content: bytes, account_name: str) -> List[Dict]:
     return result
 
 
-# ==================== STALKIN FIO CSV (MM/DD/YYYY!) ====================
+# ==================== STALKIN FIO CSV ====================
 
 def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Парсер выписок FIO banka (Stalkin_ML2_CZK_FIO и др.).
-
     КРИТИЧНО: FIO отдаёт CSV с датами в американском формате MM/DD/YYYY.
-    Поэтому parse_date вызывается с account_name — это включает
-    приоритет MM/DD для счётов с 'fio'/'stalkin' в имени.
     """
     result: List[Dict] = []
     content = read_text_with_encoding(file_content)
@@ -6833,7 +6996,6 @@ def parse_stalkin_ml2_fio(file_content: bytes, account_name: str) -> List[Dict]:
         if len(parts) < 3:
             continue
         try:
-            # ЯВНО передаём account_name → для FIO/Stalkin сработает MM/DD
             date = parse_date(parts[0], account_name=account_name)
             if not date:
                 continue
@@ -7461,10 +7623,7 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
-    return result
-
-
-# ==================== МАРШРУТИЗАЦИЯ ПАРСЕРОВ ====================
+    return result# ==================== МАРШРУТИЗАЦИЯ ПАРСЕРОВ ====================
 
 def get_parser_by_ext(account_name: str, ext: str):
     """
@@ -7480,6 +7639,8 @@ def get_parser_by_ext(account_name: str, ext: str):
     is_jenhor = ('jenhor' in low) or ('unelma' in low)
     is_paysera = 'paysera' in low
     is_csas = 'csas' in low or 'čsas' in low
+    is_industra = ('industra' in low) or ('plavas' in low) \
+                  or ('p1 statement' in low) or ('kl59' in low)
 
     # ---------- PDF ----------
     if ext == '.pdf':
@@ -7505,8 +7666,7 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_tinkoff_pdf, 'tinkoff_pdf'
         if 'bluor' in low:
             return parse_bluor_pdf, 'bluor_pdf'
-        if 'industra' in low or 'plavas' in low or 'kl59' in low \
-                or 'p1 statement' in low:
+        if is_industra:
             return parse_industra_pdf, 'industra_pdf'
         if 'mashreq' in low or 'nomiqa' in low:
             return parse_mashreq_pdf, 'mashreq_pdf'
@@ -7604,13 +7764,12 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_dzibik_main_csob, 'dzibik_main_csob'
         if 'stalkin' in low or 'fio' in low:
             return parse_stalkin_ml2_fio, 'stalkin_ml2_fio'
-        if 'industra' in low or 'plavas' in low or 'p1 statement' in low \
-                or 'kl59' in low:
+        if is_industra:
             if 'plavas' in low:
-                return parse_industra_plavas1, 'industra_plavas1'
+                return parse_industra_xls, 'industra_plavas1_xls'
             if 'kl59' in low:
-                return parse_industra_kl59, 'industra_kl59'
-            return parse_industra_an14, 'industra_an14'
+                return parse_industra_xls, 'industra_kl59_xls'
+            return parse_industra_xls, 'industra_an14_xls'
         if 'mashreq' in low or ('nomiqa' in low and 'aed' in low):
             return parse_mashreq, 'mashreq'
         if 'budapest huf' in low or ('mkb' in low and 'huf' in low):
@@ -7702,13 +7861,12 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_dzibik_main_csob, 'dzibik_main_csob'
         if 'stalkin' in low or 'fio' in low:
             return parse_stalkin_ml2_fio, 'stalkin_ml2_fio'
-        if 'industra' in low or 'plavas' in low or 'p1 statement' in low \
-                or 'kl59' in low:
+        if is_industra:
             if 'plavas' in low:
-                return parse_industra_plavas1, 'industra_plavas1'
+                return parse_industra_xls, 'industra_plavas1_xls'
             if 'kl59' in low:
-                return parse_industra_kl59, 'industra_kl59'
-            return parse_industra_an14, 'industra_an14'
+                return parse_industra_xls, 'industra_kl59_xls'
+            return parse_industra_xls, 'industra_an14_xls'
         if 'mashreq' in low or ('nomiqa' in low and 'aed' in low):
             return parse_mashreq, 'mashreq'
         if 'budapest huf' in low or ('mkb' in low and 'huf' in low):
@@ -8515,10 +8673,7 @@ def _render_results(result: Dict):
     if failed:
         st.warning(f"⚠️ Не удалось обработать: {len(failed)} файлов")
         for f in failed:
-            st.write(f"- {f}")
-
-
-# ==================== AI-АССИСТЕНТ ====================
+            st.write(f"- {f}")# ==================== AI-АССИСТЕНТ ====================
 
 def _render_ai_assistant_tab():
     st.markdown("### 🤖 AI-ассистент (DeepSeek AI)")
@@ -8611,7 +8766,8 @@ def _render_ai_assistant_tab():
         "Ты — ассистент внутри Streamlit-приложения "
         "'Аналитик банковских выписок'. Приложение парсит CSV, XLSX, XLS, "
         "DOCX, PDF выписки банков (ČSOB, UniCredit, Revolut, Tinkoff, "
-        "Kapital bank, MASHREQ, Pasha Bank, WIO, Paysera, MKB, BluOr и др.), "
+        "Kapital bank, MASHREQ, Pasha Bank, WIO, Paysera, MKB, BluOr, "
+        "Industra Bank и др.), "
         "сводит операции в единый DataFrame и экспортирует в Excel.",
         "Структура DataFrame: Дата (str), Сумма (float, + доход, - расход), "
         "Контрагент (str), Наименование банка (str), Описание (str).",
