@@ -1568,6 +1568,11 @@ def _text_has_cid_junk(text: str) -> bool:
 
 
 def _pdf_words_with_coords(file_content: bytes) -> List[Dict]:
+    """
+    Извлекает слова с координатами. Если стандартный extract_words возвращает
+    CID-мусор (все слова — (cid:XX) или отдельные символы), пробуем
+    восстанавливать через pdfminer с LAParams.
+    """
     out: List[Dict] = []
     try:
         with pdfplumber.open(BytesIO(file_content)) as pdf:
@@ -1587,6 +1592,22 @@ def _pdf_words_with_coords(file_content: bytes) -> List[Dict]:
                     continue
                 if not words:
                     continue
+
+                # === FIX v7: проверяем, что слова осмысленны (не CID) ===
+                total_chars = sum(len(str(w.get('text', ''))) for w in words)
+                cid_in_words = sum(
+                    len(_CID_PATTERN.findall(str(w.get('text', ''))))
+                    for w in words
+                )
+                # Если больше 30% контента — CID, пробуем альтернативный путь
+                if cid_in_words > 5 and total_chars > 0 and \
+                   cid_in_words * 5 > total_chars:
+                    # Пробуем pdfminer
+                    alt_words = _pdf_words_via_pdfminer(file_content, pi)
+                    if alt_words:
+                        out.extend(alt_words)
+                        continue
+
                 for w in words:
                     try:
                         txt = str(w.get('text', ''))
@@ -1608,6 +1629,64 @@ def _pdf_words_with_coords(file_content: bytes) -> List[Dict]:
                         })
                     except Exception:
                         continue
+    except Exception:
+        return []
+    return out
+
+
+def _pdf_words_via_pdfminer(file_content: bytes, page_num: int) -> List[Dict]:
+    """
+    Альтернативный путь извлечения слов — через pdfminer с LAParams.
+    Используется, когда pdfplumber вернул CID-мусор.
+    """
+    if not _PDFMINER_AVAILABLE:
+        return []
+    try:
+        from pdfminer.pdfpage import PDFPage
+        from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
+        from pdfminer.converter import PDFPageAggregator
+        from pdfminer.layout import LTTextBox, LTTextLine, LTChar, LAParams
+    except Exception:
+        return []
+
+    out: List[Dict] = []
+    try:
+        with open('/dev/null', 'wb'):
+            pass
+    except Exception:
+        pass
+    try:
+        fp = BytesIO(file_content)
+        rsrcmgr = PDFResourceManager()
+        laparams = LAParams()
+        device = PDFPageAggregator(rsrcmgr, laparams=laparams)
+        interpreter = PDFPageInterpreter(rsrcmgr, device)
+        for i, page in enumerate(PDFPage.get_pages(fp)):
+            if i != page_num:
+                continue
+            interpreter.process_page(page)
+            layout = device.get_result()
+            for element in layout:
+                if isinstance(element, (LTTextBox, LTTextLine)):
+                    for line in element:
+                        if not isinstance(line, LTTextLine):
+                            continue
+                        x0 = float(line.x0)
+                        x1 = float(line.x1)
+                        top = float(line.y1)
+                        bottom = float(line.y0)
+                        txt = line.get_text().strip()
+                        if txt:
+                            out.append({
+                                'page': page_num,
+                                'x0': x0,
+                                'x1': x1,
+                                'top': top,
+                                'bottom': bottom,
+                                'text': txt,
+                                'size': 0.0,
+                            })
+            break
     except Exception:
         return []
     return out
@@ -2855,6 +2934,21 @@ def _extract_wise_name(desc: str) -> str:
         cand = re.sub(r'\s*(?:Карта|Транзакция|Пояснение).*$', '', cand,
                       flags=re.IGNORECASE)
         cand = re.sub(r'\s*г\.\s*$', '', cand)
+        # === FIX v7: отрезаем город-хвост в конце ===
+        cand = re.sub(
+            r'\s+(?:PRAHA\s*\d*|Praha\s*\d*|Прага\s*\d*|'
+            r'Riga|Рига|'
+            r'Amsterdam|Амстердам|'
+            r'Dublin|Дублин|Saggart|'
+            r'Dubai|Дубай|'
+            r'Vary|Karlovy\s*Vary|Karlovy|'
+            r'Tallinn|Таллинн?|'
+            r'Palma\s*de\s*Mall|Palma|'
+            r'Marbella|Malaga|'
+            r'Valdemar)\s*$',
+            '', cand, flags=re.IGNORECASE
+        )
+        cand = re.sub(r'\s+', ' ', cand).strip()
         cand = _clean_counterparty_name(cand, keep_full=True)
         if cand and len(cand) >= 2 and not _looks_like_bank_name(cand):
             return cand
@@ -2993,6 +3087,18 @@ def extract_counterparty_smart(description: str,
 # === FIX v6: координатный парсер с якорями дат и извлечением контрагента ===
 
 def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Wise PDF. Формат:
+        30 сентября 2026 г. | Карта, заканчивающаяся на 6764 | Saida Mammadbayli | Транзакция: CARD-...
+        Транзакция по карте на сумму 50,00 CZK, списана Mestska Cast Praha 1 PRAHA 1 -2,06 1 431,91
+
+    Алгоритм:
+      1) находим строку-заголовок таблицы; всё, что до неё — игнорируем (шапка);
+      2) каждую строку с датой считаем началом новой операции;
+      3) если у строки нет двух сумм подряд — это continuation (крайне редко);
+      4) описание чистим от городов и реквизитов;
+      5) извлекаем контрагента.
+    """
     result: List[Dict] = []
 
     coord_lines = _pdf_lines_with_coords(file_content)
@@ -3024,6 +3130,45 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     two_amounts_re = re.compile(
         r'^(.*?)\s+(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s+(\d[\d\s\u00a0]*[.,]\d{2})\s*$'
     )
+    # Строка-заголовок таблицы Wise
+    table_header_re = re.compile(
+        r'описание\s+входящие\s+исходящие\s+сумма',
+        re.IGNORECASE
+    )
+    # Города, которые идут хвостом к мерчанту
+    tail_cities_re = re.compile(
+        r'\s+(?:PRAHA\s*\d*|Praha\s*\d*|Прага\s*\d*|'
+        r'Riga|Рига|'
+        r'Amsterdam|Амстердам|'
+        r'Dublin|Дублин|Saggart|'
+        r'Dubai|Дубай|'
+        r'Vary|Karlovy\s*Vary|Karlovy|'
+        r'Tallinn|Таллинн?|'
+        r'Palma\s*de\s*Mall|Palma|'
+        r'Marbella|Malaga|'
+        r'Valdemar)\s*$',
+        re.IGNORECASE
+    )
+
+    # Строки-шапки, которые надо отбросить
+    header_skip_markers = [
+        'выписка по eur', 'eur на', 'создано:', 'владелец счета',
+        'wise — это коммерческое', 'нужна помощь', 'rue du trône',
+        'brussels', 'belgium', 'swift/bic', 'gb+',
+        'iban ', 'bic ', 'saida mammadbayli', 'calle campanillas',
+        'urbanización', 'cortijo', 'nagüeles', 'marbella', '29602',
+        'spain', 'wise europe', 'коммерческое наименование',
+        'уполномоченным национальным банком',
+        'зарегистрирована в бельгии', 'регистрационный номер',
+        'rue du trone', 'rue du trône',
+    ]
+
+    # Хвостовые фрагменты, которые могут прилипнуть к описанию
+    tail_junk_re = re.compile(
+        r'^\s*(?:/[Hh]elp[Pp]ay#?\S*|ref:[0-9a-f\-]+\s*|'
+        r'\d+\s*/\s*\d+\s*|/help\S*)\s*$',
+        re.IGNORECASE
+    )
 
     for src_text in candidate_sources:
         if not src_text:
@@ -3034,6 +3179,23 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         if not raw_lines:
             continue
 
+        # === FIX v7: находим индекс строки-заголовка таблицы ===
+        # Всё, что до неё — шапка PDF. Пропускаем.
+        header_idx = -1
+        for i, l in enumerate(raw_lines):
+            if table_header_re.search(l):
+                header_idx = i
+                break
+        # Если заголовок не найден — ищем первую строку с датой-якорем
+        if header_idx == -1:
+            for i, l in enumerate(raw_lines):
+                if date_re.search(l) and re.search(r'\|', l):
+                    header_idx = i - 1
+                    break
+        if header_idx == -1:
+            header_idx = 0
+        work_lines = raw_lines[header_idx + 1:]
+
         current_date = None
         pending_desc_parts: List[str] = []
         local_result: List[Dict] = []
@@ -3043,30 +3205,31 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             d = re.sub(r'Карта,\s*заканчивающаяся\s+на\s+\d+', ' ', d)
             d = re.sub(r'Транзакция:\s*[A-Z0-9\-_]+', ' ', d)
             d = re.sub(r'Пояснение:\s*[^|]+', ' ', d)
+            # Убираем город-хвост
+            d = tail_cities_re.sub('', d)
             d = re.sub(r'\s+', ' ', d).strip(' .,;:-|')
             return d
 
-        for i, line in enumerate(raw_lines):
+        for i, line in enumerate(work_lines):
             line_s = line.strip()
             if not line_s:
                 continue
 
             low = line_s.lower()
 
-            if any(w in low for w in [
-                'описание входящие исходящие сумма',
-                'eur на', 'создано:', 'владелец счета',
-                'wise — это коммерческое', 'нужна помощь',
-                'rue du trône', 'brussels', 'belgium',
-                'swift/bic', 'выписка по eur',
-                'gb+',
-            ]):
-                continue
-            if re.fullmatch(r'описание\s+входящие\s+исходящие\s+сумма', low):
+            # Отбрасываем шапку
+            if any(w in low for w in header_skip_markers):
+                # Но продолжаем разбирать, если там есть дата и сумма
+                if not two_amounts_re.search(line_s):
+                    continue
+            if table_header_re.search(line_s):
                 continue
             if re.fullmatch(r'\d[\d\s\u00a0]*[.,]\d{2}\s*eur\s*', low):
                 continue
             if _is_service_line(line_s):
+                continue
+            # Отбрасываем «хвостовые» короткие строки типа "/HelpPay#"
+            if tail_junk_re.match(line_s):
                 continue
 
             dm = date_re.search(line_s)
@@ -3089,8 +3252,9 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 if not op_date:
                     op_date = current_date
                 if not op_date:
+                    # Ищем выше в пределах 5 строк
                     for j in range(max(0, i - 5), i):
-                        dm2 = date_re.search(raw_lines[j])
+                        dm2 = date_re.search(work_lines[j])
                         if dm2:
                             op_date = parse_date(
                                 dm2.group(1), account_name=account_name
@@ -3101,8 +3265,11 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     continue
 
                 desc_clean = _clean_desc_text(desc_part)
-                if pending_desc_parts:
-                    desc_clean = (' '.join(pending_desc_parts) + ' ' + desc_clean).strip()
+                # === FIX v7: pending_desc_parts используем только если
+                # описание пустое (реальное продолжение) ===
+                if not desc_clean and pending_desc_parts:
+                    desc_clean = ' '.join(pending_desc_parts).strip()
+                    pending_desc_parts = []
                 if not desc_clean:
                     desc_clean = 'Wise'
 
@@ -3129,12 +3296,14 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     'Наименование счета': account_name,
                     'Описание': desc_clean
                 })
+                # === FIX v7: после успешной операции сбрасываем буфер ===
                 pending_desc_parts = []
                 continue
 
             if dm:
                 continue
 
+            # Это continuation-строка: сохраняем только короткие осмысленные
             cleaned_line = _clean_desc_text(line_s)
             if cleaned_line and len(cleaned_line) > 3:
                 if re.search(r'Карта,\s*заканчивающаяся\s+на\s+\d+', cleaned_line):
@@ -3144,7 +3313,13 @@ def parse_wise_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     ).strip()
                     if len(stripped) < 5:
                         continue
+                # Не копим длинные строки с реквизитами
+                if len(cleaned_line) > 100:
+                    continue
                 pending_desc_parts.append(cleaned_line)
+                # Ограничение буфера
+                if len(pending_desc_parts) > 3:
+                    pending_desc_parts = pending_desc_parts[-3:]
 
         if len(local_result) > len(result):
             result = local_result
@@ -3161,6 +3336,23 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
     coord_lines = _pdf_lines_with_coords(file_content)
     normal_text = pdf_all_text(file_content)
+
+    # === FIX v7: если pdfplumber вернул CID-мусор, пробуем pdfminer ===
+    if _text_has_cid_junk(normal_text) or _text_has_cid_junk('\n'.join(coord_lines or [])):
+        miner_text = ''
+        if _PDFMINER_AVAILABLE:
+            try:
+                miner_text = pdfminer_extract_text(BytesIO(file_content)) or ''
+                miner_text = miner_text.replace('\ufeff', '').replace('\xa0', ' ')
+            except Exception:
+                miner_text = ''
+        if miner_text and not _text_has_cid_junk(miner_text):
+            normal_text = miner_text
+            coord_lines = []  # координаты потеряли смысл, работаем по тексту
+        else:
+            # Ни pdfplumber, ни pdfminer не дали читаемый текст —
+            # для N26 PDF с CID это значит, что без OCR данные недоступны.
+            return []
 
     sources: List[str] = []
     if coord_lines:
@@ -3279,96 +3471,24 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     return _dedup_by_source_index(best)
 
 
-# === FIX v6: определен parse_n26_docx (был NameError) ===
-def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
-    """N26 в DOCX. Ищем строки вида:
-        <описание> [Fecha de valor] DD.MM.YYYY [DD.MM.YYYY] -X,XX€
-    """
-    full_text = docx_all_text(file_content)
-    if not full_text:
-        return []
-    result: List[Dict] = []
-
-    pattern = re.compile(
-        r'([A-Za-z0-9][^\n]{3,500}?)'
-        r'(?:Fecha de valor\s+)?'
-        r'(\d{2}\.\d{2}\.\d{4})'
-        r'(?:\s+(\d{2}\.\d{2}\.\d{4}))?'
-        r'\s+'
-        r'(-?[\dOoОoEeSsBbZz|][\dOoОoEeSsBbZz|.,\s\u00a0]*?)'
-        r'\s*€',
-        re.MULTILINE
-    )
-    for m in pattern.finditer(full_text):
-        try:
-            desc = re.sub(r'\s+', ' ', m.group(1)).strip()
-            date = parse_date(m.group(2), account_name=account_name)
-            amount = parse_amount(m.group(4))
-            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-                continue
-            low = desc.lower()
-            if any(w in low for w in ['saldo previo', 'nuevo saldo', 'transacciones']):
-                continue
-            if 'membership' in low and amount > 0:
-                amount = -abs(amount)
-            if _is_service_line(desc):
-                continue
-            cp_final, _ = extract_counterparty_smart(desc, account_name)
-            if not cp_final:
-                cp_final = 'N26'
-            result.append({
-                'Дата': date, 'Сумма': amount,
-                'Контрагент': cp_final,
-                'Наименование счета': account_name,
-                'Описание': desc
-            })
-        except Exception:
-            continue
-
-    if not result:
-        pattern2 = re.compile(
-            r'(n26[^\n]{3,300}?)'
-            r'(\d{2}\.\d{2}\.\d{4})'
-            r'\s+'
-            r'(-?[\dOoОoEeSsBbZz|][\dOoОoEeSsBbZz|.,\s\u00a0]*?)'
-            r'\s*€',
-            re.IGNORECASE
-        )
-        for m in pattern2.finditer(full_text):
-            try:
-                desc = re.sub(r'\s+', ' ', m.group(1)).strip()
-                date = parse_date(m.group(2), account_name=account_name)
-                amount = parse_amount(m.group(3))
-                if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-                    continue
-                if 'membership' in desc.lower() and amount > 0:
-                    amount = -abs(amount)
-                cp_final, _ = extract_counterparty_smart(desc, account_name)
-                if not cp_final:
-                    cp_final = 'N26'
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp_final,
-                    'Наименование счета': account_name,
-                    'Описание': desc
-                })
-            except Exception:
-                continue
-
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
-
-
 # ==================== PAYSERA PDF ====================
 # === FIX v6: координатный парсер через якоря "Transfer/Commission fee <date> <time>" ===
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    Парсер Paysera PDF. Использует координаты слов и текстовый fallback.
-    Формат операции:
-        Transfer 2026-09-03 18:13:47 +0200 <statement_no> <payment_id>
-        <recipient/payer> <EVP/IBAN> -5.00 EUR <balance>
-        Purpose of payment: <purpose>
+    Paysera PDF. Формат операции:
+        Transfer
+        2026-09-03 18:13:47 +0200
+        1772946986
+        Paysera LT (300060819)
+        -5.00 EUR
+        1125.63 EUR
+        Purpose of payment: Плата за обслуживание счета.
+
+    Или в одну строку:
+        Transfer 2026-09-03 18:13:47 +0200 1772946986 BS PROPERTY, SIA (40103642101)
+        LT573500010016207804 (EVP7310016207804) 5000.00 EUR 6125.63 EUR
+        Purpose of payment: Interest payment for loan (3.2.2)
     """
     result: List[Dict] = []
 
@@ -3387,21 +3507,23 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     if not sources:
         return result
 
-    op_block_re = re.compile(
-        r'(Transfer|Commission\s+fee|Перевод|Комиссионная\s+плата)\s+'
-        r'(\d{4}-\d{2}-\d{2})\s+'
-        r'(\d{2}:\d{2}:\d{2})\s*'
-        r'(?:\+0200|\+0300|\+0000)?',
+    # Якорь: дата + время где угодно в строке
+    anchor_re = re.compile(
+        r'(?P<date>\d{4}-\d{2}-\d{2})\s+(?P<time>\d{2}:\d{2}:\d{2})',
         re.IGNORECASE
     )
-
+    # Тип операции — рядом с якорем
+    type_re = re.compile(
+        r'\b(Transfer|Commission\s+fee|Перевод|Комиссионная\s+плата)\b',
+        re.IGNORECASE
+    )
     amount_re = re.compile(
         r'(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s*(EUR|USD|CZK|GBP|PLN)',
         re.IGNORECASE
     )
-
     purpose_re = re.compile(
-        r'(?:Purpose\s+of\s+payment|Назначение\s+платежа)\s*:\s*(.*?)(?:\n|$)',
+        r'(?:Purpose\s+of\s+payment|Назначение\s+платежа)\s*:\s*'
+        r'([^\n]{1,300}?)(?:\n|$)',
         re.IGNORECASE
     )
 
@@ -3413,81 +3535,131 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         full_text = _CID_PATTERN.sub(' ', full_text)
         full_text = re.sub(r'[ \t]+', ' ', full_text)
 
+        # Разбиваем на строки
         lines = full_text.split('\n')
-        full_flat = ' '.join(lines)
 
+        # Находим все якоря (дата + время)
         anchors: List[Dict] = []
-        for m in op_block_re.finditer(full_flat):
-            anchors.append({
-                'start': m.start(),
-                'end': m.end(),
-                'type': m.group(1).strip(),
-                'date': parse_date(m.group(2), account_name=account_name),
-                'time': m.group(3),
-            })
+        for idx_l, l in enumerate(lines):
+            for m in anchor_re.finditer(l):
+                anchors.append({
+                    'line_idx': idx_l,
+                    'date': m.group('date'),
+                    'time': m.group('time'),
+                    'match_start': m.start(),
+                    'match_end': m.end(),
+                })
 
         if not anchors:
             continue
 
+        # Плоский текст для быстрого поиска окон
+        flat_parts = []
+        line_offsets = []
+        pos = 0
+        for l in lines:
+            line_offsets.append(pos)
+            flat_parts.append(l)
+            pos += len(l) + 1  # +1 за \n
+        flat_text = '\n'.join(flat_parts)
+
+        # Для каждого якоря — окно от него до следующего
+        anchor_positions = []
+        for a in anchors:
+            abs_pos = line_offsets[a['line_idx']] + a['match_start']
+            anchor_positions.append(abs_pos)
+
         local: List[Dict] = []
 
         for i, a in enumerate(anchors):
-            win_start = a['end']
-            win_end = anchors[i + 1]['start'] if i + 1 < len(anchors) else len(full_flat)
-            window = full_flat[win_start:win_end]
+            abs_start = anchor_positions[i]
+            abs_end = anchor_positions[i + 1] if i + 1 < len(anchor_positions) else len(flat_text)
+            window = flat_text[abs_start:abs_end]
 
+            date = parse_date(a['date'], account_name=account_name)
+            if not date:
+                continue
+
+            # Тип операции: ищем в окне ПЕРЕД датой (в той же строке)
+            # + в начале окна после даты
+            line_start = line_offsets[a['line_idx']]
+            line_end = flat_text.find('\n', line_start)
+            if line_end == -1:
+                line_end = len(flat_text)
+            full_line = flat_text[line_start:line_end]
+            before_date = full_line[:a['match_start']].strip()
+            # Если в before_date нет типа — ищем на предыдущей строке
+            op_type = ''
+            tm = type_re.search(before_date)
+            if tm:
+                op_type = tm.group(1)
+            else:
+                # Предыдущая непустая строка
+                for j in range(a['line_idx'] - 1, max(-1, a['line_idx'] - 4), -1):
+                    prev = lines[j].strip()
+                    if not prev:
+                        continue
+                    tm2 = type_re.search(prev)
+                    if tm2 and len(prev) < 40:
+                        op_type = tm2.group(1)
+                        break
+                    break  # если первая непустая — не тип, дальше не идём
+
+            # Сумма — первая в окне
+            first_amt = amount_re.search(window)
+            if not first_amt:
+                continue
+            raw_amt = first_amt.group(1).strip()
+            amount = parse_amount(raw_amt)
+            if amount == 0.0 or not _is_reasonable_amount(amount):
+                continue
+
+            # Знак
+            if op_type.lower().startswith('commission') or \
+               op_type.lower().startswith('комиссион'):
+                amount = -abs(amount)
+            else:
+                if '-' in raw_amt:
+                    amount = -abs(amount)
+                else:
+                    amount = abs(amount)
+
+            # Purpose
             purpose = ''
             pm = purpose_re.search(window)
             if pm:
                 purpose = pm.group(1).strip()
-                purpose = re.sub(r'\s+', ' ', purpose)
-                purpose = purpose.rstrip('.').strip()
+                purpose = re.sub(r'\s+', ' ', purpose).rstrip('.').strip()
 
-            first_amt = amount_re.search(window)
-            recipient_zone = window[:first_amt.start()] if first_amt else window[:500]
-
+            # Контрагент: берём текст от начала окна до первой суммы,
+            # минус служебные поля
+            recipient_zone = window[:first_amt.start()]
             recipient_zone = re.sub(
-                r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(\s+[+\-]\d{4})?',
+                r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(\s*[+\-]\d{4})?',
                 ' ', recipient_zone
             )
             recipient_zone = re.sub(
-                r'\b(?:Statement|No\.?|Payment\s*ID|Recipient\s*/\s*Payer\s*\(Code\)|'
-                r'EVP\s*/\s*IBAN|Amount\s+and\s+currency|Balance|Currencies|Client|Account|'
-                r'Start\s+balance|Final\s+balance|Debit\s+turnover|Credit\s+turnover|'
-                r'Purpose\s+of\s+payment)\b',
+                r'\b(?:Transfer|Commission\s+fee|Перевод|Комиссионная\s+плата)\b',
                 ' ', recipient_zone, flags=re.IGNORECASE
             )
             recipient_zone = re.sub(r'\b\d{6,}\b', ' ', recipient_zone)
             recipient_zone = re.sub(r'\(?\s*EVP\d+\s*\)?', ' ', recipient_zone)
             recipient_zone = re.sub(r'\b[A-Z]{2}\d{2}[A-Z0-9]{8,}\b', ' ', recipient_zone)
             recipient_zone = re.sub(r'\(\s*\d{6,}\s*\)', ' ', recipient_zone)
+            recipient_zone = re.sub(
+                r'\b(?:Statement|No\.?|Payment\s*ID|'
+                r'Recipient\s*/\s*Payer\s*\(Code\)|'
+                r'EVP\s*/\s*IBAN|Amount\s+and\s+currency|Balance|Currencies|'
+                r'Client|Account|Start\s+balance|Final\s+balance|'
+                r'Debit\s+turnover|Credit\s+turnover)\b',
+                ' ', recipient_zone, flags=re.IGNORECASE
+            )
             recipient_zone = re.sub(r'[\.\+]', ' ', recipient_zone)
             recipient_zone = re.sub(r'\s+', ' ', recipient_zone).strip()
             cp = recipient_zone.strip(' .,;:-')
 
             if not cp or len(cp) < 2 or re.fullmatch(r'[\d\s.,\-/\\]+', cp):
                 cp = purpose
-
-            amount = 0.0
-            if first_amt:
-                raw_amt = first_amt.group(1).strip()
-                amount = parse_amount(raw_amt)
-                if a['type'].lower().startswith('commission') or \
-                   a['type'].lower().startswith('комиссион'):
-                    amount = -abs(amount)
-                else:
-                    if '-' in raw_amt:
-                        amount = -abs(amount)
-                    elif raw_amt.strip().startswith('+'):
-                        amount = abs(amount)
-                    else:
-                        amount = abs(amount)
-
-            if amount == 0.0 or not _is_reasonable_amount(amount):
-                continue
-
-            if purpose and _is_service_line(purpose) and not cp:
-                continue
 
             cp_final, _ = extract_counterparty_smart(
                 purpose if purpose else cp, account_name, cp, '', cp
@@ -3496,7 +3668,7 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 cp_final = cp if cp else 'Paysera'
 
             local.append({
-                'Дата': a['date'],
+                'Дата': date,
                 'Сумма': amount,
                 'Контрагент': cp_final,
                 'Наименование счета': account_name,
@@ -3695,10 +3867,13 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         3 сент. 2026 MOA Поступление с SAIDA MAMMADBAYLI €5 000.00 €6 535.00
 
     Алгоритм:
-      1) каждую строку с датой считаем началом новой операции;
-      2) описание = текст после типа до первой суммы + все последующие строки
-         (continuation), пока не встретим строку с датой (следующая операция);
-      3) сумму берём из первой строки или ищем в continuation;
+      1) каждая строка с датой — начало новой операции;
+      2) описание = текст после типа до первой суммы + последующие строки
+         (continuation), НО:
+           - continuation прерывается, как только встретим footer-маркер;
+           - максимум 5 continuation-строк;
+           - общая длина описания ограничена 400 символами;
+      3) сумму берём из первой строки или из continuation;
       4) склеиваем описание и извлекаем контрагента.
     """
     result: List[Dict] = []
@@ -3765,6 +3940,30 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         'получите помощь', 'отсканируйте qr-код',
     ]
 
+    # === FIX v7: маркеры footer-а, при которых прерываем continuation ===
+    footer_stop_markers = [
+        'застрахован', 'лицензирован', 'iidraudimas',
+        'viešoji', 'deposit insurance', 'deposit and investment',
+        'revolut bank uab', 'konstitucijos', '+370',
+        'юридический адрес', 'юридическим адресом',
+        'страхования вкладов', 'системы страхования',
+        'публичного учреждения', 'официальном сайте',
+        'информационном документе', 'информация о страховании',
+        'свяжитесь с нами', 'получите помощь',
+        '© 20', 'все права защищены',
+        'реестре компаний', 'кодом авторизации',
+        'под регулированием', 'центрального банка',
+        'пublic institution', 'public institution',
+    ]
+
+    # Также прерываем, если строка похожа на реквизиты/юридический шум
+    junk_stop_re = re.compile(
+        r'(?:www\.|https?://|@[a-z0-9\.\-]+\.[a-z]{2,}|'
+        r'\b\d{6,}\b|'
+        r'\b\d{2}\.\d{2}\.\d{4}\b)',
+        re.IGNORECASE
+    )
+
     best: List[Dict] = []
 
     for src_text in sources:
@@ -3797,11 +3996,31 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if current is None:
                 continue
 
+            # === FIX v7: если встретили footer-маркер — прекращаем сбор ===
             if any(m in low for m in skip_markers):
+                # Если это явный footer — прекращаем накопление для текущей операции
+                if any(fs in low for fs in footer_stop_markers):
+                    operations.append(current)
+                    current = None
+                    continue
+                continue
+            if any(fs in low for fs in footer_stop_markers):
+                operations.append(current)
+                current = None
                 continue
             if re.fullmatch(r'[\s€0.,]+', stripped):
                 continue
             if re.fullmatch(r'€\s?0[.,]00', stripped):
+                continue
+            # Ограничение: не больше 5 continuation-строк
+            if len(current['continuation']) >= 5:
+                operations.append(current)
+                current = None
+                continue
+            # Строки с длинными числами/URL — обычно реквизиты
+            if junk_stop_re.search(stripped) and not re.search(r'[A-Za-zА-Яа-я]{4,}', stripped):
+                operations.append(current)
+                current = None
                 continue
             current['continuation'].append(stripped)
 
@@ -3831,6 +4050,10 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 desc_main = after[:amount_match.start()].strip()
                 cont_filtered: List[str] = []
                 for c in op['continuation']:
+                    c_low = c.lower()
+                    # Стоп-маркеры внутри continuation (защита от проскока)
+                    if any(fs in c_low for fs in footer_stop_markers):
+                        break
                     if eur_re.search(c):
                         first_in_c = eur_re.search(c)
                         head = c[:first_in_c.start()].strip()
@@ -3838,9 +4061,6 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                             cont_filtered.append(head)
                         break
                     if re.fullmatch(r'[\s€0.,]+', c):
-                        continue
-                    c_low = c.lower()
-                    if any(m in c_low for m in skip_markers):
                         continue
                     cont_filtered.append(c)
             else:
@@ -3868,6 +4088,9 @@ def parse_revolut_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             desc = ' '.join(p for p in parts if p)
             desc = re.sub(r'\s+', ' ', desc).strip()
             desc = desc.strip(' •')
+            # === FIX v7: ограничение длины описания ===
+            if len(desc) > 400:
+                desc = desc[:400].rsplit(' ', 1)[0] + '…'
 
             if ttype in ('MOA', 'MOR', 'TOPUP'):
                 amount = abs(amount)
@@ -8064,6 +8287,37 @@ def get_parser_chain(account_name: str,
     return chain
 
 
+def _is_suspicious_parse_result(tx: List[Dict]) -> bool:
+    """
+    Возвращает True, если результат парсера выглядит подозрительно:
+    - описания слишком длинные (склейка блоков),
+    - много € в одном описании,
+    - больше половины операций имеют пустого контрагента.
+    """
+    if not tx:
+        return False
+    n = len(tx)
+    long_desc = 0
+    multi_eur = 0
+    empty_cp = 0
+    for t in tx:
+        desc = str(t.get('Описание', ''))
+        cp = str(t.get('Контрагент', '')).strip()
+        if len(desc) > 300:
+            long_desc += 1
+        if desc.count('€') >= 2:
+            multi_eur += 1
+        if not cp:
+            empty_cp += 1
+    if long_desc >= max(1, n // 2):
+        return True
+    if multi_eur >= max(1, n // 2):
+        return True
+    if empty_cp >= n:
+        return True
+    return False
+
+
 def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
     raw_account_name = clean_account_name(filename)
     account_name = normalize_account_name(raw_account_name)
@@ -8076,6 +8330,8 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
 
     tried: List[str] = []
     errors: List[str] = []
+    suspicious_results: List[Tuple[str, List[Dict]]] = []
+
     for parser, key in chain:
         tried.append(key)
         try:
@@ -8084,10 +8340,26 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
             errors.append(f'{key}: {e}')
             continue
         if tx:
+            # === FIX v7: если результат выглядит подозрительно — откладываем
+            # и пробуем следующий парсер; если ни один не даст лучшего —
+            # вернём лучший из отложенных ===
+            if _is_suspicious_parse_result(tx):
+                suspicious_results.append((key, tx))
+                continue
             for t in tx:
                 t['Наименование счета'] = account_name
             return tx, (f'{key} ({account_name}, real={real_type}, '
                         f'{len(tx)} операций)')
+
+    # Если дошли сюда — значит либо все парсеры упали, либо все результаты
+    # были подозрительными. Возвращаем лучший из подозрительных (самый длинный).
+    if suspicious_results:
+        suspicious_results.sort(key=lambda x: -len(x[1]))
+        key, tx = suspicious_results[0]
+        for t in tx:
+            t['Наименование счета'] = account_name
+        return tx, (f'{key} (SUSPICIOUS: {account_name}, real={real_type}, '
+                    f'{len(tx)} операций)')
 
     msg = f'all_failed: {tried}'
     if errors:
