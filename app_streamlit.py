@@ -6864,6 +6864,15 @@ def parse_kapital_saida_azn_csv(file_content: bytes, account_name: str) -> List[
     result = _assign_source_indices(result)
     return _dedup_by_source_index(result)
 
+# ==================== MASHREQ PDF (заглушка) ====================
+
+def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Заглушка: MASHREQ PDF в текущей версии не поддерживается.
+    Основной парсер — parse_mashreq (XLSX/CSV).
+    """
+    return []
+
 
 # ==================== MASHREQ XLSX ====================
 
