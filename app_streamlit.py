@@ -3451,32 +3451,22 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    Парсер N26 DOCX. Формат (даты и суммы могут быть на разных строках!):
-
+    N26 DOCX. Даты и сумма часто на разных строках:
         N26 Metal Membership
         Fecha de valor 27.09.2026
         27.09.2026
         -16,90€
 
-    Поэтому используем DOTALL и не требуем, чтобы всё было на одной строке.
+    Идём построчно и ищем окно: где-то есть дата, где-то рядом сумма €,
+    где-то осмысленное описание (строка без цифр/служебных слов).
     """
     full_text = docx_all_text(file_content)
     if not full_text:
         return []
 
-    result: List[Dict] = []
-
-    # Ищем окно: описание + (опционально "Fecha de valor") + дата(ы) + сумма
-    # Сумма: -16,90€ или 16,90 € или -16.90€
-    pattern = re.compile(
-        r'([A-Za-zА-Яа-я0-9][^\n]{2,200}?)'
-        r'\s*(?:Fecha\s+de\s+valor\s*)?'
-        r'(\d{2}\.\d{2}\.\d{4})'
-        r'(?:\s+(\d{2}\.\d{2}\.\d{4}))?'
-        r'\s+'
-        r'(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s*€',
-        re.DOTALL | re.IGNORECASE,
-    )
+    lines = [l.strip() for l in full_text.split('\n') if l.strip()]
+    if not lines:
+        return []
 
     skip_markers = [
         'saldo previo', 'tu nuevo saldo', 'nuevo saldo',
@@ -3486,88 +3476,92 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
         'extracto bancario', 'hasta', 'saide previo',
     ]
 
-    for m in pattern.finditer(full_text):
-        try:
-            desc = re.sub(r'\s+', ' ', m.group(1)).strip()
-            desc = desc.strip(' .,;:-–—|')
-            date = parse_date(m.group(2), account_name=account_name)
-            amount = parse_amount(m.group(4))
-            if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-                continue
-            low = desc.lower()
-            # Пропускаем служебные
-            if any(w in low for w in skip_markers):
-                continue
-            # Игнорируем фрагменты, которые сами по себе — обрывки служебных
-            if len(desc) < 3:
-                continue
-            # Membership/subscription — всегда отрицательная
-            if ('membership' in low or 'subscription' in low) and amount > 0:
-                amount = -abs(amount)
-            if _is_service_line(desc):
-                continue
-            cp_final, _ = extract_counterparty_smart(desc, account_name)
-            if not cp_final:
-                cp_final = 'N26'
-            result.append({
-                'Дата': date, 'Сумма': amount,
-                'Контрагент': cp_final,
-                'Наименование счета': account_name,
-                'Описание': desc,
-            })
-        except Exception:
+    date_re = re.compile(r'^\s*(\d{2}\.\d{2}\.\d{4})\s*$')
+    fecha_re = re.compile(r'^Fecha\s+de\s+valor\s+(\d{2}\.\d{2}\.\d{4})\s*$',
+                          re.IGNORECASE)
+    amount_re = re.compile(r'^\s*(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s*€\s*$')
+
+    result: List[Dict] = []
+    used_indices: set = set()
+
+    for i, line in enumerate(lines):
+        low = line.lower()
+        if any(w in low for w in skip_markers):
+            continue
+        # Ищем строку с датой (либо "Fecha de valor DD.MM.YYYY", либо просто дата)
+        date_val = None
+        mf = fecha_re.match(line)
+        md = date_re.match(line)
+        if mf:
+            date_val = mf.group(1)
+        elif md:
+            date_val = md.group(1)
+        if not date_val:
             continue
 
-    # Fallback: если ничего не нашли, пробуем разобрать построчно и склеить
-    if not result:
-        lines = [l.strip() for l in full_text.split('\n') if l.strip()]
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            dm = re.search(r'(\d{2}\.\d{2}\.\d{4})', line)
-            if not dm:
-                i += 1
+        # Смотрим окно ±3 строки: ищем сумму € и описание
+        window_start = max(0, i - 3)
+        window_end = min(len(lines), i + 4)
+        amount_val = None
+        amount_idx = None
+        desc_val = ''
+        desc_idx = None
+
+        for j in range(window_start, window_end):
+            if j in used_indices:
                 continue
-            # Собираем 2-4 строки вперёд и назад
-            block = '\n'.join(lines[max(0, i - 3): i + 3])
-            date = parse_date(dm.group(1), account_name=account_name)
-            # Ищем сумму в блоке
-            am = re.search(r'(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s*€', block)
-            if not am or not date:
-                i += 1
+            if j == i:
                 continue
-            amount = parse_amount(am.group(1))
-            if amount == 0.0:
-                i += 1
+            lj = lines[j]
+            lowj = lj.lower()
+            if any(w in lowj for w in skip_markers):
                 continue
-            # Описание — первая строка блока, которая не дата и не сумма
-            desc = ''
-            for bl in lines[max(0, i - 3): i + 3]:
-                if re.search(r'\d{2}\.\d{2}\.\d{4}', bl):
-                    continue
-                if re.search(r'€', bl):
-                    continue
-                if any(w in bl.lower() for w in skip_markers):
-                    continue
-                if len(bl) > 3 and not re.fullmatch(r'[\d\s.,\-]+', bl):
-                    desc = bl
-                    break
-            if not desc:
-                i += 1
+            # Дата?
+            if date_re.match(lj) or fecha_re.match(lj):
                 continue
-            if ('membership' in desc.lower() or 'subscription' in desc.lower()) and amount > 0:
-                amount = -abs(amount)
-            cp_final, _ = extract_counterparty_smart(desc, account_name)
-            if not cp_final:
-                cp_final = 'N26'
-            result.append({
-                'Дата': date, 'Сумма': amount,
-                'Контрагент': cp_final,
-                'Наименование счета': account_name,
-                'Описание': desc,
-            })
-            i += 3
+            # Сумма?
+            ma = amount_re.match(lj)
+            if ma and amount_val is None:
+                amount_val = parse_amount(ma.group(1))
+                amount_idx = j
+                continue
+            # Описание — строка без дат и сумм
+            if amount_val is not None and desc_val == '':
+                if len(lj) >= 3 and not re.fullmatch(r'[\d\s.,\-]+', lj):
+                    if not date_re.match(lj) and not fecha_re.match(lj):
+                        desc_val = lj
+                        desc_idx = j
+                        break
+
+        if amount_val is None or amount_val == 0.0:
             continue
+        if not desc_val:
+            continue
+
+        date = parse_date(date_val, account_name=account_name)
+        if not date:
+            continue
+
+        low_desc = desc_val.lower()
+        if ('membership' in low_desc or 'subscription' in low_desc) and amount_val > 0:
+            amount_val = -abs(amount_val)
+
+        cp_final, _ = extract_counterparty_smart(desc_val, account_name)
+        if not cp_final:
+            cp_final = 'N26'
+
+        result.append({
+            'Дата': date,
+            'Сумма': amount_val,
+            'Контрагент': cp_final,
+            'Наименование счета': account_name,
+            'Описание': desc_val,
+        })
+        used_indices.add(i)
+        if amount_idx is not None:
+            used_indices.add(amount_idx)
+        if desc_idx is not None:
+            used_indices.add(desc_idx)
 
     result = _assign_source_indices(result)
     return _dedup_by_source_index(result)
@@ -3579,19 +3573,10 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    Paysera PDF. Формат:
-        Transfer 2026-09-10 14:08:16 +0200 1775388337 862537811
-        BS PROPERTY, SIA (40103642101) LT573500010016207804 (EVP7310016207804)
-        5000.00 EUR 6125.63 EUR
-        Purpose of payment: Interest payment for loan (3.2.2)
-
-    Работаем так:
-      1) нормализуем whitespace — превращаем всё в одну строку;
-      2) находим якоря "Transfer/Commission fee <дата> <время>";
-      3) между якорями ищем сумму EUR и Purpose;
-      4) контрагент — из зоны между якорем и суммой, чистим от номеров/IBAN;
-      5) игнорируем строки "Start balance", "Final balance", "Debit turnover",
-         "Credit turnover" и т.п.
+    Paysera PDF. В исходнике PDFplumber отдаёт `<br/>` в тексте:
+        2026-09-03<br/>18:13:47 +0200
+    Поэтому обязательно сначала `_clean_pdf_artifacts` (заменит `<br/>` на
+    пробел), затем нормализация whitespace.
     """
     result: List[Dict] = []
 
@@ -3610,12 +3595,11 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     if not sources:
         return result
 
-    # Якорь: тип + дата + время (whitespace может быть любым)
     op_block_re = re.compile(
         r'(Transfer|Commission\s+fee|Перевод|Комиссионная\s+плата)\s+'
         r'(\d{4}-\d{2}-\d{2})\s+'
         r'(\d{2}:\d{2}:\d{2})\s*'
-        r'(?:\+0200|\+0300|\+0000|\+\d{4})?',
+        r'(?:\+\d{4})?',
         re.IGNORECASE
     )
 
@@ -3629,7 +3613,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
         re.IGNORECASE
     )
 
-    # Служебные зоны, которые нельзя интерпретировать как контрагента
     service_zone_re = re.compile(
         r'(?:Start\s+balance|Final\s+balance|Debit\s+turnover|'
         r'Credit\s+turnover|Currencies|Client\s+code|Client\'s\s+code|'
@@ -3644,8 +3627,9 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     for full_text in sources:
         if not full_text:
             continue
+        # 1) убираем <br/>, HTML-теги, CID и пр. — важно ДО нормализации
         full_text = _clean_pdf_artifacts(full_text)
-        # Ключевой момент: нормализуем whitespace в одну строку
+        # 2) схлопываем whitespace — одна плоская строка
         normalized = re.sub(r'\s+', ' ', full_text).strip()
 
         anchors: List[Dict] = []
@@ -3668,7 +3652,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             win_end = anchors[i + 1]['start'] if i + 1 < len(anchors) else len(normalized)
             window = normalized[win_start:win_end]
 
-            # Обрезаем окно на служебные хвостовые зоны
             svc = service_zone_re.search(window)
             if svc:
                 window = window[:svc.start()]
@@ -3682,7 +3665,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             first_amt = amount_re.search(window)
             recipient_zone = window[:first_amt.start()] if first_amt else window[:400]
 
-            # Чистим зону получателя от дат/номеров/IBAN
             recipient_zone = re.sub(
                 r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(\s*[+\-]\d{4})?',
                 ' ', recipient_zone
@@ -3718,8 +3700,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
 
-            # Отбрасываем строки, где amount — это баланс
-            # (например, "Start balance:1130.63 EUR")
             if first_amt:
                 lookback = window[:first_amt.start() + first_amt.end()]
                 if service_zone_re.search(lookback):
@@ -3737,8 +3717,6 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 else:
                     cp_final = cp if cp else 'Paysera'
 
-            # Дополнительная проверка: если контрагент — это 'EVP' или
-            # только номер/дата, заменяем на 'Paysera'
             if re.fullmatch(r'(?:EVP|IBAN|BIC|EUR|USD|CZK|PLN)', cp_final, re.IGNORECASE):
                 cp_final = 'Paysera'
 
@@ -8354,10 +8332,10 @@ def get_parser_chain(account_name: str,
 
 def _is_suspicious_parse_result(tx: List[Dict]) -> bool:
     """
-    Возвращает True, если результат парсера выглядит подозрительно:
-    - описания слишком длинные (склейка блоков),
-    - много € в одном описании,
-    - больше половины операций имеют пустого контрагента.
+    Подозрительно, если:
+    - описания очень длинные (склейка блоков) — > 500 символов,
+    - в одном описании больше 3 € и длина > 200 (признак склейки footer-а),
+    - вообще нет контрагентов у всех операций.
     """
     if not tx:
         return False
@@ -8368,9 +8346,9 @@ def _is_suspicious_parse_result(tx: List[Dict]) -> bool:
     for t in tx:
         desc = str(t.get('Описание', ''))
         cp = str(t.get('Контрагент', '')).strip()
-        if len(desc) > 300:
+        if len(desc) > 500:
             long_desc += 1
-        if desc.count('€') >= 2:
+        if desc.count('€') >= 4 and len(desc) > 200:
             multi_eur += 1
         if not cp:
             empty_cp += 1
