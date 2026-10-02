@@ -125,8 +125,6 @@ def _clean_pdf_artifacts(text: str) -> str:
 
 # ==================== НАСТРОЙКА СТРАНИЦЫ ====================
 
-# ==================== НАСТРОЙКА СТРАНИЦЫ ====================
-
 st.set_page_config(
     page_title="Аналитик банковских выписок",
     page_icon="💼",
@@ -1587,6 +1585,83 @@ def _is_service_word_line(line: str) -> bool:
 
 # ==================== PDF-УТИЛИТЫ ====================
 
+def _text_has_cid_junk(text: str) -> bool:
+    """
+    True, если текст содержит CID-мусор (cid:NN) в значимом количестве.
+    """
+    if not text:
+        return False
+    cid_count = len(_CID_PATTERN.findall(text))
+    if cid_count == 0:
+        return False
+    return cid_count > 5 or cid_count > len(text) * 0.005
+
+
+def _pdf_words_with_coords(file_content: bytes) -> List[Dict]:
+    """
+    Извлекает слова с координатами. Если pdfplumber отдаёт CID-мусор —
+    пробуем pdfminer. Возвращает список dict:
+        {page, x0, x1, top, bottom, text, size}
+    """
+    out: List[Dict] = []
+    try:
+        with pdfplumber.open(BytesIO(file_content)) as pdf:
+            for pi, page in enumerate(pdf.pages):
+                try:
+                    words = page.extract_words(
+                        keep_blank_chars=False,
+                        use_text_flow=False,
+                        extra_attrs=['size']
+                    )
+                except TypeError:
+                    try:
+                        words = page.extract_words()
+                    except Exception:
+                        continue
+                except Exception:
+                    continue
+                if not words:
+                    continue
+
+                # Проверяем, не CID ли это
+                total_chars = sum(len(str(w.get('text', ''))) for w in words)
+                cid_in_words = sum(
+                    len(_CID_PATTERN.findall(str(w.get('text', ''))))
+                    for w in words
+                )
+                if cid_in_words > 5 and total_chars > 0 and \
+                   cid_in_words * 5 > total_chars:
+                    alt_words = _pdf_words_via_pdfminer(file_content, pi)
+                    if alt_words:
+                        out.extend(alt_words)
+                        continue
+
+                for w in words:
+                    try:
+                        txt = str(w.get('text', ''))
+                        if not txt:
+                            continue
+                        size_val = w.get('size', 0)
+                        try:
+                            size_f = float(size_val) if size_val is not None else 0.0
+                        except Exception:
+                            size_f = 0.0
+                        out.append({
+                            'page': pi,
+                            'x0': float(w.get('x0', 0.0)),
+                            'x1': float(w.get('x1', 0.0)),
+                            'top': float(w.get('top', 0.0)),
+                            'bottom': float(w.get('bottom', 0.0)),
+                            'text': txt,
+                            'size': size_f,
+                        })
+                    except Exception:
+                        continue
+    except Exception:
+        return []
+    return out
+
+
 def _pdf_words_via_pdfminer(file_content: bytes, page_num: int) -> List[Dict]:
     """
     Альтернативный путь извлечения слов — через pdfminer с LAParams.
@@ -1598,16 +1673,11 @@ def _pdf_words_via_pdfminer(file_content: bytes, page_num: int) -> List[Dict]:
         from pdfminer.pdfpage import PDFPage
         from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
         from pdfminer.converter import PDFPageAggregator
-        from pdfminer.layout import LTTextBox, LTTextLine, LTChar, LAParams
+        from pdfminer.layout import LTTextBox, LTTextLine, LAParams
     except Exception:
         return []
 
     out: List[Dict] = []
-    try:
-        with open('/dev/null', 'wb'):
-            pass
-    except Exception:
-        pass
     try:
         fp = BytesIO(file_content)
         rsrcmgr = PDFResourceManager()
@@ -1797,6 +1867,9 @@ def _split_glued_line(line: str) -> List[str]:
     if len(tokens) >= 2:
         return tokens
     return [line]
+
+
+# ==================== СЛОВАРИ ПЕРЕВОДОВ ====================
 
 
 # ==================== СЛОВАРИ ПЕРЕВОДОВ ====================
@@ -3376,8 +3449,6 @@ def parse_n26_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 # ==================== N26 DOCX ====================
 
-# ==================== N26 DOCX ====================
-
 def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
     """
     Парсер N26 DOCX. Формат (даты и суммы могут быть на разных строках!):
@@ -3503,8 +3574,6 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
 
 # ==================== PAYSERA PDF ====================
 # === FIX v6: координатный парсер через якоря "Transfer/Commission fee <date> <time>" ===
-
-# ==================== PAYSERA PDF ====================
 
 # ==================== PAYSERA PDF ====================
 
@@ -3861,8 +3930,6 @@ def _parse_paysera_docx_fallback(full_text: str, account_name: str) -> List[Dict
 
 # ==================== REVOLUT PDF ====================
 # === FIX v6: склейка многострочных описаний (FEE, MOA, MOS, TOPUP) ===
-
-# ==================== REVOLUT PDF ====================
 
 # ==================== REVOLUT PDF ====================
 
