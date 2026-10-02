@@ -4825,91 +4825,92 @@ def parse_jenhor_unelma_pdf(file_content: bytes, account_name: str) -> List[Dict
 
 def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     result: List[Dict] = []
+
+    # --- Попытка 1: через pdf_all_tables ---
     tables = pdf_all_tables(file_content)
     for table in tables:
         if not table or len(table) < 2:
             continue
+
+        # Ищем таблицу операций — там в шапке есть "Списание" / "Зачисление"
         header_idx = -1
         for i, row in enumerate(table):
             joined = ' '.join([str(c or '') for c in row]).lower()
-            if 'tarix' in joined and ('məxaric' in joined or 'mexaric' in joined) \
-                    and ('mədaxil' in joined or 'medaxil' in joined):
+            if ('spisanie' in joined or 'списание' in joined
+                    or 'zachislenie' in joined or 'зачисление' in joined):
                 header_idx = i
                 break
-        if header_idx == -1:
-            continue
-        hdr = table[header_idx]
-        ci: Dict[str, int] = {}
-        for i, h in enumerate(hdr):
-            hl = (h or '').lower()
-            if 'tarix' in hl and 'date' not in ci:
-                ci['date'] = i
-            elif ('məxaric' in hl or 'mexaric' in hl) and 'debit' not in ci:
-                ci['debit'] = i
-            elif ('mədaxil' in hl or 'medaxil' in hl) and 'credit' not in ci:
-                ci['credit'] = i
-            elif ('təsvir' in hl or 'tesvir' in hl or 'описание' in hl) \
-                    and 'desc' not in ci:
-                ci['desc'] = i
-        if 'date' not in ci:
-            continue
-        if 'debit' not in ci and 'credit' not in ci:
-            continue
+        # В этой выписке шапки нет — идём без неё
+        start_row = header_idx + 1 if header_idx >= 0 else 0
 
-        for row in table[header_idx + 1:]:
+        for row in table[start_row:]:
             if not row:
                 continue
             cells = [str(c or '').strip() for c in row]
-            joined = ' '.join(cells).lower()
-            if 'tarix' in joined and ('məxaric' in joined or 'mədaxil' in joined):
+            joined = ' '.join(cells)
+            if not joined.strip():
                 continue
 
-            def _cell(ci_key):
-                idx_c = ci.get(ci_key, -1)
-                if 0 <= idx_c < len(cells):
-                    return cells[idx_c]
-                return ''
-
-            date = parse_date(_cell('date'), account_name=account_name)
-            if not date or not re.match(r'^\d{2}-\d{2}-\d{4}$', date):
+            # Разбираем строку: ищем дату YYYY-MM-DD
+            m_date = re.search(r'(\d{4}-\d{2}-\d{2})', joined)
+            if not m_date:
+                continue
+            date = parse_date(m_date.group(1), account_name=account_name)
+            if not date:
                 continue
 
-            debit_raw = _cell('debit')
-            credit_raw = _cell('credit')
+            # После даты ищем слипшиеся числа.
+            # Формат ячейки: "07000.0020486.14" или "3.00013486.14"
+            tail = joined[m_date.end():]
 
-            def _split_stuck(s: str) -> Tuple[float, float]:
-                s = (s or '').strip()
-                if not s:
-                    return 0.0, 0.0
-                m1 = re.fullmatch(r'(\d+)[.,](\d{2})(\d)', s)
-                if m1:
-                    a = float(f"{m1.group(1)}.{m1.group(2)}")
-                    b = float(m1.group(3))
-                    return a, b
-                m2 = re.fullmatch(r'0(\d+[.,]\d{2})', s)
-                if m2:
-                    b = float(m2.group(1).replace(',', '.'))
-                    return 0.0, b
-                v = parse_amount(s)
-                return v, 0.0
+            # Собираем все "числоподобные" токены
+            nums = re.findall(r'\d+\.\d{2}', tail)
+            if not nums:
+                continue
 
-            d1, c1 = _split_stuck(debit_raw)
-            d2, c2 = _split_stuck(credit_raw)
-            debit_val = max(d1, d2)
-            credit_val = max(c1, c2)
+            # --- Логика определения суммы ---
+            # В Kapital-выписке столбцы: Списание | Зачисление | Остаток
+            # Если в исходнике "07000.0020486.14":
+            #   - если значение начинается с '0' и содержит слипшуюся пару,
+            #     то первая часть — 0 (пусто), вторая — зачисление
+            #   - "3.00013486.14" → списание 3.00, остаток 13486.14
             amount = 0.0
-            if credit_val != 0.0 and abs(credit_val) >= abs(debit_val):
-                amount = abs(credit_val)
-            elif debit_val != 0.0:
-                amount = -abs(debit_val)
+            sms_fee_re = re.compile(r'SMS\s*SERVICE\s*FEE', re.IGNORECASE)
+
+            if sms_fee_re.search(tail):
+                # SMS-комиссия — это списание
+                amount = -abs(parse_amount(nums[0]))
             else:
+                # Основные операции: попытка разобрать склейку
+                raw_first = nums[0]
+                # Если строка выглядит как "07000.00", а следующий токен
+                # "20486.14" — это остаток. Тогда сумма = 7000.00 (зачисление).
+                # Если "7000.0020486.14" — аналогично.
+                # Ищем ведущий 0: если raw начинается с '0' и длина > 6,
+                # считаем что это credit (зачисление).
+                if re.match(r'^0\d{4,}\.\d{2}$', raw_first):
+                    amount = abs(parse_amount(raw_first[1:]))
+                else:
+                    amount = abs(parse_amount(raw_first))
+
+            if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
-            if not _is_reasonable_amount(amount):
-                continue
-            desc = _cell('desc')
+
+            desc = tail
+            # Обрезаем всё от первого числа
+            first_num_pos = re.search(r'\d+\.\d{2}', tail)
+            if first_num_pos:
+                desc = tail[:first_num_pos.start()].strip()
+            desc = re.sub(r'[\d\s]{6,}', ' ', desc)
+            desc = re.sub(r'\s+', ' ', desc).strip()
+
+            if not desc:
+                desc = 'Kapital Bank'
+
             cp_final, _ = extract_counterparty_smart(desc, account_name)
             if not cp_final:
                 cp_final = 'Kapital Bank'
+
             result.append({
                 'Дата': date,
                 'Сумма': amount,
@@ -4918,61 +4919,55 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
                 'Описание': desc
             })
 
-    if result:
-        result = _assign_source_indices(result)
-        return _dedup_by_source_index(result)
+        if result:
+            result = _assign_source_indices(result)
+            return _dedup_by_source_index(result)
 
+    # --- Попытка 2: через pdf_all_text ---
     full_text = pdf_all_text(file_content)
     if not full_text:
         return []
+
+    # Ищем блоки вида: <date> <stuck_numbers> <description>
     line_re = re.compile(
-        r'^\s*(\d{4}-\d{2}-\d{2})\s+'
-        r'([\d.,]+)\s+'
-        r'([\d.,]+)\s*'
-        r'([\d.,]+)\s+'
-        r'(.+?)\s*$',
-        re.MULTILINE
+        r'(\d{4}-\d{2}-\d{2})'
+        r'([\d.,]+)'
+        r'([\d.,]+)'
+        r'(.+?)(?=\d{4}-\d{2}-\d{2}|$)',
+        re.DOTALL
     )
+    sms_fee_re = re.compile(r'SMS\s*SERVICE\s*FEE', re.IGNORECASE)
+
     for m in line_re.finditer(full_text):
         date = parse_date(m.group(1), account_name=account_name)
         if not date:
             continue
         g2 = m.group(2)
         g3 = m.group(3)
-        desc = m.group(5).strip()
+        desc = re.sub(r'\s+', ' ', m.group(4)).strip()
 
-        def _split_stuck(s: str) -> Tuple[float, float]:
-            s = (s or '').strip()
-            if not s:
-                return 0.0, 0.0
-            m1 = re.fullmatch(r'(\d+)[.,](\d{2})(\d)', s)
-            if m1:
-                a = float(f"{m1.group(1)}.{m1.group(2)}")
-                b = float(m1.group(3))
-                return a, b
-            m2 = re.fullmatch(r'0(\d+[.,]\d{2})', s)
-            if m2:
-                b = float(m2.group(1).replace(',', '.'))
-                return 0.0, b
-            v = parse_amount(s)
-            return v, 0.0
-
-        d1, c1 = _split_stuck(g2)
-        d2, c2 = _split_stuck(g3)
-        debit_val = max(d1, d2)
-        credit_val = max(c1, c2)
         amount = 0.0
-        if credit_val != 0.0 and abs(credit_val) >= abs(debit_val):
-            amount = abs(credit_val)
-        elif debit_val != 0.0:
-            amount = -abs(debit_val)
+        if sms_fee_re.search(desc):
+            # списание
+            am = re.match(r'(\d+\.\d{2})', g2)
+            if am:
+                amount = -abs(parse_amount(am.group(1)))
         else:
+            # зачисление: убираем ведущий 0
+            if re.match(r'^0\d{4,}\.\d{2}$', g2):
+                amount = abs(parse_amount(g2[1:]))
+            else:
+                am = re.match(r'(\d+\.\d{2})', g2)
+                if am:
+                    amount = abs(parse_amount(am.group(1)))
+
+        if amount == 0.0 or not _is_reasonable_amount(amount):
             continue
-        if not _is_reasonable_amount(amount):
-            continue
+
         cp_final, _ = extract_counterparty_smart(desc, account_name)
         if not cp_final:
             cp_final = 'Kapital Bank'
+
         result.append({
             'Дата': date,
             'Сумма': amount,
@@ -4981,46 +4976,6 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
             'Описание': desc
         })
 
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
-
-
-# ==================== MASHREQ PDF ====================
-
-def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    result: List[Dict] = []
-    tables = pdf_all_tables(file_content)
-    for table in tables:
-        for row in table:
-            if len(row) < 6:
-                continue
-            try:
-                date = parse_date(row[0], account_name=account_name)
-                if not date:
-                    continue
-                desc = row[3] if len(row) > 3 else ''
-                credit = parse_amount(row[4]) if len(row) > 4 else 0.0
-                debit = parse_amount(row[5]) if len(row) > 5 else 0.0
-                amount = 0.0
-                if credit != 0.0:
-                    amount = credit
-                elif debit != 0.0:
-                    amount = -abs(debit)
-                else:
-                    continue
-                if not _is_reasonable_amount(amount):
-                    continue
-                if _is_service_line(desc):
-                    continue
-                cp_final, _ = extract_counterparty_smart(desc, account_name)
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp_final if cp_final else '',
-                    'Наименование счета': account_name,
-                    'Описание': desc
-                })
-            except Exception:
-                continue
     result = _assign_source_indices(result)
     return _dedup_by_source_index(result)
 
@@ -7330,6 +7285,7 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
         df = read_xlsx(file_content)
     if df is None or df.empty:
         return []
+
     header_row = -1
     for idx, row in df.iterrows():
         if idx < 40:
@@ -7339,82 +7295,129 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
                 break
     if header_row == -1:
         return []
+
     hdr = df.iloc[header_row]
     ci: Dict[str, int] = {}
     for i, v in enumerate(hdr.values):
         if pd.isna(v):
             continue
         s = str(v).strip()
-        if 'Əməliyyat tarixi' in s:
+        sl = s.lower()
+        if 'əməliyyat tarixi' in sl:
             ci['date'] = i
-        elif 'İcra tarixi' in s:
+        elif 'icra tarixi' in sl:
             ci['exec_date'] = i
-        elif 'Ödəyən' in s or 'Benefisiar' in s or 'Ödəyən/Benefisiar' in s:
+        elif ('ödəyən' in sl) or ('benefisiar' in sl):
             ci['counterparty'] = i
-        elif 'Təyinat' in s:
+        elif ('təyinat' in sl) or ('teyinat' in sl):
             ci['description'] = i
-        elif 'Mədaxil' in s:
+        elif ('təsvir' in sl) or ('tesvir' in sl):
+            if 'description' not in ci:
+                ci['description'] = i
+        elif 'istinad' in sl:
+            ci['ref'] = i
+        elif 'mədaxil' in sl or 'medaxil' in sl:
             ci['credit'] = i
-        elif 'Məxaric' in s:
+        elif 'məxaric' in sl or 'mexaric' in sl:
             ci['debit'] = i
-        elif 'Balans' in s and 'balance' not in ci:
+        elif 'balans' in sl:
             ci['balance'] = i
-        elif 'Код' in s or s == 'Kod':
+        elif 'kod' in sl or s == 'Код':
             ci['code'] = i
+
     if 'date' not in ci:
         ci['date'] = 0
     if 'description' not in ci:
-        ci['description'] = 3
+        ci['description'] = 3        # Təyinat
     if 'counterparty' not in ci:
         ci['counterparty'] = 2
     if 'credit' not in ci:
         ci['credit'] = 6
     if 'debit' not in ci:
         ci['debit'] = 7
+
+    # Маркеры служебных строк (без учёта регистра, с учётом диакритики)
+    service_desc_markers = [
+        'dövrün sonuna balans', 'dovrun sonuna balans',
+        'mövcud balans', 'movcud balans',
+        'dövrün əvvəlinə balans', 'dovrun evveline balans',
+        'balans',
+    ]
+
+    def _is_service_row(cells: List[str], raw_row) -> bool:
+        """Проверяет все ячейки строки на служебные маркеры."""
+        joined = ' '.join(
+            [str(v).strip().lower() for v in raw_row.values
+             if pd.notna(v)]
+        )
+        if not joined.strip():
+            return True
+        # Дата отсутствует — тоже служебная
+        for m in service_desc_markers:
+            if m in joined:
+                return True
+        # явная проверка на "dövrün/mövcud + balans" в любой ячейке
+        for c in cells:
+            cl = c.lower()
+            if 'balans' in cl and ('dövr' in cl or 'mövcud' in cl
+                                    or 'dovr' in cl or 'movcud' in cl):
+                return True
+        return False
+
     for idx in range(header_row + 1, len(df)):
         row = df.iloc[idx]
         rv = [x for x in row.values if pd.notna(x)]
         if not rv:
             continue
         try:
-            dstr = safe_str(row.iloc[ci['date']]) if ci['date'] < len(row) else ''
+            cells = [str(v).strip() if pd.notna(v) else ''
+                     for v in row.values]
+
+            # === FIX: фильтруем служебные по ВСЕМ ячейкам ===
+            if _is_service_row(cells, row):
+                continue
+
+            dstr = cells[ci['date']] if ci['date'] < len(cells) else ''
             if not dstr:
                 continue
             date = parse_date(dstr, account_name=account_name)
             if not date:
                 continue
-            desc = safe_str(row.iloc[ci['description']]) \
-                if ci['description'] < len(row) else ''
+
+            desc = cells[ci['description']] \
+                if ci['description'] < len(cells) else ''
             low_desc = desc.lower()
-            if 'balans' in low_desc and ('dövr' in low_desc or 'mövcud' in low_desc):
-                continue
-            if 'dövrün sonuna balans' in low_desc or 'mövcud balans' in low_desc:
-                continue
-            if low_desc.strip() in ('balans', 'balans:', 'mövcud balans'):
+            # доп. проверка на служебность через desc
+            if any(m in low_desc for m in service_desc_markers):
                 continue
             if _is_service_line(desc):
                 continue
+
             credit = 0.0
             debit = 0.0
-            if 'credit' in ci and ci['credit'] < len(row):
-                cv = row.iloc[ci['credit']]
-                if pd.notna(cv) and str(cv).strip() not in ['', 'nan', '-']:
-                    credit = parse_amount(str(cv).strip().replace(',', '.'))
-            if 'debit' in ci and ci['debit'] < len(row):
-                dv = row.iloc[ci['debit']]
-                if pd.notna(dv) and str(dv).strip() not in ['', 'nan', '-']:
-                    debit = parse_amount(str(dv).strip().replace(',', '.'))
+            if 'credit' in ci and ci['credit'] < len(cells):
+                cv = cells[ci['credit']]
+                if cv and cv.lower() not in ('nan', '-', ''):
+                    credit = parse_amount(cv.replace(',', '.'))
+            if 'debit' in ci and ci['debit'] < len(cells):
+                dv = cells[ci['debit']]
+                if dv and dv.lower() not in ('nan', '-', ''):
+                    debit = parse_amount(dv.replace(',', '.'))
+
             if credit == 0.0 and debit == 0.0:
                 continue
+
             amount = abs(credit) if credit != 0.0 else -abs(debit)
             if not _is_reasonable_amount(amount):
                 continue
-            cp = safe_str(row.iloc[ci['counterparty']]) \
-                if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
+
+            cp = cells[ci['counterparty']] \
+                if 'counterparty' in ci and ci['counterparty'] < len(cells) else ''
             cp = cp.replace('_x000D_', ' ').replace('\r', ' ').replace('\n', ' ')
             cp = re.sub(r'\s+', ' ', cp).strip()
             desc = desc.replace('_x000D_', ' ').replace('\r', ' ').replace('\n', ' ')
             desc = re.sub(r'\s+', ' ', desc).strip()
+
             cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
             result.append({
                 'Дата': date, 'Сумма': amount,
@@ -7424,6 +7427,7 @@ def parse_pasha_bank_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
             })
         except Exception:
             continue
+
     result = _assign_source_indices(result)
     return _dedup_by_source_index(result)
 
