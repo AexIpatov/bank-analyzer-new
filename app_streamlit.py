@@ -4824,144 +4824,128 @@ def parse_jenhor_unelma_pdf(file_content: bytes, account_name: str) -> List[Dict
 # ==================== KAPITAL BANK SAIDA ====================
 
 def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Kapital Bank (Saida_AZN) PDF.
+
+    Реальный формат pdf_all_text (числа через пробел!):
+        <счёт> <имя владельца>            ← преамбула строки
+        2026-09-22 0 7000.00 20486.14     ← дата Списание Зачисление Остаток
+        ALMAN QIZI Qeyri budca -> 1412893878   ← описание
+        2026-09-21 3.00 0 13486.14 SMS SERVICE FEE
+        2026-09-02 0 7000.00 13489.14
+        ALMAN QIZI Qeyri budca -> 1395933469
+    """
     result: List[Dict] = []
 
-    # --- Попытка 1: через pdf_all_tables ---
-    tables = pdf_all_tables(file_content)
-    for table in tables:
-        if not table or len(table) < 2:
-            continue
-
-        # Ищем таблицу операций — там в шапке есть "Списание" / "Зачисление"
-        header_idx = -1
-        for i, row in enumerate(table):
-            joined = ' '.join([str(c or '') for c in row]).lower()
-            if ('spisanie' in joined or 'списание' in joined
-                    or 'zachislenie' in joined or 'зачисление' in joined):
-                header_idx = i
-                break
-        # В этой выписке шапки нет — идём без неё
-        start_row = header_idx + 1 if header_idx >= 0 else 0
-
-        for row in table[start_row:]:
-            if not row:
-                continue
-            cells = [str(c or '').strip() for c in row]
-            joined = ' '.join(cells)
-            if not joined.strip():
-                continue
-
-            # Разбираем строку: ищем дату YYYY-MM-DD
-            m_date = re.search(r'(\d{4}-\d{2}-\d{2})', joined)
-            if not m_date:
-                continue
-            date = parse_date(m_date.group(1), account_name=account_name)
-            if not date:
-                continue
-
-            # После даты ищем слипшиеся числа.
-            # Формат ячейки: "07000.0020486.14" или "3.00013486.14"
-            tail = joined[m_date.end():]
-
-            # Собираем все "числоподобные" токены
-            nums = re.findall(r'\d+\.\d{2}', tail)
-            if not nums:
-                continue
-
-            # --- Логика определения суммы ---
-            # В Kapital-выписке столбцы: Списание | Зачисление | Остаток
-            # Если в исходнике "07000.0020486.14":
-            #   - если значение начинается с '0' и содержит слипшуюся пару,
-            #     то первая часть — 0 (пусто), вторая — зачисление
-            #   - "3.00013486.14" → списание 3.00, остаток 13486.14
-            amount = 0.0
-            sms_fee_re = re.compile(r'SMS\s*SERVICE\s*FEE', re.IGNORECASE)
-
-            if sms_fee_re.search(tail):
-                # SMS-комиссия — это списание
-                amount = -abs(parse_amount(nums[0]))
-            else:
-                # Основные операции: попытка разобрать склейку
-                raw_first = nums[0]
-                # Если строка выглядит как "07000.00", а следующий токен
-                # "20486.14" — это остаток. Тогда сумма = 7000.00 (зачисление).
-                # Если "7000.0020486.14" — аналогично.
-                # Ищем ведущий 0: если raw начинается с '0' и длина > 6,
-                # считаем что это credit (зачисление).
-                if re.match(r'^0\d{4,}\.\d{2}$', raw_first):
-                    amount = abs(parse_amount(raw_first[1:]))
-                else:
-                    amount = abs(parse_amount(raw_first))
-
-            if amount == 0.0 or not _is_reasonable_amount(amount):
-                continue
-
-            desc = tail
-            # Обрезаем всё от первого числа
-            first_num_pos = re.search(r'\d+\.\d{2}', tail)
-            if first_num_pos:
-                desc = tail[:first_num_pos.start()].strip()
-            desc = re.sub(r'[\d\s]{6,}', ' ', desc)
-            desc = re.sub(r'\s+', ' ', desc).strip()
-
-            if not desc:
-                desc = 'Kapital Bank'
-
-            cp_final, _ = extract_counterparty_smart(desc, account_name)
-            if not cp_final:
-                cp_final = 'Kapital Bank'
-
-            result.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': cp_final,
-                'Наименование счета': account_name,
-                'Описание': desc
-            })
-
-        if result:
-            result = _assign_source_indices(result)
-            return _dedup_by_source_index(result)
-
-    # --- Попытка 2: через pdf_all_text ---
     full_text = pdf_all_text(file_content)
     if not full_text:
         return []
 
-    # Ищем блоки вида: <date> <stuck_numbers> <description>
-    line_re = re.compile(
-        r'(\d{4}-\d{2}-\d{2})'
-        r'([\d.,]+)'
-        r'([\d.,]+)'
-        r'(.+?)(?=\d{4}-\d{2}-\d{2}|$)',
-        re.DOTALL
+    lines = [l.strip() for l in full_text.split('\n') if l.strip()]
+    if not lines:
+        return []
+
+    # Маркеры служебных строк-преамбул (номер счёта + имя владельца)
+    service_prefix_re = re.compile(r'^\d{15,}\s+[A-ZА-ЯƏİÖĞÜŞÇ]')
+
+    # Строка операции: <дата> <Списание> <Зачисление> <Остаток> [<хвост>]
+    op_line_re = re.compile(
+        r'^(\d{4}-\d{2}-\d{2})\s+'
+        r'(-?[\d.,]+)\s+'
+        r'(-?[\d.,]+)\s+'
+        r'(-?[\d.,]+)'
+        r'(?:\s+(.*))?$'
     )
-    sms_fee_re = re.compile(r'SMS\s*SERVICE\s*FEE', re.IGNORECASE)
 
-    for m in line_re.finditer(full_text):
-        date = parse_date(m.group(1), account_name=account_name)
-        if not date:
+    skip_markers = [
+        'информация по карте', 'выписка', 'владелец карты',
+        'период выписки', 'тип карты', 'кредитный лимит',
+        'номер карты', 'доступный баланс', 'номер счета',
+        'баланс на начало периода', 'валюта счета',
+        'сумма зачислений', 'сумма списаний', 'баланс на конец периода',
+        'заблокированные зачисления', 'заблокированные списания',
+        'дата списание зачисление остаток описание',
+        'последние 4 цифры карты',
+    ]
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        low = line.lower()
+
+        # Пропускаем шапку
+        if any(m in low for m in skip_markers):
+            i += 1
             continue
-        g2 = m.group(2)
-        g3 = m.group(3)
-        desc = re.sub(r'\s+', ' ', m.group(4)).strip()
+        if service_prefix_re.match(line):
+            i += 1
+            continue
 
+        m = op_line_re.match(line)
+        if not m:
+            i += 1
+            continue
+
+        date_str, debit_str, credit_str, _balance_str, tail = m.groups()
+        date = parse_date(date_str, account_name=account_name)
+        if not date:
+            i += 1
+            continue
+
+        debit_val = parse_amount(debit_str) if debit_str else 0.0
+        credit_val = parse_amount(credit_str) if credit_str else 0.0
+
+        # Определяем знак: если Списание > 0 — расход, иначе приход
         amount = 0.0
-        if sms_fee_re.search(desc):
-            # списание
-            am = re.match(r'(\d+\.\d{2})', g2)
-            if am:
-                amount = -abs(parse_amount(am.group(1)))
+        if debit_val != 0.0:
+            amount = -abs(debit_val)
+        elif credit_val != 0.0:
+            amount = abs(credit_val)
         else:
-            # зачисление: убираем ведущий 0
-            if re.match(r'^0\d{4,}\.\d{2}$', g2):
-                amount = abs(parse_amount(g2[1:]))
-            else:
-                am = re.match(r'(\d+\.\d{2})', g2)
-                if am:
-                    amount = abs(parse_amount(am.group(1)))
+            i += 1
+            continue
 
         if amount == 0.0 or not _is_reasonable_amount(amount):
+            i += 1
+            continue
+
+        # Собираем описание: хвост строки + последующие строки
+        desc_parts: List[str] = []
+        if tail:
+            desc_parts.append(tail.strip())
+
+        j = i + 1
+        while j < len(lines):
+            nl = lines[j].strip()
+            if not nl:
+                j += 1
+                continue
+            # Следующая операция
+            if op_line_re.match(nl):
+                break
+            # Служебная преамбула
+            if service_prefix_re.match(nl):
+                break
+            low_nl = nl.lower()
+            if any(mk in low_nl for mk in skip_markers):
+                break
+            desc_parts.append(nl)
+            j += 1
+            if len(desc_parts) >= 3:
+                break
+
+        desc = ' '.join(desc_parts).strip()
+        desc = re.sub(r'\s+', ' ', desc).strip()
+
+        if not desc:
+            desc = 'Kapital Bank'
+
+        # Убираем хвостовую скобку "> 1412893878"
+        desc = re.sub(r'\s*->\s*\d+', '', desc)
+        desc = re.sub(r'\s*>\s*\d+', '', desc).strip()
+
+        if _is_service_line(desc):
+            i = j
             continue
 
         cp_final, _ = extract_counterparty_smart(desc, account_name)
@@ -4973,8 +4957,10 @@ def parse_kapital_saida_pdf(file_content: bytes, account_name: str) -> List[Dict
             'Сумма': amount,
             'Контрагент': cp_final,
             'Наименование счета': account_name,
-            'Описание': desc
+            'Описание': desc,
         })
+
+        i = j
 
     result = _assign_source_indices(result)
     return _dedup_by_source_index(result)
