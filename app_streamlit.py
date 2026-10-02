@@ -3477,9 +3477,13 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
     ]
 
     date_re = re.compile(r'^\s*(\d{2}\.\d{2}\.\d{4})\s*$')
-    fecha_re = re.compile(r'^Fecha\s+de\s+valor\s+(\d{2}\.\d{2}\.\d{4})\s*$',
-                          re.IGNORECASE)
-    amount_re = re.compile(r'^\s*(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s*€\s*$')
+    fecha_re = re.compile(
+        r'^Fecha\s+de\s+valor\s+(\d{2}\.\d{2}\.\d{4})\s*$',
+        re.IGNORECASE
+    )
+    amount_re = re.compile(
+        r'^\s*(-?\s?\d[\d\s\u00a0]*[.,]\d{2})\s*€\s*$'
+    )
 
     result: List[Dict] = []
     used_indices: set = set()
@@ -3488,7 +3492,7 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
         low = line.lower()
         if any(w in low for w in skip_markers):
             continue
-        # Ищем строку с датой (либо "Fecha de valor DD.MM.YYYY", либо просто дата)
+
         date_val = None
         mf = fecha_re.match(line)
         md = date_re.match(line)
@@ -3499,7 +3503,6 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
         if not date_val:
             continue
 
-        # Смотрим окно ±3 строки: ищем сумму € и описание
         window_start = max(0, i - 3)
         window_end = min(len(lines), i + 4)
         amount_val = None
@@ -3516,16 +3519,13 @@ def parse_n26_docx(file_content: bytes, account_name: str) -> List[Dict]:
             lowj = lj.lower()
             if any(w in lowj for w in skip_markers):
                 continue
-            # Дата?
             if date_re.match(lj) or fecha_re.match(lj):
                 continue
-            # Сумма?
             ma = amount_re.match(lj)
             if ma and amount_val is None:
                 amount_val = parse_amount(ma.group(1))
                 amount_idx = j
                 continue
-            # Описание — строка без дат и сумм
             if amount_val is not None and desc_val == '':
                 if len(lj) >= 3 and not re.fullmatch(r'[\d\s.,\-]+', lj):
                     if not date_re.match(lj) and not fecha_re.match(lj):
@@ -3737,13 +3737,44 @@ def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 # ==================== PAYSERA DOCX ====================
 
+def _dedup_repeated_cells(text: str) -> str:
+    """
+    PDF→DOCX-конвертеры (например, через HTML <table>) размножают одну и ту
+    же строку несколько раз: "A | A | A | B | B". Убираем соседние дубли.
+    """
+    if not text:
+        return ''
+    # Склеиваем всё в одну строку и режем по разделителям ячеек
+    parts = re.split(r'\s*\|\s*', text)
+    out: List[str] = []
+    prev = None
+    for p in parts:
+        p_clean = re.sub(r'\s+', ' ', p).strip()
+        if not p_clean:
+            continue
+        if p_clean == prev:
+            continue
+        out.append(p_clean)
+        prev = p_clean
+    return ' | '.join(out)
+
+
 def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Paysera DOCX (обычно получен из PDF через Word-конвертер).
+    Проблемы:
+    - текст часто склеен HTML-таблицей, <br/> остаётся в ячейках;
+    - каждая ячейка может дублироваться 5–8 раз.
+
+    Лечим всё сразу: чистим артефакты + дедуплицируем повторы + идём
+    по якорям `Transfer/Commission fee <дата> <время>`.
+    """
     result: List[Dict] = []
 
     try:
         doc = Document(BytesIO(file_content))
     except Exception:
-        return []
+        return result
 
     raw_chunks: List[str] = []
     for table in doc.tables:
@@ -3758,27 +3789,52 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
             raw_chunks.append(t)
 
     if not raw_chunks:
-        return []
+        return result
 
-        dedup_chunks: List[str] = []
+    # 1) Удаляем соседние идентичные chunks
+    dedup_chunks: List[str] = []
     last = None
     for c in raw_chunks:
         if c != last:
             dedup_chunks.append(c)
             last = c
+
+    # 2) Склеиваем всё в одну строку
     full_text = ' '.join(dedup_chunks).replace('\ufeff', '').replace('\xa0', ' ')
-    # Важно: удаляем <br/> и прочие HTML-артефакты из DOCX-таблиц,
-    # которые остаются после PDF→DOCX-конвертации.
+
+    # 3) Чистим <br/>, HTML-теги, управляющие символы
     full_text = _clean_pdf_artifacts(full_text)
+
+    # 4) Схлопываем whitespace
     full_text = re.sub(r'\s+', ' ', full_text)
 
-    full_text = re.sub(r'(\b[^\s|]{2,})\s*\|\s*(?:\1\s*\|\s*)+', r'\1 ', full_text)
+    # 5) Убираем дубли ЯЧЕЕК внутри строки
+    #    "A | A | A | B" → "A | B"
+    full_text = re.sub(
+        r'(\b[^\|]{2,}?)\s*(?:\|\s*\1\s*\|?)+',
+        r'\1 ',
+        full_text
+    )
 
+    # 6) Если всё ещё есть пайпы рядом, схлопнем
+    full_text = re.sub(r'\s*\|\s*', ' | ', full_text)
+    full_text = re.sub(r'(\s*\|\s*)+', ' | ', full_text)
+    full_text = re.sub(r'\s+', ' ', full_text).strip()
+
+    # 7) Обрезаем до реального начала операций — выкидываем шапку
+    #    (там часто "Account Statement ... Currencies EUR Start balance:")
+    first_anchor_m = re.search(
+        r'\b(Transfer|Commission\s+fee|Перевод|Комиссионная\s+плата)\b',
+        full_text, re.IGNORECASE
+    )
+    if first_anchor_m:
+        full_text = full_text[first_anchor_m.start():]
+
+    # 8) Якоря
     op_block_re = re.compile(
         r'(Transfer|Commission\s+fee|Перевод|Комиссионная\s+плата)\s+'
         r'(\d{4}-\d{2}-\d{2})\s+'
-        r'(\d{2}:\d{2}:\d{2})\s*'
-        r'(?:\+0200|\+0300|\+0000)?',
+        r'(\d{2}:\d{2}:\d{2})',
         re.IGNORECASE
     )
 
@@ -3787,7 +3843,19 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
         re.IGNORECASE
     )
     purpose_re = re.compile(
-        r'(?:Purpose\s+of\s+payment|Назначение\s+платежа)\s*:\s*([^\.]{2,300}?)(?:\.|Transfer|Commission\s+fee|$)',
+        r'(?:Purpose\s+of\s+payment|Назначение\s+платежа)\s*:\s*'
+        r'([^\.|]{2,300}?)(?:\.|\s*\||\s*Transfer\s+|\s*Commission\s+fee\s+|$)',
+        re.IGNORECASE
+    )
+
+    # Служебные метки (кроме `Commission fee` — оно может быть якорем)
+    service_zone_re = re.compile(
+        r'(?:Start\s+balance|Final\s+balance|Debit\s+turnover|'
+        r'Credit\s+turnover|Currencies|Client\s+code|Client\'s\s+code|'
+        r"Client's\s+address|Account\s+EVP|Statement\s+No|Payment\s+ID|"
+        r'Recipient\s*/\s*Payer\s*\(Code\)|EVP\s*/\s*IBAN|'
+        r'Amount\s+and\s+currency|Balance|Signed:|Signed\s+by:|'
+        r'Account\s+Statement)',
         re.IGNORECASE
     )
 
@@ -3802,36 +3870,68 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
         })
 
     if not anchors:
-        return _parse_paysera_docx_fallback(full_text, account_name)
+        return result
 
     for i, a in enumerate(anchors):
         win_start = a['end']
         win_end = anchors[i + 1]['start'] if i + 1 < len(anchors) else len(full_text)
         window = full_text[win_start:win_end]
 
+        # Purpose
         purpose = ''
         pm = purpose_re.search(window)
         if pm:
             purpose = pm.group(1).strip()
-            purpose = re.sub(r'\s+', ' ', purpose)
+            purpose = re.sub(r'\s+', ' ', purpose).rstrip('.').strip()
 
+        # Первая сумма EUR
         first_amt = amount_re.search(window)
-        recipient_zone = window[:first_amt.start()] if first_amt else window[:500]
+        if not first_amt:
+            continue
 
+        # Отсекаем "фейковые" суммы (Start/Final balance)
+        prefix = window[:first_amt.start()]
+        if re.search(
+            r'(?:Start\s+balance|Final\s+balance)\s*:?\s*[\d\s.,]*$',
+            prefix, re.IGNORECASE
+        ):
+            continue
+
+        raw_amt = first_amt.group(1).strip()
+        amount = parse_amount(raw_amt)
+        if amount == 0.0 or not _is_reasonable_amount(amount):
+            continue
+
+        # Знак
+        if a['type'].lower().startswith('commission') or \
+           a['type'].lower().startswith('комиссион'):
+            amount = -abs(amount)
+        else:
+            if '-' in raw_amt:
+                amount = -abs(amount)
+            else:
+                amount = abs(amount)
+
+        # Контрагент — из prefix между якорем и суммой
+        recipient_zone = prefix
+
+        # Убираем явно служебные поля
+        recipient_zone = service_zone_re.sub(' ', recipient_zone)
+        # Убираем время/даты
         recipient_zone = re.sub(
-            r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(\s+[+\-]\d{4})?',
+            r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(\s*[+\-]\d{4})?',
             ' ', recipient_zone
         )
+        # Убираем +0200 и прочие таймзоны
+        recipient_zone = re.sub(r'\+\d{4}\b', ' ', recipient_zone)
+        # Убираем длинные номера (Payment ID)
         recipient_zone = re.sub(r'\b\d{6,}\b', ' ', recipient_zone)
-        recipient_zone = re.sub(r'\b[A-Z]{2}\d{2}[A-Z0-9]{8,}\b', ' ', recipient_zone)
+        # Убираем EVP/IBAN
         recipient_zone = re.sub(r'\(?\s*EVP\d+\s*\)?', ' ', recipient_zone)
+        recipient_zone = re.sub(r'\b[A-Z]{2}\d{2}[A-Z0-9]{8,}\b', ' ', recipient_zone)
         recipient_zone = re.sub(r'\(\s*\d{6,}\s*\)', ' ', recipient_zone)
-        recipient_zone = re.sub(
-            r'\b(?:Statement|No\.?|Payment\s*ID|Recipient\s*/\s*Payer\s*\(Code\)|'
-            r'EVP\s*/\s*IBAN|Amount\s+and\s+currency|Balance|Currencies|Client|Account|'
-            r'Start\s+balance|Final\s+balance|Debit\s+turnover|Credit\s+turnover)\b',
-            ' ', recipient_zone, flags=re.IGNORECASE
-        )
+        # Убираем пайпы (мы их уже почистили, но на всякий случай)
+        recipient_zone = recipient_zone.replace('|', ' ')
         recipient_zone = re.sub(r'[\.\+]', ' ', recipient_zone)
         recipient_zone = re.sub(r'\s+', ' ', recipient_zone).strip()
         cp = recipient_zone.strip(' .,;:-')
@@ -3839,40 +3939,35 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
         if not cp or len(cp) < 2 or re.fullmatch(r'[\d\s.,\-/\\]+', cp):
             cp = purpose
 
-        amount = 0.0
-        if first_amt:
-            raw_amt = first_amt.group(1).strip()
-            amount = parse_amount(raw_amt)
-            if a['type'].lower().startswith('commission') or \
-               a['type'].lower().startswith('комиссион'):
-                amount = -abs(amount)
-            else:
-                if '-' in raw_amt:
-                    amount = -abs(amount)
-                else:
-                    amount = abs(amount)
-
-        if amount == 0.0 or not _is_reasonable_amount(amount):
-            continue
-
         cp_final, _ = extract_counterparty_smart(
             purpose if purpose else cp, account_name, cp, '', cp
         )
         if not cp_final:
-            cp_final = cp if cp else 'Paysera'
+            if 'commission' in a['type'].lower():
+                cp_final = 'Paysera LT'
+            else:
+                cp_final = cp if cp else 'Paysera'
+
+        # Защита: EVP/IBAN/EUR не должны быть именем
+        if re.fullmatch(
+            r'(?:EVP|IBAN|BIC|EUR|USD|CZK|GBP|PLN)',
+            cp_final, re.IGNORECASE
+        ):
+            cp_final = 'Paysera'
 
         result.append({
             'Дата': a['date'],
             'Сумма': amount,
             'Контрагент': cp_final,
             'Наименование счета': account_name,
-            'Описание': purpose if purpose else cp
+            'Описание': purpose if purpose else cp,
         })
 
     result = _assign_source_indices(result)
     return _dedup_by_source_index(result)
 
 
+# --- Fallback (оставляем как было, если он у вас есть) ---
 def _parse_paysera_docx_fallback(full_text: str, account_name: str) -> List[Dict]:
     result: List[Dict] = []
     amount_re = re.compile(
