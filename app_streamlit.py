@@ -3760,13 +3760,16 @@ def parse_paysera_docx(file_content: bytes, account_name: str) -> List[Dict]:
     if not raw_chunks:
         return []
 
-    dedup_chunks: List[str] = []
+        dedup_chunks: List[str] = []
     last = None
     for c in raw_chunks:
         if c != last:
             dedup_chunks.append(c)
             last = c
     full_text = ' '.join(dedup_chunks).replace('\ufeff', '').replace('\xa0', ' ')
+    # Важно: удаляем <br/> и прочие HTML-артефакты из DOCX-таблиц,
+    # которые остаются после PDF→DOCX-конвертации.
+    full_text = _clean_pdf_artifacts(full_text)
     full_text = re.sub(r'\s+', ' ', full_text)
 
     full_text = re.sub(r'(\b[^\s|]{2,})\s*\|\s*(?:\1\s*\|\s*)+', r'\1 ', full_text)
