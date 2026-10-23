@@ -7103,17 +7103,22 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                         if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
                     ttype = safe_str(row.iloc[ci['type']]) \
                         if 'type' in ci and ci['type'] < len(row) else ''
-            if cp and cp.strip().lower() in ('n/a', 'na', '-', 'none', 'null', 'nan'):
-                cp = ''
+                    if cp and cp.strip().lower() in ('n/a', 'na', '-', 'none', 'null', 'nan'):
                         cp = ''
                     if _is_service_line(desc):
                         continue
                     cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
                     result.append({
-                        'Дата': date, 'Сумма': amount,
+                        'Дата': date,
+                        'Сумма': amount,
                         'Контрагент': cp_final if cp_final else '',
                         'Наименование счета': account_name,
-                        'Описание': (f"{ttype} | {desc}" if ttype else desc)
+                        'Описание': (
+                            f"{ttype} | {desc}" if (desc and ttype)
+                            else desc if desc
+                            else ttype if ttype
+                            else ''
+                        ),
                     })
                 except Exception:
                     continue
@@ -7140,10 +7145,10 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
             break
     if header_line_idx == -1:
         return result
-        hdr = _split_line(lines[header_line_idx], sep)
+
+    hdr = _split_line(lines[header_line_idx], sep)
     if len(hdr) < 3:
         return result
-
     def find_col(patterns):
         for i, h in enumerate(hdr):
             hl = h.lower()
@@ -7184,7 +7189,7 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
     if amount_idx == -1 and (debit_idx == -1 and credit_idx == -1):
         return result
     for line in lines[header_line_idx + 1:]:
-        parts = _split_line(line, sep)
+        parts = [_fix_hu_mojibake(p) for p in _split_line(line, sep)]
         if date_idx >= len(parts):
             continue
         try:
@@ -7207,7 +7212,6 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
             cp = parts[cp_idx] if 0 <= cp_idx < len(parts) else ''
             ttype = parts[type_idx] if 0 <= type_idx < len(parts) else ''
             if cp and cp.strip().lower() in ('n/a', 'na', '-', 'none', 'null', 'nan'):
-                cp = ''
                 cp = ''
             if _is_service_line(desc):
                 continue
