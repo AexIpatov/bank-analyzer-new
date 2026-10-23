@@ -8537,12 +8537,16 @@ def get_parser_chain(account_name: str,
 def _is_suspicious_parse_result(tx: List[Dict]) -> bool:
     """
     Подозрительно, если:
-    - описания очень длинные (склейка блоков) — > 500 символов,
-    - в одном описании больше 3 € и длина > 200 (признак склейки footer-а),
-    - вообще нет контрагентов у всех операций.
+    ...
     """
     if not tx:
         return False
+
+    # ДОБАВИТЬ ЭТИ 3 СТРОКИ:
+    # Принудительно доверяем MKB-парсеру, чтобы он не переключался на csv_universal
+    if tx and str(tx[0].get('Наименование счета', '')).startswith('Budapest'):
+        return False
+
     n = len(tx)
     long_desc = 0
     multi_eur = 0
