@@ -7139,7 +7139,7 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
             break
     if header_line_idx == -1:
         return result
-    hdr = _split_line(lines[header_line_idx], sep)
+        hdr = _split_line(lines[header_line_idx], sep)
     if len(hdr) < 3:
         return result
 
@@ -7157,6 +7157,27 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
     type_idx = find_col(['tranzakció típusa', 'tranzakci'])
     debit_idx = find_col(['terhelés', 'terheles'])
     credit_idx = find_col(['jóváírás', 'jovairas'])
+
+    # --- Английский формат MKB CSV (Value date / Narrative / Beneficiary's name) ---
+    date_idx_en = find_col(['value date'])
+    amount_idx_en = find_col(['amount'])
+    desc_idx_en = find_col(['narrative'])
+    cp_idx_en = find_col([
+        "beneficiary's name", "beneficiary’s name", "beneficiary name"
+    ])
+    type_idx_en = find_col(['transaction type'])
+    currency_idx_en = find_col(['currency'])
+
+    if date_idx_en != -1 and amount_idx_en != -1:
+        # Английская выгрузка CSV: сумма уже со знаком, debit/credit не нужны
+        date_idx = date_idx_en
+        amount_idx = amount_idx_en
+        desc_idx = desc_idx_en
+        cp_idx = cp_idx_en
+        type_idx = type_idx_en
+        debit_idx = -1
+        credit_idx = -1
+
     if date_idx == -1:
         return result
     if amount_idx == -1 and (debit_idx == -1 and credit_idx == -1):
