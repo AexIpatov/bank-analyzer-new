@@ -5898,17 +5898,17 @@ def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
     hdr = _split_line(lines[header_idx], sep)
     ci: Dict[str, int] = {}
     for i, h in enumerate(hdr):
-        hl = h.lower()
-        if ('date' in hl or 'дата' in hl) and 'date' not in ci:
+        hl = h.lower().strip()
+        if ('date' in hl or 'дата' in hl or 'value date' in hl) and 'date' not in ci:
             ci['date'] = i
         elif ('amount' in hl or 'сумма' in hl or 'sum' in hl or 'betrag' in hl) \
                 and 'amount' not in ci:
             ci['amount'] = i
         elif ('description' in hl or 'описание' in hl or 'details' in hl
-              or 'назначение' in hl) and 'description' not in ci:
+              or 'назначение' in hl or 'narrative' in hl) and 'description' not in ci:
             ci['description'] = i
         elif ('counterparty' in hl or 'контрагент' in hl or 'name' in hl
-              or 'payer' in hl) and 'counterparty' not in ci:
+              or 'payer' in hl or "beneficiary" in hl) and 'counterparty' not in ci:
             ci['counterparty'] = i
     if 'date' not in ci or 'amount' not in ci:
         return []
@@ -5927,6 +5927,9 @@ def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
                 if 'description' in ci and ci['description'] < len(parts) else ''
             cp = parts[ci['counterparty']] \
                 if 'counterparty' in ci and ci['counterparty'] < len(parts) else ''
+            # Fallback: если Narrative пуст — берём тип операции из 3-й колонки
+            if not desc.strip():
+                desc = parts[3].strip() if len(parts) > 3 else 'без описания'
             if _is_service_line(desc):
                 continue
             cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
