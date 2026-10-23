@@ -7214,7 +7214,12 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                 'Дата': date, 'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': (f"{ttype} | {desc}" if ttype else desc)
+                'Описание': (
+                    f"{ttype} | {desc}" if (desc and ttype)
+                    else desc if desc
+                    else ttype if ttype
+                    else ''
+                )
             })
         except Exception:
             continue
