@@ -1463,27 +1463,35 @@ def read_xlsx(file_content: bytes, sheet_name=None, header=None):
     return None
 
 
+_BAD_HU = ("誆", "誗", "\ufffd", "Ã…", "Ã°")
+
+
+def _bad_count(s: str) -> int:
+    return sum(s.count(b) for b in _BAD_HU)
+
+
 def read_text_with_encoding(file_content: bytes) -> str:
+    """
+    Читает байты в текст с автоопределением кодировки.
+    Учитывает венгерскую «порчу» (Ő→誆, Ű→誗) и репликационный символ.
+    """
     encodings = ['utf-8-sig', 'utf-8', 'iso-8859-2', 'cp1250', 'cp1251', 'latin-1']
+    best = None
+    best_score = 10**9
     for enc in encodings:
         try:
             content = file_content.decode(enc)
-            if enc not in ('latin-1',):
-                bad = sum(1 for c in content if c == '\ufffd')
-                if bad > len(content) * 0.001:
-                    continue
-            if content.startswith('\ufeff'):
-                content = content[1:]
-            return content
         except Exception:
             continue
-    try:
-        content = file_content.decode('latin-1')
         if content.startswith('\ufeff'):
             content = content[1:]
-        return content
-    except Exception:
-        return ''
+        score = _bad_count(content)
+        if score == 0:
+            return content
+        if score < best_score:
+            best_score = score
+            best = content
+    return best or ''
 
 
 def docx_all_text(file_content: bytes) -> str:
