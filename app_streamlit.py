@@ -7062,6 +7062,35 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                 elif ('jóváírás' in sl) or ('jovairas' in sl):
                     if 'credit' not in ci:
                         ci['credit'] = i
+            # --- Английские названия колонок в Pandas-ветке (CSV через read_csv) ---
+            def find_col_pd(patterns):
+                for i, v in enumerate(hdr.values):
+                    if pd.isna(v):
+                        continue
+                    hl = str(v).strip().lower()
+                    if any(p in hl for p in patterns):
+                        return i
+                return -1
+
+            _date_en = find_col_pd(['value date', 'értéknap', 'erteknap'])
+            _amount_en = find_col_pd(['amount', 'összeg', 'osszeg'])
+            _desc_en = find_col_pd(['narrative', 'közlemény', 'kozlemeny'])
+            _cp_en = find_col_pd(["beneficiary's name", "beneficiary’s name",
+                                  "beneficiary name", "kedvezményezett"])
+            _type_en = find_col_pd(['transaction type', 'tranzakció típusa'])
+            if _date_en != -1:
+                ci['date'] = _date_en
+            if _amount_en != -1:
+                ci['amount'] = _amount_en
+                ci['credit'] = -1
+                ci['debit'] = -1
+            if _desc_en != -1:
+                ci['description'] = _desc_en
+            if _cp_en != -1:
+                ci['counterparty'] = _cp_en
+            if _type_en != -1:
+                ci['type'] = _type_en
+
             if 'date' not in ci:
                 ci['date'] = 1
             if 'amount' not in ci and 'credit' not in ci and 'debit' not in ci:
