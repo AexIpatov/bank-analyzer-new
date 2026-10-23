@@ -7216,16 +7216,20 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
             if _is_service_line(desc):
                 continue
             cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+            if desc and ttype:
+                desc_out = f"{ttype} | {desc}"
+            elif desc:
+                desc_out = desc
+            elif ttype:
+                desc_out = ttype
+            else:
+                desc_out = 'без описания'
             result.append({
-                'Дата': date, 'Сумма': amount,
+                'Дата': date,
+                'Сумма': amount,
                 'Контрагент': cp_final if cp_final else '',
                 'Наименование счета': account_name,
-                'Описание': (
-                    f"{ttype} | {desc}" if (desc and ttype)
-                    else desc if desc
-                    else ttype if ttype
-                    else ''
-                )
+                'Описание': desc_out,
             })
         except Exception:
             continue
@@ -9052,10 +9056,15 @@ def _render_results(result: Dict):
     df_display = df_raw.drop(columns=['Сумма_число'], errors='ignore').copy()
     df_display['Сумма'] = df_raw['Сумма_число'].apply(format_amount)
     if 'Описание' in df_display.columns:
-        df_display['Описание'] = df_display['Описание'].apply(
-            lambda x: translate_description_inline(_to_scalar_str(x))
-        )
-
+        def _safe_translate(v):
+            s = _to_scalar_str(v)
+            if not s or s.strip() == '':
+                return ''
+            try:
+                return translate_description_inline(s)
+            except Exception:
+                return s
+        df_display['Описание'] = df_display['Описание'].apply(_safe_translate)
     st.session_state['df_numeric'] = df_numeric
     st.session_state['df_display'] = df_display
     st.session_state['df_raw'] = df_raw
