@@ -7103,7 +7103,8 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                         if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
                     ttype = safe_str(row.iloc[ci['type']]) \
                         if 'type' in ci and ci['type'] < len(row) else ''
-                    if cp in ['N/A', 'n/a']:
+            if cp and cp.strip().lower() in ('n/a', 'na', '-', 'none', 'null', 'nan'):
+                cp = ''
                         cp = ''
                     if _is_service_line(desc):
                         continue
@@ -7205,7 +7206,8 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
             desc = parts[desc_idx] if 0 <= desc_idx < len(parts) else ''
             cp = parts[cp_idx] if 0 <= cp_idx < len(parts) else ''
             ttype = parts[type_idx] if 0 <= type_idx < len(parts) else ''
-            if cp in ['N/A', 'n/a']:
+            if cp and cp.strip().lower() in ('n/a', 'na', '-', 'none', 'null', 'nan'):
+                cp = ''
                 cp = ''
             if _is_service_line(desc):
                 continue
