@@ -661,9 +661,8 @@ _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
     ("fio",                    "Stalkin_ML2_CZK_FIO"),
     ("tinkoffrub",             "Tinkoff RUB"),
     ("tinkoff",                "Tinkoff RUB"),
-        ("wiobusinessbank",        "WIO Business Bank"),
+    ("wiobusinessbank",        "WIO Business Bank"),
     ("wiobusiness",            "WIO Business Bank"),
-    ("wio",                    "WIO Business Bank"),
 
     # === Добавлено 24.10.2026 по справочнику ===
     # BSP_Estate_EUR_BluOr и его карта
@@ -685,8 +684,12 @@ _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
     ("reginarevolutbankuabeur", "Regina Revolut Bank UAB EUR"),
     ("reginarevolutbank",       "Regina Revolut Bank UAB EUR"),
     ("reginarevolut",           "Regina Revolut Bank UAB EUR"),
-]
 
+    # RAK BANK (добавлено 24.10.2026)
+    ("rakbanknomiqaklienti", "RAK BANK Nomiqa клиенты"),
+    ("rakbanknomiqa",        "RAK BANK Nomiqa клиенты"),
+    ("rakbank",              "RAK BANK Nomiqa клиенты"),
+]
 
 def _normalize_key(s: str) -> str:
     if s is None:
@@ -8261,7 +8264,7 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_bluor_pdf, 'bluor_pdf'
         if is_industra:
             return parse_industra_pdf, 'industra_pdf'
-        if 'mashreq' in low or 'nomiqa' in low:
+        if ('mashreq' in low or 'nomiqa' in low) and 'rak' not in low:
             return parse_mashreq_pdf, 'mashreq_pdf'
         if 'mkb' in low or 'budapest' in low:
             return parse_mkb_pdf, 'mkb_pdf'
@@ -8464,7 +8467,7 @@ def get_parser_by_ext(account_name: str, ext: str):
             if 'kl59' in low:
                 return parse_industra_xls, 'industra_kl59_xls'
             return parse_industra_xls, 'industra_an14_xls'
-        if 'mashreq' in low or ('nomiqa' in low and 'aed' in low):
+        if ('mashreq' in low or 'nomiqa' in low) and 'rak' not in low:
             return parse_mashreq, 'mashreq'
         if 'budapest huf' in low or ('mkb' in low and 'huf' in low):
             return parse_budapest_huf_mkb, 'budapest_huf_mkb'
