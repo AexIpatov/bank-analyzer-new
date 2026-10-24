@@ -7161,8 +7161,6 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                         if 'type' in ci and ci['type'] < len(row) else ''
                     if cp and cp.strip().lower() in ('n/a', 'na', '-', 'none', 'null', 'nan'):
                         cp = ''
-                    if _is_service_line(desc):
-                        continue
                     cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
                     result.append({
                         'Дата': date,
@@ -8335,6 +8333,8 @@ def get_parser_by_ext(account_name: str, ext: str):
         if 'bluor' in low:
             if 'kl59' in low:
                 return parse_kl59_bluor, 'kl59_bluor'
+            if 'bsp' in low:
+                return parse_bsr_bluor_2, 'bsp_bluor'
             if 'bsr' in low and '3' in low:
                 return parse_bsr_bluor_3, 'bsr_bluor_3'
             if 'bsr' in low:
