@@ -713,9 +713,23 @@ _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
 ]
 
 def _normalize_key(s: str) -> str:
+    """
+    Нормализует строку для поиска алиасов:
+    - приводит к нижнему регистру
+    - убирает диакритику (Ž→Z, Č→C, Ő→O, Ď→D и т.д.)
+    - удаляет пробелы, _ - . ,
+    """
     if s is None:
         return ""
     s = str(s).lower()
+    # Убираем диакритику: NFKD-разложение + отбрасывание combining marks
+    import unicodedata
+    s = unicodedata.normalize('NFKD', s)
+    s = ''.join(ch for ch in s if not unicodedata.combining(ch))
+    # Дополнительно — для венгерских Ő/Ű и др. (NFKD их не разлагает)
+    s = (s.replace('ő', 'o').replace('ű', 'u')
+           .replace('đ', 'd').replace('ø', 'o')
+           .replace('ł', 'l').replace('ß', 'ss'))
     s = re.sub(r'[\s_\-\.\,]+', '', s)
     return s
 
@@ -947,6 +961,31 @@ def clean_account_name(filename: str) -> str:
     name = re.sub(r'[_\-]', ' ', name)
     name = re.sub(r'\.+', ' ', name)
     name = re.sub(r'\s+', ' ', name)
+        # Отрезаем «голый» год в конце (2024, 2025, 2026, 2027, ...)
+    name = re.sub(r'\s+(19|20)\d{2}\s*$', '', name)
+    # Отрезаем «(2)», «копия», «copy» в конце
+    name = re.sub(r'\s*\(\s*\d+\s*\)\s*$', '', name)
+    name = re.sub(r'\s+(копия|copy|final|итог|отчёт|otchet)\s*$',
+                  '', name, flags=re.IGNORECASE)
+    # Отрезаем «01.10.2026 - 31.10.2026» и «01.10.2026-31.10.2026»
+    name = re.sub(
+        r'\s*\d{1,2}[\.\-/]\d{1,2}[\.\-/]\d{2,4}\s*[-–—]\s*'
+        r'\d{1,2}[\.\-/]\d{1,2}[\.\-/]\d{2,4}\s*$',
+        '', name
+    )
+    # Отрезаем одиночную дату в конце
+    name = re.sub(
+        r'\s+\d{1,2}[\.\-/]\d{1,2}[\.\-/]\d{2,4}\s*$', '', name
+    )
+    # Отрезаем «01 окт 2026», «October 2026»
+    name = re.sub(
+        r'\s+\d{1,2}\s+[A-Za-zА-Яа-яЁё]{3,}\.?\s+\d{2,4}\s*$',
+        '', name
+    )
+    name = re.sub(
+        r'\s+[A-Za-zА-Яа-яЁё]{3,}\.?\s+\d{4}\s*$', '', name
+    )
+    name = re.sub(r'\s+', ' ', name).strip()
     name = re.sub(r' \(2\)$', '', name)
     return name.strip() if name else 'Неизвестный счет'
 
