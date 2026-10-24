@@ -8363,7 +8363,7 @@ def get_parser_by_ext(account_name: str, ext: str):
             if 'kl59' in low:
                 return parse_industra_xls, 'industra_kl59_xls'
             return parse_industra_xls, 'industra_an14_xls'
-        if 'mashreq' in low or ('nomiqa' in low and 'aed' in low):
+        if 'mashreq' in low or 'nomiqa' in low:
             return parse_mashreq, 'mashreq'
         if 'budapest huf' in low or ('mkb' in low and 'huf' in low):
             return parse_budapest_huf_mkb, 'budapest_huf_mkb'
@@ -8405,6 +8405,8 @@ def get_parser_by_ext(account_name: str, ext: str):
                 return parse_revolut_nb, 'revolut_nb'
             if 'plavas' in low:
                 return parse_revolut_plavas, 'revolut_plavas'
+            if 'regina' in low:
+                return parse_revolut_generic, 'regina_revolut'
             return parse_revolut_an14, 'revolut_an14'
         if is_wise:
             return parse_saida_wise_xlsx, 'saida_wise_xlsx'
@@ -8429,6 +8431,8 @@ def get_parser_by_ext(account_name: str, ext: str):
         if 'bluor' in low:
             if 'kl59' in low:
                 return parse_kl59_bluor, 'kl59_bluor'
+            if 'bsp' in low:
+                return parse_bsr_bluor_2, 'bsp_bluor'
             if 'bsr' in low and '3' in low:
                 return parse_bsr_bluor_3, 'bsr_bluor_3'
             if 'bsr' in low:
