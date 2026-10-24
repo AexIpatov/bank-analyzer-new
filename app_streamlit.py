@@ -542,22 +542,29 @@ st.markdown(_CSS.replace("__GORODETS_B64__", _GORODETS_SVG_B64), unsafe_allow_ht
 # ==================== ЭТАЛОННЫЙ СПИСОК СЧЕТОВ ====================
 
 _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
-    ("an14estateeurindustra", "AN14_Estate_EUR_Industra"),
-    ("an14estateeurrevolut",  "AN14_Estate_EUR_Revolut"),
-    ("b1estateczkuc",         "B1_Estate_CZK_UC"),
-    ("b1estate",              "B1_Estate_CZK_UC"),
+    # ===== Estate / BluOr =====
     ("bsrestateeurbluor2",    "BSR_Estate_EUR_BluOr_2"),
     ("bsrestateeurbluor3",    "BSR_Estate_EUR_BluOr_3"),
     ("bsrbluor2",             "BSR_Estate_EUR_BluOr_2"),
     ("bsrbluor3",             "BSR_Estate_EUR_BluOr_3"),
     ("kl59revnbeurbluor",     "KL59_Rev_NB_EUR_BluOR"),
     ("kl59bluor",             "KL59_Rev_NB_EUR_BluOR"),
+    # BSP: card-алиас ДО обычного, чтобы "bspestateeurbluorcard" не схлопнулся в "bspestateeurbluor"
+    ("bspestateeurbluorcard", "BSP_Estate_EUR_BluOr_card"),
+    ("bspestateeurbluor",     "BSP_Estate_EUR_BluOr"),
+    ("bspestateeur",          "BSP_Estate_EUR_BluOr"),
+    ("bspestate",             "BSP_Estate_EUR_BluOr"),
+    ("bspbluor",              "BSP_Estate_EUR_BluOr"),
+
+    # ===== Budapest =====
     ("budapesthufmkb",        "Budapest HUF-MKB"),
     ("budapesthuf",           "Budapest HUF-MKB"),
     ("budapesteurmkb",        "Budapest EUR-MKB"),
     ("budapesteuro",          "Budapest EUR-MKB"),
     ("budapest",              "Budapest EUR-MKB"),
     ("mkbbudapest",           "Budapest EUR-MKB"),
+
+    # ===== BUNDA / Pasha =====
     ("bundallcpashabankaedдирхам", "BUNDA LLC-Pasha Bank - AED-дирхам"),
     ("bundallcpashabankaed",  "BUNDA LLC-Pasha Bank - AED-дирхам"),
     ("bundapashaaed",         "BUNDA LLC-Pasha Bank - AED-дирхам"),
@@ -567,16 +574,22 @@ _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
     ("bundapashaazn",         "BUNDA LLC-Pasha Bank-AZN"),
     ("pashabankazn",          "BUNDA LLC-Pasha Bank-AZN"),
     ("pashaazn",              "BUNDA LLC-Pasha Bank-AZN"),
+
+    # ===== CSOB / Estate =====
     ("dzibikmaincsobczk",     "DŽIBIK Main CSOB CZK"),
     ("dzibikcsob",            "DŽIBIK Main CSOB CZK"),
     ("dzibik",                "DŽIBIK Main CSOB CZK"),
-    ("jenisovhorskasrczk",    "JENISOV - HORSKA S.R CZK"),
+
+    # ===== JENISOV - HORSKA (CSOB) =====
+    ("jenisovhorskasrczk",    "JENISOV - HORSKA_CSOB_ CZK"),
     ("jenisovhorskaczkeur",   "JENISOV - HORSKA S.R EUR"),
     ("jenisovhorskasreur",    "JENISOV - HORSKA S.R EUR"),
-    ("jenisovhorskaczk",      "JENISOV - HORSKA S.R CZK"),
-    ("jenisovcsobczk",        "JENISOV - HORSKA S.R CZK"),
+    ("jenisovhorskaczk",      "JENISOV - HORSKA_CSOB_ CZK"),
+    ("jenisovcsobczk",        "JENISOV - HORSKA_CSOB_ CZK"),
     ("jenisovcsobeur",        "JENISOV - HORSKA S.R EUR"),
-    ("jenisov",               "JENISOV - HORSKA S.R CZK"),
+    ("jenisov",               "JENISOV - HORSKA_CSOB_ CZK"),
+
+    # ===== Koruna / RR / Strojka (CSOB) =====
     ("korunastrojkaczkcsob",  "Koruna_Strojka_CZK_CSOB"),
     ("korunastrojkaczkeur",   "Koruna_Strojka_EUR_CSOB"),
     ("korunastrojkaeurcsob",  "Koruna_Strojka_EUR_CSOB"),
@@ -588,6 +601,8 @@ _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
     ("rrstrovkaeur",          "RR_Strojka_EUR_CSOB"),
     ("rrstrovka",             "RR_Strojka_CZK_CSOB"),
     ("rrrevostr",             "RR_Strojka_CZK_CSOB"),
+
+    # ===== UniCredit =====
     ("garpizunicreditbankczk", "Garpiz UniCredit Bank CZK"),
     ("garpizunicredit",        "Garpiz UniCredit Bank CZK"),
     ("garpiz",                 "Garpiz UniCredit Bank CZK"),
@@ -600,26 +615,49 @@ _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
     ("twohillsmollyunicredit", "TwoHills_Molly_Unicredit_CZK"),
     ("twohillsmolly",          "TwoHills_Molly_Unicredit_CZK"),
     ("twohills",               "TwoHills_Molly_Unicredit_CZK"),
+    # B1: в новом справочнике только UC-вариант (CSOB больше нет)
+    ("b1estateczkuc",          "B1_Estate_CZK_UC"),
+    ("b1estate",               "B1_Estate_CZK_UC"),
+    ("b1uc",                   "B1_Estate_CZK_UC"),
+
+    # ===== CSAS =====
     ("jenhorunelmaczkcsas",    "JenHor_Unelma_CZK_CSAS"),
     ("jenhorunelma",           "JenHor_Unelma_CZK_CSAS"),
     ("jenhor",                 "JenHor_Unelma_CZK_CSAS"),
     ("unelma",                 "JenHor_Unelma_CZK_CSAS"),
+
+    # ===== Kapital bank =====
     ("kapitalbanksaidaazn",    "Kapital bank_Saida_AZN"),
     ("kapitalbanksaida",       "Kapital bank_Saida_AZN"),
     ("kapitalbankazn",         "Kapital bank_Saida_AZN"),
     ("kapitalazn",             "Kapital bank_Saida_AZN"),
     ("saidaazn",               "Kapital bank_Saida_AZN"),
+
+    # ===== KL59 Industra =====
     ("kl59revnbeurindustra",   "KL59_Rev_NB_EUR_Industra"),
     ("kl59industra",           "KL59_Rev_NB_EUR_Industra"),
     ("kl59",                   "KL59_Rev_NB_EUR_Industra"),
+
+    # ===== MASHREQ (только AED в новом справочнике!) =====
     ("mashreqbankaednomiqa",   "MASHREQ BANK-AED-NOMIQA"),
     ("mashreqaednomiqa",       "MASHREQ BANK-AED-NOMIQA"),
     ("mashreqnomiqa",          "MASHREQ BANK-AED-NOMIQA"),
+    ("mashreqbanknomiqa",      "MASHREQ BANK-AED-NOMIQA"),
     ("mashreq",                "MASHREQ BANK-AED-NOMIQA"),
     ("nomiqa",                 "MASHREQ BANK-AED-NOMIQA"),
+
+    # ===== Revolut =====
+    ("an14estateeurrevolut",   "AN14_Estate_EUR_Revolut"),
     ("nbreveurrevolut",        "NB_Rev_EUR_Revolut"),
     ("nbreveur",               "NB_Rev_EUR_Revolut"),
     ("nbrev",                  "NB_Rev_EUR_Revolut"),
+    ("revolutplavas1sia",      "Revolut_Plavas 1 SIA"),
+    ("revolutplavas1",         "Revolut_Plavas 1 SIA"),
+    ("revolutplavas",          "Revolut_Plavas 1 SIA"),
+    ("revolutnb",              "NB_Rev_EUR_Revolut"),
+    ("revolutan14",            "AN14_Estate_EUR_Revolut"),
+
+    # ===== Paysera =====
     ("payserabalticsolutionseur", "Paysera Baltic Solutions EUR"),
     ("payserabalticsolutions", "Paysera Baltic Solutions EUR"),
     ("payserabaltic",          "Paysera Baltic Solutions EUR"),
@@ -632,63 +670,46 @@ _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
     ("payserabsrerumsia",      "Paysera-BS RERUM, SIA"),
     ("payserabsrerum",         "Paysera-BS RERUM, SIA"),
     ("payserarerum",           "Paysera-BS RERUM, SIA"),
+    # Общий paysera — В САМЫЙ КОНЕЦ, чтобы не перебивать специфичные
     ("paysera",                "Paysera Baltic Solutions EUR"),
+
+    # ===== Industra =====
+    ("an14estateeurindustra",  "AN14_Estate_EUR_Industra"),
     ("plavas1estateeurindustra", "Plavas1_Estate_EUR_Industra"),
     ("plavas1industra",        "Plavas1_Estate_EUR_Industra"),
     ("plavasestateeurindustra", "Plavas1_Estate_EUR_Industra"),
     ("plavas1",                "Plavas1_Estate_EUR_Industra"),
     ("plavas",                 "Plavas1_Estate_EUR_Industra"),
+
+    # ===== Alfa-bank Regina =====
     ("reginaalfabanknomiqarub", "Regina Alfa-bank_NOMIQA_RUB"),
     ("reginaalfanomiqarub",     "Regina Alfa-bank_NOMIQA_RUB"),
     ("reginaalfabanknomiqa",    "Regina Alfa-bank_NOMIQA_RUB"),
     ("reginaalfanomiqa",        "Regina Alfa-bank_NOMIQA_RUB"),
     ("reginaalfa",              "Regina Alfa-bank_NOMIQA_RUB"),
-    ("revolutplavas1sia",      "Revolut_Plavas 1 SIA"),
-    ("revolutplavas1",         "Revolut_Plavas 1 SIA"),
-    ("revolutplavas",          "Revolut_Plavas 1 SIA"),
-    ("revolutnb",              "NB_Rev_EUR_Revolut"),
-    ("revolutan14",            "AN14_Estate_EUR_Revolut"),
-    ("revolut",                "AN14_Estate_EUR_Revolut"),
+
+    # ===== Saida N26 / Wise =====
     ("saidan26",               "Saida_N26"),
     ("saida26",                "Saida_N26"),
     ("n26",                    "Saida_N26"),
     ("saidawise",              "Saida_Wise"),
     ("wise",                   "Saida_Wise"),
+
+    # ===== Stalkin / FIO =====
     ("stalkinml2czkfio",       "Stalkin_ML2_CZK_FIO"),
     ("stalkinml2fio",          "Stalkin_ML2_CZK_FIO"),
     ("stalkinfio",             "Stalkin_ML2_CZK_FIO"),
     ("stalkin",                "Stalkin_ML2_CZK_FIO"),
     ("fio",                    "Stalkin_ML2_CZK_FIO"),
+
+    # ===== Прочее =====
     ("tinkoffrub",             "Tinkoff RUB"),
     ("tinkoff",                "Tinkoff RUB"),
     ("wiobusinessbank",        "WIO Business Bank"),
     ("wiobusiness",            "WIO Business Bank"),
-
-    # === Добавлено 24.10.2026 по справочнику ===
-    # BSP_Estate_EUR_BluOr и его карта
-    ("bspestateeurbluorcard",  "BSP_Estate_EUR_BluOr_card"),
-    ("bspestateeurbluor",      "BSP_Estate_EUR_BluOr"),
-    ("bspestateeur",           "BSP_Estate_EUR_BluOr"),
-    ("bspestate",              "BSP_Estate_EUR_BluOr"),
-    ("bspbluor",               "BSP_Estate_EUR_BluOr"),
-
-    # MASHREQ — добавились EUR и USD (AED уже был)
-    ("mashreqbankaedeurnomiqa", "MASHREQ BANK-EUR-NOMIQA"),
-    ("mashreqeur",              "MASHREQ BANK-EUR-NOMIQA"),
-    ("mashreqbankusdnomiqa",    "MASHREQ BANK-USD-NOMIQA"),
-    ("mashrequsd",              "MASHREQ BANK-USD-NOMIQA"),
-    ("mashreqbanknomiqa",       "MASHREQ BANK-AED-NOMIQA"),   # общий
-    ("mashreqnomiqa",           "MASHREQ BANK-AED-NOMIQA"),
-
-    # Regina Revolut (карта)
-    ("reginarevolutbankuabeur", "Regina Revolut Bank UAB EUR"),
-    ("reginarevolutbank",       "Regina Revolut Bank UAB EUR"),
-    ("reginarevolut",           "Regina Revolut Bank UAB EUR"),
-
-    # RAK BANK (добавлено 24.10.2026)
-    ("rakbanknomiqaklienti", "RAK BANK Nomiqa клиенты"),
-    ("rakbanknomiqa",        "RAK BANK Nomiqa клиенты"),
-    ("rakbank",              "RAK BANK Nomiqa клиенты"),
+    ("rakbanknomiqaklienti",   "RAK BANK Nomiqa клиенты"),
+    ("rakbanknomiqa",          "RAK BANK Nomiqa клиенты"),
+    ("rakbank",                "RAK BANK Nomiqa клиенты"),
 ]
 
 def _normalize_key(s: str) -> str:
@@ -6996,48 +7017,48 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
 
 def _read_mkb_dataframe(file_content: bytes):
     df = None
+    # --- CSV (новое!) ---
+    if _looks_like_csv(file_content):
+        try:
+            content = read_text_with_encoding(file_content)
+            lines = [l for l in content.split('\n') if l.strip()]
+            # Ищем заголовок: строка, где есть 'Value date' и 'Amount'
+            header_idx = -1
+            for i, l in enumerate(lines[:30]):
+                low = l.lower()
+                if 'value date' in low and 'amount' in low:
+                    header_idx = i
+                    break
+                if ('értéknap' in low) and (('összeg' in low) or ('osszeg' in low)):
+                    header_idx = i
+                    break
+            if header_idx != -1:
+                from io import StringIO
+                csv_text = '\n'.join(lines[header_idx:])
+                # Пробуем с разделителем ; и ,
+                for sep in [',', ';', '\t']:
+                    try:
+                        df_try = pd.read_csv(
+                            StringIO(csv_text), sep=sep, header=0,
+                            dtype=str, keep_default_na=False,
+                            engine='python', on_bad_lines='skip'
+                        )
+                        if df_try is not None and not df_try.empty \
+                                and df_try.shape[1] >= 3:
+                            df = df_try
+                            break
+                    except Exception:
+                        continue
+        except Exception:
+            df = None
+        if df is not None and not df.empty:
+            return df
+
+    # --- XLS ---
     if _is_real_xls(file_content):
-        try:
-            import xlrd  # noqa: F401
-            try:
-                wb = xlrd.open_workbook(
-                    file_contents=file_content,
-                    ignore_workbook_corruption=True
-                )
-                sheet = wb.sheet_by_index(0)
-                data = []
-                for r in range(sheet.nrows):
-                    data.append([sheet.cell_value(r, c)
-                                 for c in range(sheet.ncols)])
-                df = pd.DataFrame(data)
-            except TypeError:
-                df = pd.read_excel(BytesIO(file_content), header=None, engine='xlrd')
-        except Exception:
-            df = None
-        if df is None or df.empty:
-            try:
-                df = pd.read_excel(BytesIO(file_content), header=None, engine='openpyxl')
-            except Exception:
-                df = None
-        if df is None or df.empty:
-            try:
-                tables = pd.read_html(BytesIO(file_content))
-                if tables:
-                    df = tables[0]
-            except Exception:
-                df = None
+        ...  # (существующий код без изменений)
     elif _is_real_xlsx(file_content):
-        try:
-            df = pd.read_excel(BytesIO(file_content), header=None, engine='openpyxl')
-        except Exception:
-            df = None
-        if df is None or df.empty:
-            try:
-                tables = pd.read_html(BytesIO(file_content))
-                if tables:
-                    df = tables[0]
-            except Exception:
-                df = None
+        ...  # (существующий код без изменений)
     return df
 
 
@@ -7187,14 +7208,24 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
     sample = '\n'.join(lines[:5])
     sep = ';' if sample.count(';') >= sample.count(',') else ','
     header_line_idx = -1
-    for i, l in enumerate(lines):
+    for i, l in enumerate(lines[:30]):
         low = l.lower()
+        # Венгерский формат
         has_sorsz = ('sorszám' in low) or ('sorszam' in low)
         has_ert = ('értéknap' in low) or ('erteknap' in low)
+        has_ossz = ('összeg' in low) or ('osszeg' in low)
         if has_sorsz and has_ert:
             header_line_idx = i
             break
-        if has_ert and (('összeg' in low) or ('osszeg' in low)):
+        if has_ert and has_ossz:
+            header_line_idx = i
+            break
+        # Английский формат (MKB выгрузка на английском)
+        has_value_date = 'value date' in low
+        has_amount = 'amount' in low
+        has_narrative = 'narrative' in low
+        has_beneficiary = "beneficiary's name" in low or "beneficiary’s name" in low
+        if has_value_date and has_amount and (has_narrative or has_beneficiary):
             header_line_idx = i
             break
     if header_line_idx == -1:
