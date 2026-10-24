@@ -8826,7 +8826,7 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
 
 def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
     columns = [
-        "Наименование банка",
+        "Название счета",
         "Количество приходных операций",
         "Сумма приходных операций",
         "Количество расходных операций",
@@ -8838,8 +8838,8 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     bank_col = None
-    if "Наименование банка" in df.columns:
-        bank_col = "Наименование банка"
+    if "Название счета" in df.columns:
+        bank_col = "Название счета"
     elif "Наименование счета" in df.columns:
         bank_col = "Наименование счета"
     else:
@@ -8871,13 +8871,13 @@ def build_account_summary(rows: List[Dict]) -> pd.DataFrame:
         "Количество расходных операций": grouped["_expense"].sum().astype(int),
         "Сумма расходных операций": grouped["_expense_sum"].sum(),
     }).reset_index()
-    summary = summary.rename(columns={bank_col: "Наименование банка"})
+    summary = summary.rename(columns={bank_col: "Название счета"})
 
     summary["Сальдо операций"] = (
         summary["Сумма приходных операций"].astype(float)
         - summary["Сумма расходных операций"].astype(float)
     )
-    summary = summary.sort_values("Наименование банка").reset_index(drop=True)
+    summary = summary.sort_values("Название счета").reset_index(drop=True)
 
     summary["Сумма приходных операций"] = \
         summary["Сумма приходных операций"].astype(float).round(2)
@@ -8997,13 +8997,12 @@ def build_operations_excel(df_display: pd.DataFrame,
     ws = wb.active
     ws.title = 'Транзакции'
 
-    if 'Наименование банка' in df_numeric.columns:
-        bank_series = df_numeric['Наименование банка']
+    if 'Название счета' in df_numeric.columns:
+        bank_series = df_numeric['Название счета']
     elif 'Наименование счета' in df_numeric.columns:
         bank_series = df_numeric['Наименование счета']
     else:
         bank_series = pd.Series([''] * len(df_numeric), index=df_numeric.index)
-
     df_export = pd.DataFrame({
         'Дата': _safe_str_series(df_numeric['Дата']),
         'Сумма': pd.to_numeric(
@@ -9014,7 +9013,7 @@ def build_operations_excel(df_display: pd.DataFrame,
                            pd.Series([''] * len(df_numeric),
                                      index=df_numeric.index))
         ),
-        'Наименование банка': _safe_str_series(bank_series),
+        'Название счета': _safe_str_series(bank_series),
         'Описание': _safe_str_series(
             df_display.get('Описание',
                            pd.Series([''] * len(df_numeric),
@@ -9048,8 +9047,8 @@ def build_combined_excel(df_display: pd.DataFrame,
     ws1 = wb.active
     ws1.title = 'Транзакции'
 
-    if 'Наименование банка' in df_numeric.columns:
-        bank_series = df_numeric['Наименование банка']
+    if 'Название счета' in df_numeric.columns:
+        bank_series = df_numeric['Название счета']
     elif 'Наименование счета' in df_numeric.columns:
         bank_series = df_numeric['Наименование счета']
     else:
@@ -9065,7 +9064,7 @@ def build_combined_excel(df_display: pd.DataFrame,
                            pd.Series([''] * len(df_numeric),
                                      index=df_numeric.index))
         ),
-        'Наименование банка': _safe_str_series(bank_series),
+        'Название счета': _safe_str_series(bank_series),
         'Описание': _safe_str_series(
             df_display.get('Описание',
                            pd.Series([''] * len(df_numeric),
@@ -9253,11 +9252,10 @@ def _render_results(result: Dict):
         df_raw['Сумма_число'] = 0.0
 
     if 'Наименование счета' in df_raw.columns \
-            and 'Наименование банка' not in df_raw.columns:
+            and 'Название счета' not in df_raw.columns:
         df_raw = df_raw.rename(
-            columns={'Наименование счета': 'Наименование банка'}
+            columns={'Наименование счета': 'Название счета'}
         )
-
     income = float(df_raw['Сумма_число'][df_raw['Сумма_число'] > 0].sum())
     expense = float(abs(df_raw['Сумма_число'][df_raw['Сумма_число'] < 0].sum()))
 
@@ -9270,13 +9268,12 @@ def _render_results(result: Dict):
     else:
         counterparty_series = pd.Series([''] * len(df_raw), index=df_raw.index)
 
-    if 'Наименование банка' in df_raw.columns:
-        bank_series = _safe_str_series(df_raw['Наименование банка'])
+    if 'Название счета' in df_raw.columns:
+        bank_series = _safe_str_series(df_raw['Название счета'])
     elif 'Наименование счета' in df_raw.columns:
         bank_series = _safe_str_series(df_raw['Наименование счета'])
     else:
         bank_series = pd.Series([''] * len(df_raw), index=df_raw.index)
-
     if 'Описание' in df_raw.columns:
         desc_series = _safe_str_series(df_raw['Описание'])
     else:
@@ -9286,7 +9283,7 @@ def _render_results(result: Dict):
         'Дата': date_series.values,
         'Сумма': sum_series.values,
         'Контрагент': counterparty_series.values,
-        'Наименование банка': bank_series.values,
+        'Название счета': bank_series.values,
         'Описание': desc_series.values,
     }, index=df_raw.index)
 
@@ -9319,8 +9316,8 @@ def _render_results(result: Dict):
     st.markdown("---")
     st.markdown("### 📋 Операции по счетам (диагностика)")
     try:
-        if 'Наименование банка' in df_raw.columns:
-            counts = df_raw.groupby('Наименование банка').size().reset_index(
+        if 'Название счета' in df_raw.columns:
+            counts = df_raw.groupby('Название счета').size().reset_index(
                 name='Количество операций'
             )
             counts = counts.sort_values('Количество операций', ascending=False)
