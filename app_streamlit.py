@@ -661,9 +661,30 @@ _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
     ("fio",                    "Stalkin_ML2_CZK_FIO"),
     ("tinkoffrub",             "Tinkoff RUB"),
     ("tinkoff",                "Tinkoff RUB"),
-    ("wiobusinessbank",        "WIO Business Bank"),
+        ("wiobusinessbank",        "WIO Business Bank"),
     ("wiobusiness",            "WIO Business Bank"),
     ("wio",                    "WIO Business Bank"),
+
+    # === Добавлено 24.10.2026 по справочнику ===
+    # BSP_Estate_EUR_BluOr и его карта
+    ("bspestateeurbluorcard",  "BSP_Estate_EUR_BluOr_card"),
+    ("bspestateeurbluor",      "BSP_Estate_EUR_BluOr"),
+    ("bspestateeur",           "BSP_Estate_EUR_BluOr"),
+    ("bspestate",              "BSP_Estate_EUR_BluOr"),
+    ("bspbluor",               "BSP_Estate_EUR_BluOr"),
+
+    # MASHREQ — добавились EUR и USD (AED уже был)
+    ("mashreqbankaedeurnomiqa", "MASHREQ BANK-EUR-NOMIQA"),
+    ("mashreqeur",              "MASHREQ BANK-EUR-NOMIQA"),
+    ("mashreqbankusdnomiqa",    "MASHREQ BANK-USD-NOMIQA"),
+    ("mashrequsd",              "MASHREQ BANK-USD-NOMIQA"),
+    ("mashreqbanknomiqa",       "MASHREQ BANK-AED-NOMIQA"),   # общий
+    ("mashreqnomiqa",           "MASHREQ BANK-AED-NOMIQA"),
+
+    # Regina Revolut (карта)
+    ("reginarevolutbankuabeur", "Regina Revolut Bank UAB EUR"),
+    ("reginarevolutbank",       "Regina Revolut Bank UAB EUR"),
+    ("reginarevolut",           "Regina Revolut Bank UAB EUR"),
 ]
 
 
