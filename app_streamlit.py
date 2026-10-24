@@ -6093,9 +6093,22 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 if i in (date_i, amount_i):
                     continue
                 v = (row[i] or '').strip()
-                if v and len(v) > 2 and not re.match(r'^[\d.,\-]+$', v):
-                    desc = v
-                    break
+                if not v or len(v) <= 2:
+                    continue
+                if re.match(r'^[\d.,\-]+$', v):
+                    continue
+                if re.match(r'^Account\s+No\.', v, re.IGNORECASE):
+                    continue
+                if re.match(r'^Account\s+Number', v, re.IGNORECASE):
+                    continue
+                if re.fullmatch(r'[A-Z]{2}\d{2}[A-Z0-9\s]{10,}', v):
+                    continue
+                if re.fullmatch(r'LV\d{2}[A-Z0-9\s]{10,}', v):
+                    continue
+                if re.fullmatch(r'CZ\d{2}[A-Z0-9\s]{10,}', v):
+                    continue
+                desc = v
+                break
             if _is_service_line(desc):
                 continue
             cp_final, _ = extract_counterparty_smart(desc, account_name)
@@ -6178,9 +6191,22 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 if i in (date_i, amount_i) or pd.isna(v):
                     continue
                 vs = str(v).strip()
-                if vs and len(vs) > 2 and not re.match(r'^[\d.,\-]+$', vs):
-                    desc = vs
-                    break
+                if not vs or len(vs) <= 2:
+                    continue
+                if re.match(r'^[\d.,\-]+$', vs):
+                    continue
+                if re.match(r'^Account\s+No\.', vs, re.IGNORECASE):
+                    continue
+                if re.match(r'^Account\s+Number', vs, re.IGNORECASE):
+                    continue
+                if re.fullmatch(r'[A-Z]{2}\d{2}[A-Z0-9\s]{10,}', vs):
+                    continue
+                if re.fullmatch(r'LV\d{2}[A-Z0-9\s]{10,}', vs):
+                    continue
+                if re.fullmatch(r'CZ\d{2}[A-Z0-9\s]{10,}', vs):
+                    continue
+                desc = vs
+                break
             if _is_service_line(desc):
                 continue
             cp_final, _ = extract_counterparty_smart(desc, account_name)
@@ -6232,9 +6258,25 @@ def parse_any_format(file_content: bytes, account_name: str) -> List[Dict]:
                 for i, p in enumerate(parts):
                     if i in (date_i, amount_i):
                         continue
-                    if p and len(p) > 2 and not re.match(r'^[\d.,\-]+$', p):
-                        desc = p
-                        break
+                    if not p or len(p) <= 2:
+                        continue
+                    if re.match(r'^[\d.,\-]+$', p):
+                        continue
+                    # Пропускаем служебные колонки: Account No., IBAN, номер счёта
+                    if re.match(r'^Account\s+No\.', p, re.IGNORECASE):
+                        continue
+                    if re.match(r'^Account\s+Number', p, re.IGNORECASE):
+                        continue
+                    if re.fullmatch(
+                        r'[A-Z]{2}\d{2}[A-Z0-9\s]{10,}', p.strip()
+                    ):
+                        continue
+                    if re.fullmatch(r'LV\d{2}[A-Z0-9\s]{10,}', p.strip()):
+                        continue
+                    if re.fullmatch(r'CZ\d{2}[A-Z0-9\s]{10,}', p.strip()):
+                        continue
+                    desc = p
+                    break
                 if _is_service_line(desc):
                     continue
                 cp_final, _ = extract_counterparty_smart(desc, account_name)
@@ -8773,20 +8815,41 @@ def get_parser_chain(account_name: str,
 def _is_suspicious_parse_result(tx: List[Dict]) -> bool:
     """
     Подозрительно, если:
-    ...
+    - описания слишком длинные (> 500 символов) — обычно это склейка PDF-артефактов;
+    - в описании слишком много € — обычно это несколько операций в одной строке;
+    - ВСЕ контрагенты пустые И описания выглядят как мусор
+      (account number, IBAN, длинные технические строки).
+
+    НЕ считаем подозрительным просто «все контрагенты пустые» —
+    для BluOr/ČSOB это норма, банк не указывает контрагента.
     """
     if not tx:
         return False
 
-    # ДОБАВИТЬ ЭТИ 3 СТРОКИ:
-    # Принудительно доверяем MKB-парсеру, чтобы он не переключался на csv_universal
+    # Принудительно доверяем MKB-парсеру
     if tx and str(tx[0].get('Наименование счета', '')).startswith('Budapest'):
+        return False
+
+    # Маленькие выписки (1–3 операции) не проверяем эвристикой
+    if len(tx) <= 3:
         return False
 
     n = len(tx)
     long_desc = 0
     multi_eur = 0
     empty_cp = 0
+    junk_desc = 0
+
+    # Маркеры «мусорного» описания — типичный результат parse_any_format
+    junk_patterns = [
+        r'^Account\s+No\.',
+        r'^Account\s+Number',
+        r'\b[A-Z]{2}\d{2}[A-Z0-9]{10,}\b',   # IBAN
+        r'^LV\d{2}',
+        r'^CZ\d{2}',
+        r'^LT\d{2}',
+    ]
+
     for t in tx:
         desc = str(t.get('Описание', ''))
         cp = str(t.get('Контрагент', '')).strip()
@@ -8796,12 +8859,21 @@ def _is_suspicious_parse_result(tx: List[Dict]) -> bool:
             multi_eur += 1
         if not cp:
             empty_cp += 1
+        for pat in junk_patterns:
+            if re.search(pat, desc, re.IGNORECASE):
+                junk_desc += 1
+                break
+
     if long_desc >= max(1, n // 2):
         return True
     if multi_eur >= max(1, n // 2):
         return True
-    if empty_cp >= n:
+
+    # «Все контрагенты пустые» — подозрительно ТОЛЬКО если
+    # И описания выглядят как мусор. Иначе — это норма (BluOr, ČSOB).
+    if empty_cp >= n and junk_desc >= max(1, n // 2):
         return True
+
     return False
 
 
