@@ -5940,23 +5940,44 @@ def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
             break
     if header_idx == -1:
         return []
+
     hdr = _split_line(lines[header_idx], sep)
     ci: Dict[str, int] = {}
+    desc_candidates: List[int] = []
+
     for i, h in enumerate(hdr):
-        hl = h.lower().strip()
-        if ('date' in hl or 'дата' in hl or 'value date' in hl) and 'date' not in ci:
+        hl = h.lower().strip().strip('"').strip('\ufeff')
+        if ('date' in hl or 'дата' in hl or 'value date' in hl) \
+                and 'date' not in ci:
             ci['date'] = i
         elif ('amount' in hl or 'сумма' in hl or 'sum' in hl or 'betrag' in hl) \
                 and 'amount' not in ci:
             ci['amount'] = i
         elif ('description' in hl or 'описание' in hl or 'details' in hl
-              or 'назначение' in hl or 'narrative' in hl) and 'description' not in ci:
-            ci['description'] = i
+              or 'назначение' in hl or 'narrative' in hl):
+            desc_candidates.append(i)
         elif ('counterparty' in hl or 'контрагент' in hl or 'name' in hl
               or 'payer' in hl or "beneficiary" in hl) and 'counterparty' not in ci:
             ci['counterparty'] = i
+
+    # Выбор колонки описания по фактической заполненности
+    if desc_candidates:
+        best_desc_i = desc_candidates[0]
+        best_filled = -1
+        for ci_desc in desc_candidates:
+            filled = 0
+            for probe in lines[header_idx + 1: header_idx + 31]:
+                parts_probe = _split_line(probe, sep)
+                if ci_desc < len(parts_probe) and parts_probe[ci_desc].strip():
+                    filled += 1
+            if filled > best_filled:
+                best_filled = filled
+                best_desc_i = ci_desc
+        ci['description'] = best_desc_i
+
     if 'date' not in ci or 'amount' not in ci:
         return []
+
     for line in lines[header_idx + 1:]:
         parts = _split_line(line, sep)
         if ci['date'] >= len(parts) or ci['amount'] >= len(parts):
@@ -5968,13 +5989,14 @@ def parse_csv_universal(file_content: bytes, account_name: str) -> List[Dict]:
             amount = parse_amount(parts[ci['amount']])
             if amount == 0.0 or not _is_reasonable_amount(amount):
                 continue
-            desc = parts[ci['description']] \
-                if 'description' in ci and ci['description'] < len(parts) else ''
-            cp = parts[ci['counterparty']] \
-                if 'counterparty' in ci and ci['counterparty'] < len(parts) else ''
-            # Fallback: если Narrative пуст — берём тип операции из 3-й колонки
-            if not desc.strip():
-                desc = parts[3].strip() if len(parts) > 3 else 'без описания'
+            desc = ''
+            if 'description' in ci and ci['description'] < len(parts):
+                desc = parts[ci['description']]
+            cp = ''
+            if 'counterparty' in ci and ci['counterparty'] < len(parts):
+                cp = parts[ci['counterparty']]
+            if not desc.strip() and len(parts) > 3:
+                desc = parts[3].strip()
             if _is_service_line(desc):
                 continue
             cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
@@ -7016,26 +7038,36 @@ def parse_mashreq(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== MKB (XLS/XLSX) ====================
 
 def _read_mkb_dataframe(file_content: bytes):
+    """
+    Читает MKB-файл (CSV / XLS / XLSX) в DataFrame.
+
+    Для CSV: ищет строку-заголовок с 'Value date' / 'Amount' (или
+    венгерские 'értéknap' / 'összeg'), затем читает всё с pandas.read_csv.
+    Для XLS/XLSX: читает через xlrd/openpyxl с ignore_workbook_corruption.
+    """
     df = None
-    # --- CSV (новое!) ---
+
+    # --- CSV ---
     if _looks_like_csv(file_content):
         try:
             content = read_text_with_encoding(file_content)
             lines = [l for l in content.split('\n') if l.strip()]
-            # Ищем заголовок: строка, где есть 'Value date' и 'Amount'
             header_idx = -1
             for i, l in enumerate(lines[:30]):
                 low = l.lower()
-                if 'value date' in low and 'amount' in low:
+                # Венгерский формат
+                if ('értéknap' in low or 'erteknap' in low) and \
+                        ('összeg' in low or 'osszeg' in low):
                     header_idx = i
                     break
-                if ('értéknap' in low) and (('összeg' in low) or ('osszeg' in low)):
+                # Английский формат MKB
+                if 'value date' in low and 'amount' in low:
                     header_idx = i
                     break
             if header_idx != -1:
                 from io import StringIO
                 csv_text = '\n'.join(lines[header_idx:])
-                # Пробуем с разделителем ; и ,
+                # Пробуем с разделителем , ; \t
                 for sep in [',', ';', '\t']:
                     try:
                         df_try = pd.read_csv(
@@ -7056,15 +7088,80 @@ def _read_mkb_dataframe(file_content: bytes):
 
     # --- XLS ---
     if _is_real_xls(file_content):
-        ...  # (существующий код без изменений)
+        try:
+            import xlrd  # noqa: F401
+            try:
+                wb = xlrd.open_workbook(
+                    file_contents=file_content,
+                    ignore_workbook_corruption=True
+                )
+                sheet = wb.sheet_by_index(0)
+                data = []
+                for r in range(sheet.nrows):
+                    data.append([sheet.cell_value(r, c)
+                                 for c in range(sheet.ncols)])
+                df = pd.DataFrame(data)
+            except TypeError:
+                df = pd.read_excel(BytesIO(file_content), header=None,
+                                   engine='xlrd')
+        except Exception:
+            df = None
+        if df is None or df.empty:
+            try:
+                df = pd.read_excel(BytesIO(file_content), header=None,
+                                   engine='openpyxl')
+            except Exception:
+                df = None
+        if df is None or df.empty:
+            try:
+                tables = pd.read_html(BytesIO(file_content))
+                if tables:
+                    df = tables[0]
+            except Exception:
+                df = None
+
+    # --- XLSX ---
     elif _is_real_xlsx(file_content):
-        ...  # (существующий код без изменений)
+        try:
+            df = pd.read_excel(BytesIO(file_content), header=None,
+                               engine='openpyxl')
+        except Exception:
+            df = None
+        if df is None or df.empty:
+            try:
+                tables = pd.read_html(BytesIO(file_content))
+                if tables:
+                    df = tables[0]
+            except Exception:
+                df = None
+
     return df
 
+def _fix_hu_mojibake(text: str) -> str:
+    """
+    Исправляет венгерскую «порчу» UTF-8 → CP1252 → UTF-8.
+    В вашем файле Budapest: FELS誆RD誗OR = FELSŐERDŐSOR (Ő → 誆, Ű → 誗).
+    """
+    if not text:
+        return text
+    s = str(text)
+    replacements = {
+        '誆': 'Ő', '誗': 'Ű',      # именно то, что в вашем файле
+        'Ă…': 'Ő', 'Ă°': 'Ű',
+        'Ã•': 'Ő', 'Ã°': 'Ű',
+        'Å': 'Ő', 'Å°': 'Ű',
+        'ő': 'Ő', 'ű': 'Ű',
+        '\ufffd': '',
+    }
+    for bad, good in replacements.items():
+        s = s.replace(bad, good)
+    return s
 
 def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
     result: List[Dict] = []
     df = _read_mkb_dataframe(file_content)
+
+    # === Pandas-ветка (CSV / XLS / XLSX) ===
     if df is not None and not df.empty:
         header_row = -1
         for idx, row in df.iterrows():
@@ -7074,71 +7171,82 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                 has_sorsz = ('sorszám' in rsl) or ('sorszam' in rsl)
                 has_ert = ('értéknap' in rsl) or ('erteknap' in rsl)
                 has_ossz = ('összeg' in rsl) or ('osszeg' in rsl)
+                has_value_date = 'value date' in rsl
+                has_amount = 'amount' in rsl
                 if has_sorsz and has_ert:
                     header_row = idx
                     break
                 if has_ert and has_ossz:
                     header_row = idx
                     break
+                if has_value_date and has_amount:
+                    header_row = idx
+                    break
+
         if header_row != -1:
             hdr = df.iloc[header_row]
-            ci: Dict[str, int] = {}
-            for i, v in enumerate(hdr.values):
-                if pd.isna(v):
-                    continue
-                s = str(v).strip()
-                sl = s.lower()
-                if ('értéknap' in sl) or ('erteknap' in sl):
-                    if 'date' not in ci:
-                        ci['date'] = i
-                elif ('összeg' in sl) or ('osszeg' in sl):
-                    if 'amount' not in ci:
-                        ci['amount'] = i
-                elif ('közlemény' in sl) or ('kozlemeny' in sl):
-                    if 'description' not in ci:
-                        ci['description'] = i
-                elif ('kedvezményezett' in sl) and ('neve' in sl):
-                    if 'counterparty' not in ci:
-                        ci['counterparty'] = i
-                elif ('tranzakció típusa' in sl) \
-                        or ('tranzakci' in sl and 'típusa' in sl):
-                    if 'type' not in ci:
-                        ci['type'] = i
-                elif ('terhelés' in sl) or ('terheles' in sl):
-                    if 'debit' not in ci:
-                        ci['debit'] = i
-                elif ('jóváírás' in sl) or ('jovairas' in sl):
-                    if 'credit' not in ci:
-                        ci['credit'] = i
-            # --- Английские названия колонок в Pandas-ветке (CSV через read_csv) ---
-            def find_col_pd(patterns):
+
+            def find_col_pd(patterns, exact=False):
                 for i, v in enumerate(hdr.values):
                     if pd.isna(v):
                         continue
-                    hl = str(v).strip().lower()
-                    if any(p in hl for p in patterns):
-                        return i
+                    hl = str(v).strip().strip('"').strip('\ufeff').lower()
+                    for p in patterns:
+                        if exact:
+                            if hl == p:
+                                return i
+                        else:
+                            if p in hl:
+                                return i
                 return -1
 
-            _date_en = find_col_pd(['value date', 'értéknap', 'erteknap'])
-            _amount_en = find_col_pd(['amount', 'összeg', 'osszeg'])
-            _desc_en = find_col_pd(['narrative', 'közlemény', 'kozlemeny'])
-            _cp_en = find_col_pd(["beneficiary's name", "beneficiary’s name",
-                                  "beneficiary name", "kedvezményezett"])
-            _type_en = find_col_pd(['transaction type', 'tranzakció típusa'])
-            if _date_en != -1:
-                ci['date'] = _date_en
-            if _amount_en != -1:
-                ci['amount'] = _amount_en
-                ci['credit'] = -1
-                ci['debit'] = -1
-            if _desc_en != -1:
-                ci['description'] = _desc_en
-            if _cp_en != -1:
-                ci['counterparty'] = _cp_en
-            if _type_en != -1:
-                ci['type'] = _type_en
+            ci: Dict[str, int] = {}
 
+            # Венгерский формат
+            d_hu = find_col_pd(['értéknap', 'erteknap'])
+            a_hu = find_col_pd(['összeg', 'osszeg'])
+            desc_hu = find_col_pd(['közlemény', 'kozlemeny'])
+            cp_hu = find_col_pd(['kedvezményezett'])
+            type_hu = find_col_pd(['tranzakció típusa', 'tranzakci'])
+            debit_hu = find_col_pd(['terhelés', 'terheles'])
+            credit_hu = find_col_pd(['jóváírás', 'jovairas'])
+
+            # Английский формат MKB
+            d_en = find_col_pd(['value date'])
+            a_en = find_col_pd(['amount'], exact=True)
+            if a_en == -1:
+                a_en = find_col_pd(['amount'])
+            desc_en = find_col_pd(['narrative'])
+            cp_en = find_col_pd(["beneficiary's name", "beneficiary’s name",
+                                 "beneficiary name"])
+            type_en = find_col_pd(['transaction type'])
+
+            # Приоритет — английский, если он есть
+            if d_en != -1 and a_en != -1:
+                ci['date'] = d_en
+                ci['amount'] = a_en
+                ci['description'] = desc_en if desc_en != -1 else -1
+                ci['counterparty'] = cp_en if cp_en != -1 else -1
+                ci['type'] = type_en if type_en != -1 else -1
+                ci['debit'] = -1
+                ci['credit'] = -1
+            else:
+                if d_hu != -1:
+                    ci['date'] = d_hu
+                if a_hu != -1:
+                    ci['amount'] = a_hu
+                if desc_hu != -1:
+                    ci['description'] = desc_hu
+                if cp_hu != -1:
+                    ci['counterparty'] = cp_hu
+                if type_hu != -1:
+                    ci['type'] = type_hu
+                if debit_hu != -1:
+                    ci['debit'] = debit_hu
+                if credit_hu != -1:
+                    ci['credit'] = credit_hu
+
+            # Фолбэки
             if 'date' not in ci:
                 ci['date'] = 1
             if 'amount' not in ci and 'credit' not in ci and 'debit' not in ci:
@@ -7149,6 +7257,7 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                 ci['counterparty'] = 4
             if 'type' not in ci:
                 ci['type'] = 2
+
             for idx in range(header_row + 1, len(df)):
                 row = df.iloc[idx]
                 rv = [x for x in row.values if pd.notna(x)]
@@ -7162,38 +7271,50 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                     date = parse_date(dstr, account_name=account_name)
                     if not date:
                         continue
+
                     amount = 0.0
-                    if 'amount' in ci and ci['amount'] < len(row):
+                    if 'amount' in ci and ci['amount'] >= 0 \
+                            and ci['amount'] < len(row):
                         amount = parse_amount(row.iloc[ci['amount']])
                     if amount == 0.0 and ('credit' in ci or 'debit' in ci):
                         cr = parse_amount(row.iloc[ci['credit']]) \
-                            if ('credit' in ci and ci['credit'] < len(row)) else 0.0
+                            if ('credit' in ci and 0 <= ci['credit'] < len(row)) else 0.0
                         db = parse_amount(row.iloc[ci['debit']]) \
-                            if ('debit' in ci and ci['debit'] < len(row)) else 0.0
+                            if ('debit' in ci and 0 <= ci['debit'] < len(row)) else 0.0
                         if cr or db:
                             amount = abs(cr) - abs(db)
                     if amount == 0.0 or not _is_reasonable_amount(amount):
                         continue
-                    desc = safe_str(row.iloc[ci['description']]) \
-                        if 'description' in ci and ci['description'] < len(row) else ''
-                    cp = safe_str(row.iloc[ci['counterparty']]) \
-                        if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-                    ttype = safe_str(row.iloc[ci['type']]) \
-                        if 'type' in ci and ci['type'] < len(row) else ''
+
+                    desc = ''
+                    if 'description' in ci and 0 <= ci['description'] < len(row):
+                        desc = _fix_hu_mojibake(safe_str(row.iloc[ci['description']]))
+                    cp = ''
+                    if 'counterparty' in ci and 0 <= ci['counterparty'] < len(row):
+                        cp = _fix_hu_mojibake(safe_str(row.iloc[ci['counterparty']]))
+                    ttype = ''
+                    if 'type' in ci and 0 <= ci['type'] < len(row):
+                        ttype = safe_str(row.iloc[ci['type']])
+
                     if cp and cp.strip().lower() in ('n/a', 'na', '-', 'none', 'null', 'nan'):
                         cp = ''
+
                     cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '')
+
+                    desc_out = ''
+                    if desc and ttype:
+                        desc_out = f"{ttype} | {desc}"
+                    elif desc:
+                        desc_out = desc
+                    elif ttype:
+                        desc_out = ttype
+
                     result.append({
                         'Дата': date,
                         'Сумма': amount,
-                        'Контрагент': cp_final if cp_final else '',
+                        'Контрагент': cp_final if cp_final else cp,
                         'Наименование счета': account_name,
-                        'Описание': (
-                            f"{ttype} | {desc}" if (desc and ttype)
-                            else desc if desc
-                            else ttype if ttype
-                            else ''
-                        ),
+                        'Описание': desc_out,
                     })
                 except Exception:
                     continue
@@ -7201,6 +7322,7 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
                 result = _assign_source_indices(result)
                 return _dedup_by_source_index(result)
 
+    # === Текстовый fallback (если pandas не смог) ===
     content = read_text_with_encoding(file_content)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     if not lines:
@@ -7210,7 +7332,6 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
     header_line_idx = -1
     for i, l in enumerate(lines[:30]):
         low = l.lower()
-        # Венгерский формат
         has_sorsz = ('sorszám' in low) or ('sorszam' in low)
         has_ert = ('értéknap' in low) or ('erteknap' in low)
         has_ossz = ('összeg' in low) or ('osszeg' in low)
@@ -7220,7 +7341,6 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
         if has_ert and has_ossz:
             header_line_idx = i
             break
-        # Английский формат (MKB выгрузка на английском)
         has_value_date = 'value date' in low
         has_amount = 'amount' in low
         has_narrative = 'narrative' in low
@@ -7234,33 +7354,39 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
     hdr = _split_line(lines[header_line_idx], sep)
     if len(hdr) < 3:
         return result
-    def find_col(patterns):
+
+    def find_col(patterns, exact=False):
         for i, h in enumerate(hdr):
-            hl = h.lower()
-            if any(p in hl for p in patterns):
-                return i
+            hl = h.lower().strip().strip('"').strip('\ufeff')
+            for p in patterns:
+                if exact:
+                    if hl == p:
+                        return i
+                else:
+                    if p in hl:
+                        return i
         return -1
 
-    date_idx = find_col(['értéknap', 'erteknap'])
-    amount_idx = find_col(['összeg', 'osszeg'])
-    desc_idx = find_col(['közlemény', 'kozlemeny'])
-    cp_idx = find_col(['kedvezményezett'])
-    type_idx = find_col(['tranzakció típusa', 'tranzakci'])
-    debit_idx = find_col(['terhelés', 'terheles'])
-    credit_idx = find_col(['jóváírás', 'jovairas'])
-
-    # --- Английский формат MKB CSV (Value date / Narrative / Beneficiary's name) ---
+    # Английские
     date_idx_en = find_col(['value date'])
-    amount_idx_en = find_col(['amount'])
+    amount_idx_en = find_col(['amount'], exact=True)
+    if amount_idx_en == -1:
+        amount_idx_en = find_col(['amount'])
     desc_idx_en = find_col(['narrative'])
-    cp_idx_en = find_col([
-        "beneficiary's name", "beneficiary’s name", "beneficiary name"
-    ])
+    cp_idx_en = find_col(["beneficiary's name", "beneficiary’s name",
+                          "beneficiary name"])
     type_idx_en = find_col(['transaction type'])
-    currency_idx_en = find_col(['currency'])
+
+    # Венгерские (fallback)
+    date_idx_hu = find_col(['értéknap', 'erteknap'])
+    amount_idx_hu = find_col(['összeg', 'osszeg'])
+    desc_idx_hu = find_col(['közlemény', 'kozlemeny'])
+    cp_idx_hu = find_col(['kedvezményezett'])
+    type_idx_hu = find_col(['tranzakció típusa', 'tranzakci'])
+    debit_idx_hu = find_col(['terhelés', 'terheles'])
+    credit_idx_hu = find_col(['jóváírás', 'jovairas'])
 
     if date_idx_en != -1 and amount_idx_en != -1:
-        # Английская выгрузка CSV: сумма уже со знаком, debit/credit не нужны
         date_idx = date_idx_en
         amount_idx = amount_idx_en
         desc_idx = desc_idx_en
@@ -7268,11 +7394,20 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
         type_idx = type_idx_en
         debit_idx = -1
         credit_idx = -1
+    else:
+        date_idx = date_idx_hu
+        amount_idx = amount_idx_hu
+        desc_idx = desc_idx_hu
+        cp_idx = cp_idx_hu
+        type_idx = type_idx_hu
+        debit_idx = debit_idx_hu
+        credit_idx = credit_idx_hu
 
     if date_idx == -1:
         return result
-    if amount_idx == -1 and (debit_idx == -1 and credit_idx == -1):
+    if amount_idx == -1 and debit_idx == -1 and credit_idx == -1:
         return result
+
     for line in lines[header_line_idx + 1:]:
         parts = [_fix_hu_mojibake(p) for p in _split_line(line, sep)]
         if date_idx >= len(parts):
@@ -7282,13 +7417,13 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
             if not date:
                 continue
             amount = 0.0
-            if amount_idx >= 0 and amount_idx < len(parts):
+            if 0 <= amount_idx < len(parts):
                 amount = parse_amount(parts[amount_idx])
             if amount == 0.0 and (debit_idx >= 0 or credit_idx >= 0):
                 cr = parse_amount(parts[credit_idx]) \
-                    if (credit_idx >= 0 and credit_idx < len(parts)) else 0.0
+                    if (0 <= credit_idx < len(parts)) else 0.0
                 db = parse_amount(parts[debit_idx]) \
-                    if (debit_idx >= 0 and debit_idx < len(parts)) else 0.0
+                    if (0 <= debit_idx < len(parts)) else 0.0
                 if cr or db:
                     amount = abs(cr) - abs(db)
             if amount == 0.0 or not _is_reasonable_amount(amount):
@@ -7308,11 +7443,11 @@ def _parse_mkb_any(file_content: bytes, account_name: str) -> List[Dict]:
             elif ttype:
                 desc_out = ttype
             else:
-                desc_out = 'без описания'
+                desc_out = ''
             result.append({
                 'Дата': date,
                 'Сумма': amount,
-                'Контрагент': cp_final if cp_final else '',
+                'Контрагент': cp_final if cp_final else cp,
                 'Наименование счета': account_name,
                 'Описание': desc_out,
             })
@@ -8641,21 +8776,30 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
     if not chain:
         return [], f'нет кандидатов для {account_name} ({ext}, real={real_type})'
 
+    is_mkb = ('budapest' in account_name.lower()
+              or 'mkb' in account_name.lower())
+
     tried: List[str] = []
     errors: List[str] = []
     suspicious_results: List[Tuple[str, List[Dict]]] = []
 
     for parser, key in chain:
         tried.append(key)
+
+        # Для MKB запрещаем универсальные парсеры: пусть работает
+        # только специфичный budapest_*_mkb / mkb_pdf.
+        if is_mkb and any(x in key for x in (
+            'csv_universal', 'xlsx_universal',
+            'pdf_universal', 'docx_universal',
+        )):
+            continue
+
         try:
             tx = parser(file_content, account_name)
         except Exception as e:
             errors.append(f'{key}: {e}')
             continue
         if tx:
-            # === FIX v7: если результат выглядит подозрительно — откладываем
-            # и пробуем следующий парсер; если ни один не даст лучшего —
-            # вернём лучший из отложенных ===
             if _is_suspicious_parse_result(tx):
                 suspicious_results.append((key, tx))
                 continue
@@ -8664,8 +8808,6 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
             return tx, (f'{key} ({account_name}, real={real_type}, '
                         f'{len(tx)} операций)')
 
-    # Если дошли сюда — значит либо все парсеры упали, либо все результаты
-    # были подозрительными. Возвращаем лучший из подозрительных (самый длинный).
     if suspicious_results:
         suspicious_results.sort(key=lambda x: -len(x[1]))
         key, tx = suspicious_results[0]
@@ -8676,7 +8818,7 @@ def parse_file(file_content: bytes, filename: str) -> Tuple[List[Dict], str]:
 
     msg = f'all_failed: {tried}'
     if errors:
-        msg += f' | errors: {errors}'
+        msg += f' | errors: {errors[:5]}'
     return [], msg
 
 
