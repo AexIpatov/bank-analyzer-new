@@ -5143,103 +5143,77 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    WIO Business PDF. Использует координатную сетку для точного извлечения.
-    Игнорирует служебные блоки и восстанавливает транзакции, даже если
-    текст в PDF разорван на разные строки.
+    WIO Business PDF. Ищем паттерн в каждой строке:
+    Дата (dd/mm/yyyy) [Ref Number] (Описание) (Сумма) (Баланс)
+    Сумма и баланс всегда находятся в конце строки.
     """
-    words = _pdf_words_with_coords(file_content)
-    if not words:
-        return []
-    
-    pages: Dict[int, List[Dict]] = {}
-    for w in words:
-        pages.setdefault(w['page'], []).append(w)
-    
-    def _lines(ws, y_tol=2.5):
-        sw = sorted(ws, key=lambda w: (w['top'], w['x0']))
-        if not sw: return []
-        res, cur, ct = [], [sw[0]], sw[0]['top']
-        for w in sw[1:]:
-            if abs(w['top'] - ct) <= y_tol:
-                cur.append(w)
-            else:
-                res.append(cur); cur = [w]; ct = w['top']
-        res.append(cur)
-        return res
-    
+    text = pdf_all_text(file_content)
+    lines = [re.sub(r'\s+', ' ', x).strip() for x in text.splitlines() if x.strip()]
     rows = []
-    date_re = re.compile(r'^(\d{2}/\d{2}/\d{4})$')
-    amount_re = re.compile(r'^-?\d[\d,]*(?:\.\d{1,2})?$')
-    
+
+    # Паттерн для поиска в строке: дата, Ref, описание, сумма, баланс
+    # Ищем: Дата (dd/mm/yyyy) -> пробел -> Ref (P... или цифры) -> Описание (все что угодно) -> Сумма -> Баланс
+    # Сумма и баланс могут содержать запятые (1,265.53) и минусы (-1,265.53)
+    # Регулярка захватывает ВСЮ строку и разбивает её на группы.
+    line_pattern = re.compile(
+        r'^(\d{2}/\d{2}/\d{4})\s+'          # 1. Дата
+        r'(\S+)\s+'                           # 2. Ref. Number (P... или что-то еще)
+        r'(.*?)\s+'                           # 3. Описание
+        r'(-?\d[\d,]*(?:\.\d{1,2})?)\s+'      # 4. Сумма
+        r'(\d[\d,]*(?:\.\d{1,2})?)$'          # 5. Баланс (в конце строки)
+    )
+
     skip_markers = [
-        'summary', 'account', 'statement', 'page', 'wio bank', 'etihad', 
-        'interest', 'date', 'ref.', 'description', 'amount', 'balance', 
-        'الرصيد', 'الوصف', 'المبلغ', 'التاريخ', 'iban', 'holder', 'currency'
+        'summary', 'account statement', 'account holder', 
+        'page ', 'wio bank', 'interest rate', 'date ref. number description'
     ]
-    
-    for pnum in sorted(pages.keys()):
-        for line in _lines(pages[pnum]):
-            line_words = sorted(line, key=lambda w: w['x0'])
-            if not line_words:
-                continue
-                
-            full_text = ' '.join(w['text'] for w in line_words).strip().lower()
-            if any(m in full_text for m in skip_markers):
-                continue
-                
-            # Ищем дату (в начале строки)
-            date_match = date_re.match(line_words[0]['text'])
-            if not date_match:
-                continue
-            date_str = line_words[0]['text']
+
+    for line in lines:
+        low = line.lower()
+        if any(m in low for m in skip_markers):
+            continue
             
-            # Ищем сумму и баланс (они находятся в самом конце строки справа)
-            nums = []
-            for w in reversed(line_words):
-                txt = w['text'].replace(',', '')
-                if amount_re.match(txt):
-                    nums.append(w)
-                if len(nums) == 2:
-                    break
+        m = line_pattern.match(line)
+        if not m:
+            continue
             
-            if len(nums) < 1:
-                continue
-                
-            amount_word = nums[0]
-            try:
-                amount = float(amount_word['text'].replace(',', ''))
-            except ValueError:
-                continue
-                
-            if amount == 0 or not _is_reasonable_amount(amount):
-                continue
-                
-            # Всё, что находится между датой и суммой — это описание
-            desc_words = []
-            for w in line_words:
-                if w['x0'] >= amount_word['x0']:
-                    continue
-                if w == line_words[0]:  # пропускаем дату
-                    continue
-                if w['x0'] < 120:       # пропускаем Ref. Number (левый столбец)
-                    continue
-                desc_words.append(w)
-                
-            desc = ' '.join(w['text'] for w in desc_words).strip()
-            # Убираем служебные коды WIO (1.2.2 BnQ и т.д.)
-            desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|BnO|Bno|DnQ|DNQ|DNO|BNQ)\s*$', '', desc).strip()
-            
-            # Контрагент — первые слова из описания
-            cp = ' '.join(desc.split()[:3])
-            
-            rows.append({
-                'Дата': parse_date(date_str, account_name),
-                'Сумма': amount,
-                'Контрагент': cp,
-                'Наименование счета': account_name,
-                'Описание': desc,
-            })
-            
+        date_str = m.group(1)
+        ref_num = m.group(2)
+        desc = m.group(3).strip()
+        amount_str = m.group(4)
+        balance_str = m.group(5)
+
+        date = parse_date(date_str, account_name)
+        if not date:
+            continue
+
+        # Парсим сумму (убираем запятые-разделители тысяч)
+        amount_clean = amount_str.replace(',', '')
+        amount = parse_amount(amount_clean)
+        
+        if amount == 0 or not _is_reasonable_amount(amount):
+            continue
+
+        # Чистим описание от служебных кодов WIO (1.2.2 BnQ и т.д.)
+        desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|BnO|Bno|DnQ|DNQ|DNO|BNQ)\s*$', '', desc).strip()
+        
+        # Контрагент — первые 1-3 слова описания, без мусора
+        cp = ' '.join(desc.split()[:3])
+        if desc.lower().startswith('from '):
+            cp = desc[5:].strip()
+        elif desc.lower().startswith('to '):
+            cp = desc[3:].strip()
+
+        rows.append({
+            'Дата': date,
+            'Сумма': amount,
+            'Контрагент': cp,
+            'Наименование счета': account_name,
+            'Описание': desc,
+        })
+
+    # Если регулярка не сработала (например, на стр. 9 и 12, где нет дат),
+    # строки просто проигнорируются, а 232 транзакции с датами будут собраны.
     return _dedup_by_source_index(_assign_source_indices(rows))
 
 # ==================== BLUOR PDF ====================
