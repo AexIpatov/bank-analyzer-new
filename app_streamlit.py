@@ -9617,7 +9617,9 @@ def _files_signature(uploaded_files) -> str:
     return h.hexdigest()
 
 
-def _process_uploaded_files(uploaded_files) -> Dict:
+def _process_uploaded_files(uploaded_files,
+                            period_from: Optional[datetime.date] = None,
+                            period_to: Optional[datetime.date] = None) -> Dict:
     all_tx: List[Dict] = []
     failed: List[str] = []
     file_stats: List[str] = []
@@ -9701,6 +9703,51 @@ def _process_uploaded_files(uploaded_files) -> Dict:
 
     status.text("✅ Обработка завершена!")
 
+    # === ФИЛЬТРАЦИЯ ПО ПЕРИОДУ ===
+    total_before = len(all_tx)
+    if period_from or period_to:
+        filtered = []
+        for tx in all_tx:
+            d_str = str(tx.get('Дата', '')).strip()
+            if not d_str:
+                continue
+            try:
+                d = datetime.strptime(d_str, "%d-%m-%Y").date()
+            except (ValueError, TypeError):
+                continue
+            if period_from and d < period_from:
+                continue
+            if period_to and d > period_to:
+                continue
+            filtered.append(tx)
+        all_tx = filtered
+        removed = total_before - len(all_tx)
+        if removed > 0:
+            debug_info.append(
+                f"📅 Фильтр по периоду: {period_from or '∞'} — "
+                f"{period_to or '∞'}. Удалено **{removed}** операций "
+                f"вне периода. Осталось: **{len(all_tx)}**."
+            )
+        else:
+            debug_info.append(
+                f"📅 Фильтр по периоду: {period_from or '∞'} — "
+                f"{period_to or '∞'}. Все **{len(all_tx)}** операций "
+                f"попадают в период."
+            )
+    else:
+        debug_info.append(
+            f"📅 Период не задан — обработаны все **{len(all_tx)}** операций."
+        )
+
+    return {
+        'all_tx': all_tx,
+        'failed': failed,
+        'file_stats': file_stats,
+        'debug_info': debug_info,
+        'period_from': period_from,
+        'period_to': period_to,
+    }                            
+                                
     return {
         'all_tx': all_tx,
         'failed': failed,
@@ -9717,6 +9764,17 @@ def _render_results(result: Dict):
     file_stats = result.get('file_stats', [])
     debug_info = result.get('debug_info', [])
 
+    period_from = result.get('period_from')
+    period_to = result.get('period_to')
+    if period_from or period_to:
+        p_from_str = period_from.strftime('%d.%m.%Y') if period_from else '∞'
+        p_to_str = period_to.strftime('%d.%m.%Y') if period_to else '∞'
+        st.markdown(
+            f"### 📅 Применён период: **{p_from_str}** — **{p_to_str}**"
+        )
+    else:
+        st.markdown("### 📅 Период: **все операции**")
+    
     st.markdown("### 📋 Результат обработки")
     for s in file_stats:
         st.info(s)
@@ -10305,6 +10363,88 @@ def main():
             st.caption(
                 "Проверьте DeepSeek-токен во вкладке «AI-ассистент»."
             )
+    with st.sidebar:
+        st.markdown("### ⚙️ Настройки")
+
+        # === ВЫБОР ПЕРИОДА ===
+        st.markdown("**📅 Период операций**")
+        st.caption(
+            "Оставьте поля пустыми, чтобы обрабатывать все операции. "
+            "Период применяется к дате операции (Дата)."
+        )
+
+        # Быстрый выбор
+        period_mode = st.radio(
+            "Быстрый выбор",
+            options=[
+                "Все операции",
+                "Текущий месяц",
+                "Прошлый месяц",
+                "Текущий год",
+                "Произвольный период",
+            ],
+            index=0,
+            key="period_mode",
+            horizontal=False,
+        )
+
+        today = datetime.now().date()
+        period_from = None
+        period_to = None
+
+        if period_mode == "Текущий месяц":
+            period_from = today.replace(day=1)
+            if today.month == 12:
+                period_to = today.replace(
+                    year=today.year + 1, month=1, day=1
+                ) - timedelta(days=1)
+            else:
+                period_to = today.replace(
+                    month=today.month + 1, day=1
+                ) - timedelta(days=1)
+        elif period_mode == "Прошлый месяц":
+            first_this = today.replace(day=1)
+            period_to = first_this - timedelta(days=1)
+            period_from = period_to.replace(day=1)
+        elif period_mode == "Текущий год":
+            period_from = today.replace(month=1, day=1)
+            period_to = today.replace(month=12, day=31)
+        elif period_mode == "Произвольный период":
+            col_from, col_to = st.columns(2)
+            with col_from:
+                period_from = st.date_input(
+                    "С",
+                    value=today.replace(day=1),
+                    key="period_from_input",
+                    format="DD.MM.YYYY",
+                )
+            with col_to:
+                period_to = st.date_input(
+                    "По",
+                    value=today,
+                    key="period_to_input",
+                    format="DD.MM.YYYY",
+                )
+            if period_from and period_to and period_from > period_to:
+                st.warning(
+                    "«С» позже «По» — поменял местами."
+                )
+                period_from, period_to = period_to, period_from
+
+        # Показываем текущий период
+        if period_from and period_to:
+            st.caption(
+                f"📅 **{period_from.strftime('%d.%m.%Y')}** — "
+                f"**{period_to.strftime('%d.%m.%Y')}**"
+            )
+        else:
+            st.caption("📅 Период не задан — обрабатываются все операции.")
+
+        st.markdown("---")
+
+        # === DEEPSEEK AI ===
+        st.markdown("**DeepSeek AI**")
+        ...
         st.markdown("---")
         if st.button("🧪 Проверить разбор дат", key="self_test_dates_btn"):
             ok = _self_test_dates()
@@ -10437,7 +10577,19 @@ def main():
                     )
 
             if need_process:
-                result = _process_uploaded_files(uploaded_files)
+                # Преобразуем date → datetime для сравнения
+                p_from = None
+                p_to = None
+                if period_from is not None:
+                    p_from = datetime.combine(period_from, datetime.min.time())
+                if period_to is not None:
+                    p_to = datetime.combine(period_to, datetime.max.time())
+
+                result = _process_uploaded_files(
+                    uploaded_files,
+                    period_from=p_from.date() if p_from else None,
+                    period_to=p_to.date() if p_to else None,
+                )
                 st.session_state['processing_result'] = result
                 st.session_state['files_signature'] = current_sig
 
