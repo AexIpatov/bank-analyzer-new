@@ -5142,127 +5142,92 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== WIO PDF ====================
 
 def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    """
-    WIO Business PDF. Строки-операции в pdf_all_text обычно выглядят так:
-        01/09/2026 P992667918 Bikanervala star resta 1.2.2 BnQ -3 13,818.82
-    где:
-        - 01/09/2026       — дата
-        - P992667918       — Ref. Number (НЕ контрагент!)
-        - Bikanervala...   — описание
-        - -3               — сумма
-        - 13,818.82        — баланс
-
-    Некоторые страницы (9, 12) отдают суммы без дат — их пропускаем.
-    """
-    text = pdf_all_text(file_content)
-    lines = [re.sub(r'\s+', ' ', x).strip() for x in text.splitlines() if x.strip()]
+    words = _pdf_words_with_coords(file_content)
+    if not words:
+        return []
+    pages: Dict[int, List[Dict]] = {}
+    for w in words:
+        pages.setdefault(w['page'], []).append(w)
+    
+    def _lines(ws, y_tol=2.5):
+        sw = sorted(ws, key=lambda w: (w['top'], w['x0']))
+        if not sw: return []
+        res, cur, ct = [], [sw[0]], sw[0]['top']
+        for w in sw[1:]:
+            if abs(w['top'] - ct) <= y_tol:
+                cur.append(w)
+            else:
+                res.append(cur); cur = [w]; ct = w['top']
+        res.append(cur)
+        return res
+    
     rows = []
-
-    date_re = re.compile(r'^(\d{2}/\d{2}/\d{4})\s+(\S+)\s+(.*)$')
-    ref_re = re.compile(r'^P\d{6,}$')
-
-    # Сумма в конце строки: -3, -872, -1,316.67
-    amount_at_end_re = re.compile(
-        r'(-?\d[\d,]*(?:\.\d{1,2})?)\s*$'
-    )
-    # Сумма + баланс в конце: -3 13,818.82
-    pair_at_end_re = re.compile(
-        r'(-?\d[\d,]*(?:\.\d{1,2})?)\s+'
-        r'(\d[\d,]*(?:\.\d{1,2})?)\s*$'
-    )
-
-    skip_markers = [
-        'summary of accounts', 'summary of savings',
-        'account statement', 'account holder',
-        'opening balance', 'closing balance',
-        'page ', 'wio bank pjsc', 'digital stamp',
-        'interest rate', 'account opened',
-        'account number', 'account name',
-        'account type', 'account currency',
-        'قيمة مضافة', 'الرصيد', 'الوصف',
-    ]
-
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        low = line.lower()
-
-        if any(mk in low for mk in skip_markers):
-            i += 1
-            continue
-
-        m = date_re.match(line)
-        if not m:
-            i += 1
-            continue
-
-        date_str = m.group(1)
-        ref = m.group(2)
-        rest = m.group(3).strip()
-
-        # Ref. Number должен быть P-номером; если нет — это часть описания
-        if not ref_re.match(ref):
-            rest = (ref + ' ' + rest).strip()
-            ref = ''
-
-        # Ищем пару «сумма + баланс» в конце
-        pair = pair_at_end_re.search(rest)
-        if pair:
-            amount = parse_amount(pair.group(1))
-            desc = rest[:pair.start()].strip()
-        else:
-            am = amount_at_end_re.search(rest)
-            if not am:
-                i += 1
+    date_re = re.compile(r'^(\d{2}/\d{2}/\d{4})$')
+    amount_re = re.compile(r'^-?\d[\d,]*(?:\.\d{1,2})?$')
+    skip_markers = ['summary', 'account', 'statement', 'page', 'wio bank', 'etihad', 'interest', 'date', 'ref.', 'description', 'amount', 'balance', 'الرصيد', 'الوصف', 'المبلغ', 'التاريخ']
+    
+    for pnum in sorted(pages.keys()):
+        for line in _lines(pages[pnum]):
+            line_words = sorted(line, key=lambda w: w['x0'])
+            # Фильтруем служебные
+            full_text = ' '.join(w['text'] for w in line_words).strip().lower()
+            if any(m in full_text for m in skip_markers):
                 continue
-            amount = parse_amount(am.group(1))
-            desc = rest[:am.start()].strip()
-
-        date = parse_date(date_str, account_name=account_name)
-        if not date or amount == 0.0 or not _is_reasonable_amount(amount):
-            i += 1
-            continue
-
-        # Чистим описание от служебных кодов WIO
-        # «1.2.2 BnQ», «1.2.17 BNQ», «1.2.19 DnQ», «1.2.9.3 IT Services» — удаляем
-        desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|BnO|Bno|DnQ|DNQ|DNO)\s*$', '', desc)
-        desc = re.sub(r'\s+\d+(?:\.\d+)+\s+(?:IT|Services)\s*$', '', desc)
-        # «(rate: 4.29958)» — удаляем из описания, но не из контрагента
-        desc = re.sub(r'\s*\(rate:[\d. ]+\)', '', desc)
-        desc = re.sub(r'\s+', ' ', desc).strip()
-
-        if not desc or _is_service_line(desc):
-            i += 1
-            continue
-
-        # Контрагент — из описания (первое слово/название), а не Ref. Number
-        # Для «From NOMIQA...» — контрагент = NOMIQA...
-        # Для остальных — первые 1–2 слова описания
-        if desc.lower().startswith('from '):
-            cp = desc[5:].strip()
-        elif desc.lower().startswith('to '):
-            cp = desc[3:].strip()
-        else:
-            # Merchant — до первого служебного слова
-            cp = re.split(r'\s+\d', desc, maxsplit=1)[0].strip()
-
-        # Если cp получился слишком длинным или с цифрами — обрезаем
-        cp = re.sub(r'\s+', ' ', cp).strip()
-        if len(cp) > 60:
-            cp = cp[:60].rsplit(' ', 1)[0]
-
-        rows.append({
-            'Дата': date,
-            'Сумма': amount,
-            'Контрагент': cp,
-            'Наименование счета': account_name,
-            'Описание': desc,
-        })
-
-        i += 1
-
-    return _dedup_by_source_index(_assign_source_indices(rows))
-
+                
+            # Ищем дату (в начале)
+            date_match = date_re.match(line_words[0]['text']) if line_words else None
+            if not date_match:
+                continue
+            date_str = line_words[0]['text']
+            
+            # Ищем сумму (вторая с конца) и баланс (последняя)
+            # Отбрасываем Ref. Number (начинается с P или цифр)
+            nums = []
+            for w in reversed(line_words):
+                txt = w['text'].replace(',', '')
+                if amount_re.match(txt):
+                    nums.append(w)
+                if len(nums) == 2:
+                    break
+            
+            if len(nums) < 1:
+                continue
+                
+            amount_word = nums[0]
+            try:
+                amount = float(amount_word['text'].replace(',', ''))
+            except ValueError:
+                continue
+                
+            if amount == 0 or not _is_reasonable_amount(amount):
+                continue
+                
+            # Всё, что слева от суммы (и не дата, и не Ref) — это описание
+            desc_words = []
+            for w in line_words:
+                if w['x0'] >= amount_word['x0']:
+                    continue
+                if w == line_words[0]: # дата
+                    continue
+                if w['x0'] < 120: # Ref. Number (примерно)
+                    continue
+                desc_words.append(w)
+                
+            desc = ' '.join(w['text'] for w in desc_words).strip()
+            desc = re.sub(r'\s+\d+(?:\.\d+)+.*$', '', desc).strip()
+            
+            # Контрагент = первые 3 слова
+            cp = ' '.join(desc.split()[:3])
+            
+            rows.append({
+                'Дата': parse_date(date_str, account_name),
+                'Сумма': amount,
+                'Контрагент': cp,
+                'Наименование счета': account_name,
+                'Описание': desc,
+            })
+            
+    return _assign_source_indices(rows)
 
 # ==================== BLUOR PDF ====================
 
@@ -10352,17 +10317,6 @@ def main():
     if 'ai_chat_history' not in st.session_state:
         st.session_state['ai_chat_history'] = []
 
-    with st.sidebar:
-        st.markdown("### ⚙️ Настройки")
-        st.markdown("**DeepSeek AI**")
-        client = _get_hf_client()
-        if client is not None:
-            st.success("✅ Подключён")
-        else:
-            st.warning("⚠️ Не подключён")
-            st.caption(
-                "Проверьте DeepSeek-токен во вкладке «AI-ассистент»."
-            )
     with st.sidebar:
         st.markdown("### ⚙️ Настройки")
 
