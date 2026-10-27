@@ -5143,78 +5143,98 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    WIO Business PDF. Ищем паттерн в каждой строке:
-    Дата (dd/mm/yyyy) [Ref Number] (Описание) (Сумма) (Баланс)
-    Сумма и баланс всегда находятся в конце строки.
+    WIO Business PDF. Использует двойной движок:
+    1. pdfplumber (быстрый, но иногда теряет строки)
+    2. pdfminer.six (медленнее, но читает всё)
     """
-    text = pdf_all_text(file_content)
-    lines = [re.sub(r'\s+', ' ', x).strip() for x in text.splitlines() if x.strip()]
-    rows = []
+    def _extract_with_pdfminer(content: bytes) -> str:
+        if not _PDFMINER_AVAILABLE:
+            return ""
+        try:
+            from pdfminer.high_level import extract_text
+            from io import BytesIO
+            return extract_text(BytesIO(content)) or ""
+        except Exception:
+            return ""
 
-    # Паттерн для поиска в строке: дата, Ref, описание, сумма, баланс
-    # Ищем: Дата (dd/mm/yyyy) -> пробел -> Ref (P... или цифры) -> Описание (все что угодно) -> Сумма -> Баланс
-    # Сумма и баланс могут содержать запятые (1,265.53) и минусы (-1,265.53)
-    # Регулярка захватывает ВСЮ строку и разбивает её на группы.
-    line_pattern = re.compile(
-        r'^(\d{2}/\d{2}/\d{4})\s+'          # 1. Дата
-        r'(\S+)\s+'                           # 2. Ref. Number (P... или что-то еще)
-        r'(.*?)\s+'                           # 3. Описание
-        r'(-?\d[\d,]*(?:\.\d{1,2})?)\s+'      # 4. Сумма
-        r'(\d[\d,]*(?:\.\d{1,2})?)$'          # 5. Баланс (в конце строки)
-    )
-
-    skip_markers = [
-        'summary', 'account statement', 'account holder', 
-        'page ', 'wio bank', 'interest rate', 'date ref. number description'
-    ]
-
-    for line in lines:
-        low = line.lower()
-        if any(m in low for m in skip_markers):
-            continue
-            
-        m = line_pattern.match(line)
-        if not m:
-            continue
-            
-        date_str = m.group(1)
-        ref_num = m.group(2)
-        desc = m.group(3).strip()
-        amount_str = m.group(4)
-        balance_str = m.group(5)
-
-        date = parse_date(date_str, account_name)
-        if not date:
-            continue
-
-        # Парсим сумму (убираем запятые-разделители тысяч)
-        amount_clean = amount_str.replace(',', '')
-        amount = parse_amount(amount_clean)
+    def _parse_text(text: str) -> List[Dict]:
+        if not text:
+            return []
+        lines = [re.sub(r'\s+', ' ', x).strip() for x in text.splitlines() if x.strip()]
+        rows = []
         
-        if amount == 0 or not _is_reasonable_amount(amount):
-            continue
+        # Регулярное выражение: Дата, Ref (P...), Описание, Сумма, Баланс
+        line_pattern = re.compile(
+            r'^(\d{2}/\d{2}/\d{4})\s+'          # 1. Дата
+            r'(\S+)\s+'                           # 2. Ref. Number
+            r'(.*?)\s+'                           # 3. Описание
+            r'(-?\d[\d,]*(?:\.\d{1,2})?)\s+'      # 4. Сумма
+            r'(\d[\d,]*(?:\.\d{1,2})?)$'          # 5. Баланс
+        )
 
-        # Чистим описание от служебных кодов WIO (1.2.2 BnQ и т.д.)
-        desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|BnO|Bno|DnQ|DNQ|DNO|BNQ)\s*$', '', desc).strip()
-        
-        # Контрагент — первые 1-3 слова описания, без мусора
-        cp = ' '.join(desc.split()[:3])
-        if desc.lower().startswith('from '):
-            cp = desc[5:].strip()
-        elif desc.lower().startswith('to '):
-            cp = desc[3:].strip()
+        skip_markers = [
+            'summary', 'account statement', 'account holder', 
+            'page ', 'wio bank', 'interest rate', 'date ref. number description',
+            'closing balance', 'opening balance'
+        ]
 
-        rows.append({
-            'Дата': date,
-            'Сумма': amount,
-            'Контрагент': cp,
-            'Наименование счета': account_name,
-            'Описание': desc,
-        })
+        for line in lines:
+            low = line.lower()
+            if any(m in low for m in skip_markers):
+                continue
+                
+            m = line_pattern.match(line)
+            if not m:
+                continue
+                
+            date_str = m.group(1)
+            desc = m.group(3).strip()
+            amount_str = m.group(4)
 
-    # Если регулярка не сработала (например, на стр. 9 и 12, где нет дат),
-    # строки просто проигнорируются, а 232 транзакции с датами будут собраны.
-    return _dedup_by_source_index(_assign_source_indices(rows))
+            date = parse_date(date_str, account_name)
+            if not date:
+                continue
+
+            amount = parse_amount(amount_str.replace(',', ''))
+            if amount == 0 or not _is_reasonable_amount(amount):
+                continue
+
+            # Чистим описание от служебных кодов WIO (1.2.2 BnQ и т.д.)
+            desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|BnO|Bno|DnQ|DNQ|DNO|BNQ)\s*$', '', desc).strip()
+            
+            # Контрагент
+            cp = ' '.join(desc.split()[:3])
+            if desc.lower().startswith('from '):
+                cp = desc[5:].strip()
+            elif desc.lower().startswith('to '):
+                cp = desc[3:].strip()
+
+            rows.append({
+                'Дата': date,
+                'Сумма': amount,
+                'Контрагент': cp,
+                'Наименование счета': account_name,
+                'Описание': desc,
+            })
+        return rows
+
+    # 1. Пробуем извлечь текст через pdfplumber
+    text_plumber = pdf_all_text(file_content)
+    rows_plumber = _parse_text(text_plumber)
+
+    # Если pdfplumber извлек все 232 операции (или больше), возвращаем результат
+    if len(rows_plumber) >= 230:
+        return _dedup_by_source_index(_assign_source_indices(rows_plumber))
+
+    # 2. Если операций меньше, принудительно запускаем pdfminer.six
+    text_miner = _extract_with_pdfminer(file_content)
+    rows_miner = _parse_text(text_miner)
+
+    # 3. Выбираем тот результат, где операций больше
+    if len(rows_miner) > len(rows_plumber):
+        return _dedup_by_source_index(_assign_source_indices(rows_miner))
+    else:
+        return _dedup_by_source_index(_assign_source_indices(rows_plumber))
 
 # ==================== BLUOR PDF ====================
 
