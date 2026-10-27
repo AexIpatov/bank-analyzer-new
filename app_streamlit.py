@@ -5143,98 +5143,107 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    WIO Business PDF. Использует двойной движок:
-    1. pdfplumber (быстрый, но иногда теряет строки)
-    2. pdfminer.six (медленнее, но читает всё)
+    WIO Business PDF. Ультимативный поиск по всему тексту.
+    Ищет дату-якорь, а затем в окне следующих 300 символов ищет
+    Ref. Number, описание, Сумму и Баланс.
     """
-    def _extract_with_pdfminer(content: bytes) -> str:
-        if not _PDFMINER_AVAILABLE:
-            return ""
-        try:
-            from pdfminer.high_level import extract_text
-            from io import BytesIO
-            return extract_text(BytesIO(content)) or ""
-        except Exception:
-            return ""
+    text = pdf_all_text(file_content)
+    if not text:
+        return []
+    
+    # Убираем лишние пробелы, чтобы все склеенные строки разделились
+    text = re.sub(r'\s+', ' ', text)
+    
+    rows = []
+    
+    # Регулярка для поиска даты
+    date_pattern = re.compile(r'\b(\d{2}/\d{2}/\d{4})\b')
+    # Регулярка для поиска чисел (сумма и баланс в конце окна)
+    amount_pair_re = re.compile(
+        r'(-?\d[\d,]*(?:\.\d{1,2})?)\s+'
+        r'(\d[\d,]*(?:\.\d{1,2})?)\s*$'
+    )
+    
+    skip_markers = [
+        'summary', 'account statement', 'account holder', 
+        'page ', 'wio bank', 'interest rate', 'date ref. number description',
+        'closing balance', 'opening balance'
+    ]
 
-    def _parse_text(text: str) -> List[Dict]:
-        if not text:
-            return []
-        lines = [re.sub(r'\s+', ' ', x).strip() for x in text.splitlines() if x.strip()]
-        rows = []
+    # Ищем все даты в тексте
+    for match in date_pattern.finditer(text):
+        date_str = match.group(1)
         
-        # Регулярное выражение: Дата, Ref (P...), Описание, Сумма, Баланс
-        line_pattern = re.compile(
-            r'^(\d{2}/\d{2}/\d{4})\s+'          # 1. Дата
-            r'(\S+)\s+'                           # 2. Ref. Number
-            r'(.*?)\s+'                           # 3. Описание
-            r'(-?\d[\d,]*(?:\.\d{1,2})?)\s+'      # 4. Сумма
-            r'(\d[\d,]*(?:\.\d{1,2})?)$'          # 5. Баланс
-        )
-
-        skip_markers = [
-            'summary', 'account statement', 'account holder', 
-            'page ', 'wio bank', 'interest rate', 'date ref. number description',
-            'closing balance', 'opening balance'
-        ]
-
-        for line in lines:
-            low = line.lower()
-            if any(m in low for m in skip_markers):
-                continue
-                
-            m = line_pattern.match(line)
-            if not m:
-                continue
-                
-            date_str = m.group(1)
-            desc = m.group(3).strip()
-            amount_str = m.group(4)
-
-            date = parse_date(date_str, account_name)
-            if not date:
-                continue
-
-            amount = parse_amount(amount_str.replace(',', ''))
-            if amount == 0 or not _is_reasonable_amount(amount):
-                continue
-
-            # Чистим описание от служебных кодов WIO (1.2.2 BnQ и т.д.)
-            desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|BnO|Bno|DnQ|DNQ|DNO|BNQ)\s*$', '', desc).strip()
+        # Берем окно от 0 до 300 символов ПОСЛЕ даты
+        start_pos = match.start()
+        window = text[start_pos : start_pos + 300].strip()
+        
+        # Отрезаем окно, если там начинается следующая транзакция (следующая дата)
+        next_date_match = date_pattern.search(window, 10) # ищем следующую дату в окне
+        if next_date_match:
+            window = window[:next_date_match.start()].strip()
             
-            # Контрагент
-            cp = ' '.join(desc.split()[:3])
-            if desc.lower().startswith('from '):
-                cp = desc[5:].strip()
-            elif desc.lower().startswith('to '):
-                cp = desc[3:].strip()
+        # Если окно пустое или это заголовок — пропускаем
+        low_win = window.lower()
+        if any(m in low_win for m in skip_markers):
+            continue
+            
+        # Ищем сумму и баланс в конце окна
+        am_match = amount_pair_re.search(window)
+        if not am_match:
+            continue
+            
+        amount_str = am_match.group(1)
+        balance_str = am_match.group(2)
+        
+        # Отрезаем сумму и баланс от описания
+        desc_zone = window[:am_match.start()].strip()
+        
+        # В зоне описания ищем Ref. Number (начинается с P, но не с даты)
+        # Убираем саму дату из начала зоны
+        desc_zone = desc_zone[len(date_str):].strip()
+        
+        # Ref. Number обычно идет сразу после даты. Вытаскиваем его.
+        ref_match = re.match(r'^(P\d+|[A-Z0-9]{8,})\s+', desc_zone)
+        ref_num = ''
+        if ref_match:
+            ref_num = ref_match.group(1)
+            desc_zone = desc_zone[ref_match.end():].strip()
+        else:
+            # Если P нет, возможно, он слипся с описанием. Просто чистим описание.
+            pass
+            
+        # Очищаем описание от служебных кодов
+        desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|BnO|Bno|DnQ|DNQ|DNO|BNQ)\s*$', '', desc_zone).strip()
+        desc = re.sub(r'\s+', ' ', desc)
+        
+        if not desc:
+            continue
+            
+        date = parse_date(date_str, account_name)
+        if not date:
+            continue
+            
+        amount = parse_amount(amount_str.replace(',', ''))
+        if amount == 0 or not _is_reasonable_amount(amount):
+            continue
 
-            rows.append({
-                'Дата': date,
-                'Сумма': amount,
-                'Контрагент': cp,
-                'Наименование счета': account_name,
-                'Описание': desc,
-            })
-        return rows
+        # Контрагент
+        cp = ' '.join(desc.split()[:3])
+        if desc.lower().startswith('from '):
+            cp = desc[5:].strip()
+        elif desc.lower().startswith('to '):
+            cp = desc[3:].strip()
 
-    # 1. Пробуем извлечь текст через pdfplumber
-    text_plumber = pdf_all_text(file_content)
-    rows_plumber = _parse_text(text_plumber)
+        rows.append({
+            'Дата': date,
+            'Сумма': amount,
+            'Контрагент': cp,
+            'Наименование счета': account_name,
+            'Описание': desc,
+        })
 
-    # Если pdfplumber извлек все 232 операции (или больше), возвращаем результат
-    if len(rows_plumber) >= 230:
-        return _dedup_by_source_index(_assign_source_indices(rows_plumber))
-
-    # 2. Если операций меньше, принудительно запускаем pdfminer.six
-    text_miner = _extract_with_pdfminer(file_content)
-    rows_miner = _parse_text(text_miner)
-
-    # 3. Выбираем тот результат, где операций больше
-    if len(rows_miner) > len(rows_plumber):
-        return _dedup_by_source_index(_assign_source_indices(rows_miner))
-    else:
-        return _dedup_by_source_index(_assign_source_indices(rows_plumber))
+    return _dedup_by_source_index(_assign_source_indices(rows))
 
 # ==================== BLUOR PDF ====================
 
