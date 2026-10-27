@@ -5142,70 +5142,115 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== WIO PDF ====================
 
 def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    WIO Business PDF. Строки-операции в pdf_all_text обычно выглядят так:
+        01/09/2026 P992667918 Bikanervala star resta 1.2.2 BnQ -3 13,818.82
+    где:
+        - 01/09/2026       — дата
+        - P992667918       — Ref. Number (НЕ контрагент!)
+        - Bikanervala...   — описание
+        - -3               — сумма
+        - 13,818.82        — баланс
+
+    Некоторые страницы (9, 12) отдают суммы без дат — их пропускаем.
+    """
     text = pdf_all_text(file_content)
-    lines = [re.sub(r'\s+', ' ', x).strip() for x in text.splitlines()]
+    lines = [re.sub(r'\s+', ' ', x).strip() for x in text.splitlines() if x.strip()]
     rows = []
+
     date_re = re.compile(r'^(\d{2}/\d{2}/\d{4})\s+(\S+)\s+(.*)$')
-    # Ref. Number: буква P + цифры (например, P992667918)
     ref_re = re.compile(r'^P\d{6,}$')
-    # Сумма в конце: -3 или 13,818.82 или -1,316.67
-    amount_end_re = re.compile(r'(-?\d[\d,]*\.\d{1,2})\s*$')
-    
-    for i, line in enumerate(lines):
+
+    # Сумма в конце строки: -3, -872, -1,316.67
+    amount_at_end_re = re.compile(
+        r'(-?\d[\d,]*(?:\.\d{1,2})?)\s*$'
+    )
+    # Сумма + баланс в конце: -3 13,818.82
+    pair_at_end_re = re.compile(
+        r'(-?\d[\d,]*(?:\.\d{1,2})?)\s+'
+        r'(\d[\d,]*(?:\.\d{1,2})?)\s*$'
+    )
+
+    skip_markers = [
+        'summary of accounts', 'summary of savings',
+        'account statement', 'account holder',
+        'opening balance', 'closing balance',
+        'page ', 'wio bank pjsc', 'digital stamp',
+        'interest rate', 'account opened',
+        'account number', 'account name',
+        'account type', 'account currency',
+        'قيمة مضافة', 'الرصيد', 'الوصف',
+    ]
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        low = line.lower()
+
+        if any(mk in low for mk in skip_markers):
+            i += 1
+            continue
+
         m = date_re.match(line)
         if not m:
+            i += 1
             continue
+
         date_str = m.group(1)
-        date = parse_date(date_str, account_name=account_name)
-        if not date:
-            continue
-        
         ref = m.group(2)
         rest = m.group(3).strip()
-        
-        # Ref должен быть P-номером; иначе — это часть описания
+
+        # Ref. Number должен быть P-номером; если нет — это часть описания
         if not ref_re.match(ref):
-            # Значит, дата и Ref слиплись, или Ref нет
-            # Пробуем разобрать по-другому: описание = ref + ' ' + rest
             rest = (ref + ' ' + rest).strip()
             ref = ''
-        
-        # В rest ищем сумму в конце и баланс (если есть)
-        am = amount_end_re.search(rest)
-        if not am:
-            # Попробуем найти сумму и баланс (два числа в конце)
-            pair = re.search(
-                r'(-?\d[\d,]*\.\d{1,2})\s+(-?\d[\d,]*\.\d{1,2})\s*$',
-                rest
-            )
-            if pair:
-                amount = parse_amount(pair.group(1))
-                desc = rest[:pair.start()].strip()
-            else:
-                continue
+
+        # Ищем пару «сумма + баланс» в конце
+        pair = pair_at_end_re.search(rest)
+        if pair:
+            amount = parse_amount(pair.group(1))
+            desc = rest[:pair.start()].strip()
         else:
+            am = amount_at_end_re.search(rest)
+            if not am:
+                i += 1
+                continue
             amount = parse_amount(am.group(1))
             desc = rest[:am.start()].strip()
-        
-        if amount == 0.0 or not _is_reasonable_amount(amount):
+
+        date = parse_date(date_str, account_name=account_name)
+        if not date or amount == 0.0 or not _is_reasonable_amount(amount):
+            i += 1
             continue
-        
-        # Убираем «1.2.2 BnQ» и прочие служебные коды из описания
-        desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|DnQ|DNQ|BnO)?\s*$', '', desc)
-        desc = re.sub(r'\s+(?:BnQ|BNQ|DnQ|DNQ|BnO)\s*$', '', desc)
-        desc = desc.strip()
-        
-        # Контрагент: из описания (первое слово), а не Ref. Number
-        # Если описание пустое — оставляем пусто
-        cp = ''
-        if desc:
-            # Убираем «(rate: X.XXXXX)» из описания
-            desc_no_rate = re.sub(r'\s*\(rate:[\d. ]+\)', '', desc)
-            desc_no_rate = desc_no_rate.strip()
-            # Контрагент = первые 1-3 слова описания
-            words = desc_no_rate.split()
-            cp = ' '.join(words[:3]) if words else ''
-        
+
+        # Чистим описание от служебных кодов WIO
+        # «1.2.2 BnQ», «1.2.17 BNQ», «1.2.19 DnQ», «1.2.9.3 IT Services» — удаляем
+        desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|BnO|Bno|DnQ|DNQ|DNO)\s*$', '', desc)
+        desc = re.sub(r'\s+\d+(?:\.\d+)+\s+(?:IT|Services)\s*$', '', desc)
+        # «(rate: 4.29958)» — удаляем из описания, но не из контрагента
+        desc = re.sub(r'\s*\(rate:[\d. ]+\)', '', desc)
+        desc = re.sub(r'\s+', ' ', desc).strip()
+
+        if not desc or _is_service_line(desc):
+            i += 1
+            continue
+
+        # Контрагент — из описания (первое слово/название), а не Ref. Number
+        # Для «From NOMIQA...» — контрагент = NOMIQA...
+        # Для остальных — первые 1–2 слова описания
+        if desc.lower().startswith('from '):
+            cp = desc[5:].strip()
+        elif desc.lower().startswith('to '):
+            cp = desc[3:].strip()
+        else:
+            # Merchant — до первого служебного слова
+            cp = re.split(r'\s+\d', desc, maxsplit=1)[0].strip()
+
+        # Если cp получился слишком длинным или с цифрами — обрезаем
+        cp = re.sub(r'\s+', ' ', cp).strip()
+        if len(cp) > 60:
+            cp = cp[:60].rsplit(' ', 1)[0]
+
         rows.append({
             'Дата': date,
             'Сумма': amount,
@@ -5213,7 +5258,9 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             'Наименование счета': account_name,
             'Описание': desc,
         })
-    
+
+        i += 1
+
     return _dedup_by_source_index(_assign_source_indices(rows))
 
 
