@@ -1109,7 +1109,7 @@ def _parse_date_components(a: int, b: int, y: str,
     return f"{a:02d}-{b:02d}-{y}"
 
 
-def parse_date(date_str, account_name: str = '') -> str:
+def _parse_date_unvalidated(date_str, account_name: str = '') -> str:
     if date_str is None:
         return ''
     try:
@@ -1202,6 +1202,22 @@ def parse_date(date_str, account_name: str = '') -> str:
             continue
 
     return s
+
+
+def parse_date(date_str, account_name: str = '') -> str:
+    """Нормализует дату и отклоняет некорректные календарные значения.
+
+    Внутренний парсер поддерживает множество банковских форматов, но его
+    fallback может вернуть исходный текст. Не пропускаем такой текст в
+    таблицу операций: наружу возвращается только валидная дата DD-MM-YYYY.
+    """
+    parsed = _parse_date_unvalidated(date_str, account_name=account_name)
+    if not parsed:
+        return ''
+    try:
+        return datetime.strptime(str(parsed), "%d-%m-%Y").strftime("%d-%m-%Y")
+    except (TypeError, ValueError):
+        return ''
 
 
 _OCR_DIGIT_MAP = {
@@ -1559,7 +1575,10 @@ def read_text_with_encoding(file_content: bytes) -> str:
     Читает байты в текст с автоопределением кодировки.
     Учитывает венгерскую «порчу» (Ő→誆, Ű→誗) и репликационный символ.
     """
-    encodings = ['utf-8-sig', 'utf-8', 'iso-8859-2', 'cp1250', 'cp1251', 'latin-1']
+    # CP1250 должен проверяться до ISO-8859-2: оба декодера принимают
+    # почти любые байты, но ISO-8859-2 трактует некоторые чешские буквы
+    # (например, Ž в байте 0x8E) как управляющие символы C1.
+    encodings = ['utf-8-sig', 'utf-8', 'cp1250', 'iso-8859-2', 'cp1251', 'latin-1']
     best = None
     best_score = 10**9
     for enc in encodings:
@@ -1569,7 +1588,10 @@ def read_text_with_encoding(file_content: bytes) -> str:
             continue
         if content.startswith('\ufeff'):
             content = content[1:]
-        score = _bad_count(content)
+        # Не выбираем декодирование, в котором видны управляющие символы
+        # C1: для банковских CSV это почти всегда признак неверной кодировки.
+        controls = sum(1 for ch in content if 0x80 <= ord(ch) <= 0x9F)
+        score = _bad_count(content) + controls * 10
         if score == 0:
             return content
         if score < best_score:
@@ -9440,7 +9462,9 @@ def _render_results(result: Dict):
     st.markdown("### 🤖 AI-обогащение транзакций (DeepSeek AI)")
     st.caption(
         "AI переведёт описания, определит категорию и вытащит чистое имя "
-        "контрагента. Обрабатывается не более 200 строк за раз."
+        "контрагента. Обрабатывается не более 200 строк за раз. "
+        "При запуске выбранные данные операций передаются внешнему сервису "
+        "Hugging Face / DeepSeek."
     )
 
     col_ai1, col_ai2 = st.columns([1, 3])
@@ -9916,8 +9940,10 @@ def main():
                 st.error("Есть ошибки в разборе дат ❌")
         st.markdown("---")
         st.caption(
-            "Программа работает локально. Файлы выписок не отправляются "
-            "в DeepSeek — только те фрагменты, которые вы сами вводите в чат."
+            "Приложение размещено в облаке: загруженные выписки обрабатываются "
+            "на сервере хостинга. При запуске AI-обогащения выбранные данные "
+            "операций передаются через Hugging Face к модели DeepSeek. "
+            "Не загружайте конфиденциальные данные, если это не разрешено вашей политикой."
         )
 
     tab_upload, tab_ai = st.tabs(["📥 Обработка выписок", "🤖 AI-ассистент"])
@@ -10002,7 +10028,8 @@ def main():
                 """, unsafe_allow_html=True)
             st.markdown("""
             <div class="footer-note">
-            Работает локально. Данные никуда не отправляются.
+            Обработка выполняется на сервере приложения. При использовании AI
+            данные выбранных операций передаются внешнему AI-сервису.
             </div>
             """, unsafe_allow_html=True)
         else:
@@ -10046,7 +10073,8 @@ def main():
 
         st.markdown("""
         <div class="footer-note">
-        Работает локально. Данные никуда не отправляются.
+        Обработка выполняется на сервере приложения. При использовании AI
+        данные выбранных операций передаются внешнему AI-сервису.
         </div>
         """, unsafe_allow_html=True)
 
