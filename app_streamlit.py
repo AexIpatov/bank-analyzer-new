@@ -5144,17 +5144,16 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
     WIO Business PDF. 
-    Учитывает "сломанную" верстку на страницах 9 и 12, где 
-    суммы идут без дат. Привязывает "голые" суммы к предыдущим 
-    транзакциям.
+    Решение проблемы: страницы 2 и 12 в этом PDF сформированы как таблицы,
+    которые pdfplumber не читает как текст. Мы извлекаем их через extract_tables.
     """
+    result = []
+    
+    # 1. Сначала собираем все строки текста (для обычных страниц)
     text = pdf_all_text(file_content)
     lines = [re.sub(r'\s+', ' ', x).strip() for x in text.splitlines() if x.strip()]
-    rows = []
     
-    # Регулярка для строк с датой
     date_line_re = re.compile(r'^(\d{2}/\d{2}/\d{4})\s+(.*)$')
-    # Регулярка для поиска суммы и баланса в конце строки
     amount_pair_re = re.compile(r'(-?\d[\d,]*(?:\.\d{1,2})?)\s+(\d[\d,]*(?:\.\d{1,2})?)\s*$')
     
     skip_markers = [
@@ -5170,22 +5169,18 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             
         m = date_line_re.match(line)
         if m:
-            # Это полноценная транзакция (с датой)
             date_str = m.group(1)
             rest = m.group(2)
-            
             am = amount_pair_re.search(rest)
             if am:
                 amount_str = am.group(1)
                 desc_zone = rest[:am.start()].strip()
                 
-                # Убираем Ref. Number из описания
                 ref_match = re.match(r'^(P\d+|[A-Z0-9]{8,})\s+', desc_zone)
                 if ref_match:
                     desc_zone = desc_zone[ref_match.end():].strip()
                     
                 desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|BnO|Bno|DnQ|DNQ|DNO|BNQ)\s*$', '', desc_zone).strip()
-                
                 amount = parse_amount(amount_str.replace(',', ''))
                 date = parse_date(date_str, account_name)
                 
@@ -5196,30 +5191,65 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                     elif desc.lower().startswith('to '):
                         cp = desc[3:].strip()
                         
-                    rows.append({
+                    result.append({
                         'Дата': date,
                         'Сумма': amount,
                         'Контрагент': cp,
                         'Наименование счета': account_name,
                         'Описание': desc,
-                        '_source_index': len(rows)
                     })
-        else:
-            # Это "голая" строка без даты (страницы 9 и 12)
-            # Если в ней есть число, привязываем его к предыдущей транзакции
-            am = amount_pair_re.search(line)
-            if am and rows:
-                amount_str = am.group(1)
-                amount = parse_amount(amount_str.replace(',', ''))
-                
-                # Если это похоже на транзакцию (не просто число-остаток)
-                if amount != 0 and _is_reasonable_amount(amount):
-                    # Если предыдущая транзакция была на ту же дату, 
-                    # мы просто суммируем (так как это разорванная строка)
-                    rows[-1]['Сумма'] += amount
 
-    # Убираем служебные поля и дубликаты
-    return _dedup_by_source_index(_assign_source_indices(rows))
+    # 2. Теперь принудительно ищем таблицы на страницах 2 и 12
+    try:
+        with pdfplumber.open(BytesIO(file_content)) as pdf:
+            # Проверяем страницы 2 и 12 (индексы 1 и 11)
+            for page_num in [1, 11]: 
+                if page_num >= len(pdf.pages):
+                    continue
+                page = pdf.pages[page_num]
+                tables = page.extract_tables()
+                
+                for table in tables:
+                    for row in table:
+                        if not row or len(row) < 4:
+                            continue
+                        # Ищем строку, где 1-я ячейка - дата, 2-я - Ref, 3-я - описание, 4-я - сумма
+                        try:
+                            date_str = str(row[0]).strip()
+                            if not re.match(r'^\d{2}/\d{2}/\d{4}$', date_str):
+                                continue
+                                
+                            ref_num = str(row[1]).strip() if len(row) > 1 else ''
+                            desc = str(row[2]).strip() if len(row) > 2 else ''
+                            amount_str = str(row[3]).strip() if len(row) > 3 else ''
+                            
+                            # Чистим описание
+                            desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|BnO|Bno|DnQ|DNQ|DNO|BNQ)\s*$', '', desc).strip()
+                            
+                            amount = parse_amount(amount_str.replace(',', ''))
+                            date = parse_date(date_str, account_name)
+                            
+                            if date and amount != 0 and _is_reasonable_amount(amount):
+                                cp = ' '.join(desc.split()[:3])
+                                if desc.lower().startswith('from '):
+                                    cp = desc[5:].strip()
+                                elif desc.lower().startswith('to '):
+                                    cp = desc[3:].strip()
+                                    
+                                result.append({
+                                    'Дата': date,
+                                    'Сумма': amount,
+                                    'Контрагент': cp,
+                                    'Наименование счета': account_name,
+                                    'Описание': desc,
+                                })
+                        except Exception:
+                            continue
+    except Exception:
+        pass
+
+    # Убираем дубликаты (так как табличный метод может захватить обычные строки)
+    return _dedup_by_source_index(_assign_source_indices(result))
 
 # ==================== BLUOR PDF ====================
 
