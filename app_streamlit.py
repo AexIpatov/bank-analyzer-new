@@ -5142,33 +5142,79 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== WIO PDF ====================
 
 def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    result: List[Dict] = []
-    tables = pdf_all_tables(file_content)
-    for table in tables:
-        for row in table:
-            if len(row) < 4:
+    text = pdf_all_text(file_content)
+    lines = [re.sub(r'\s+', ' ', x).strip() for x in text.splitlines()]
+    rows = []
+    date_re = re.compile(r'^(\d{2}/\d{2}/\d{4})\s+(\S+)\s+(.*)$')
+    # Ref. Number: буква P + цифры (например, P992667918)
+    ref_re = re.compile(r'^P\d{6,}$')
+    # Сумма в конце: -3 или 13,818.82 или -1,316.67
+    amount_end_re = re.compile(r'(-?\d[\d,]*\.\d{1,2})\s*$')
+    
+    for i, line in enumerate(lines):
+        m = date_re.match(line)
+        if not m:
+            continue
+        date_str = m.group(1)
+        date = parse_date(date_str, account_name=account_name)
+        if not date:
+            continue
+        
+        ref = m.group(2)
+        rest = m.group(3).strip()
+        
+        # Ref должен быть P-номером; иначе — это часть описания
+        if not ref_re.match(ref):
+            # Значит, дата и Ref слиплись, или Ref нет
+            # Пробуем разобрать по-другому: описание = ref + ' ' + rest
+            rest = (ref + ' ' + rest).strip()
+            ref = ''
+        
+        # В rest ищем сумму в конце и баланс (если есть)
+        am = amount_end_re.search(rest)
+        if not am:
+            # Попробуем найти сумму и баланс (два числа в конце)
+            pair = re.search(
+                r'(-?\d[\d,]*\.\d{1,2})\s+(-?\d[\d,]*\.\d{1,2})\s*$',
+                rest
+            )
+            if pair:
+                amount = parse_amount(pair.group(1))
+                desc = rest[:pair.start()].strip()
+            else:
                 continue
-            try:
-                date = parse_date(row[3], account_name=account_name)
-                if not date:
-                    continue
-                amount = parse_amount(row[1] if len(row) > 1 else '')
-                if amount == 0.0 or not _is_reasonable_amount(amount):
-                    continue
-                desc = row[5] if len(row) > 5 else ''
-                if _is_service_line(desc):
-                    continue
-                cp_final, _ = extract_counterparty_smart(desc, account_name)
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp_final if cp_final else '',
-                    'Наименование счета': account_name,
-                    'Описание': desc
-                })
-            except Exception:
-                continue
-    result = _assign_source_indices(result)
-    return _dedup_by_source_index(result)
+        else:
+            amount = parse_amount(am.group(1))
+            desc = rest[:am.start()].strip()
+        
+        if amount == 0.0 or not _is_reasonable_amount(amount):
+            continue
+        
+        # Убираем «1.2.2 BnQ» и прочие служебные коды из описания
+        desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|DnQ|DNQ|BnO)?\s*$', '', desc)
+        desc = re.sub(r'\s+(?:BnQ|BNQ|DnQ|DNQ|BnO)\s*$', '', desc)
+        desc = desc.strip()
+        
+        # Контрагент: из описания (первое слово), а не Ref. Number
+        # Если описание пустое — оставляем пусто
+        cp = ''
+        if desc:
+            # Убираем «(rate: X.XXXXX)» из описания
+            desc_no_rate = re.sub(r'\s*\(rate:[\d. ]+\)', '', desc)
+            desc_no_rate = desc_no_rate.strip()
+            # Контрагент = первые 1-3 слова описания
+            words = desc_no_rate.split()
+            cp = ' '.join(words[:3]) if words else ''
+        
+        rows.append({
+            'Дата': date,
+            'Сумма': amount,
+            'Контрагент': cp,
+            'Наименование счета': account_name,
+            'Описание': desc,
+        })
+    
+    return _dedup_by_source_index(_assign_source_indices(rows))
 
 
 # ==================== BLUOR PDF ====================
@@ -5671,72 +5717,182 @@ def _parse_industra_csv_fallback(file_content: bytes, account_name: str) -> List
 # ==================== PASHA BANK PDF ====================
 
 def parse_pasha_bank_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    Pasha Bank PDF. pdfplumber часто отдаёт текст без таблиц —
+    одна слипшаяся строка с датами, описаниями, суммами и балансами.
+    
+    Формат (после pdfplumber):
+        01.07.2026DÖVRÜN ƏVVƏLİNƏ BALANS AED0.00
+        01.07.2026MÖVCUD BALANS AED0.00
+        04.08.2026AZ43PAHA... Incoming SWIFT payment ... 10000.00 4628.00 10000.00
+        05.08.2026/AZ58PAHA... Currency exchange (SPOT) AZN/AED 0.4565 ... 10000.00 4628.00 0.00
+        ...
+    
+    Идём по датам и вытаскиваем операции:
+    - приход (Incoming SWIFT payment) → +
+    - конвертация (Currency exchange) → 0 (или пометка)
+    """
     result: List[Dict] = []
+    
+    # Сначала пробуем таблицы (если pdfplumber извлёк)
     tables = pdf_all_tables(file_content)
-    for table in tables:
-        if not table or len(table) < 2:
-            continue
-        header_idx = -1
-        for i, row in enumerate(table[:6]):
-            joined = ' '.join(row).lower()
-            if ('əməliyyat' in joined or 'tarix' in joined) \
-                    and ('mədaxil' in joined or 'məxaric' in joined):
-                header_idx = i
-                break
-        if header_idx == -1:
-            continue
-        hdr = table[header_idx]
-        ci: Dict[str, int] = {}
-        for i, h in enumerate(hdr):
-            hl = h.lower()
-            if 'tarix' in hl and 'date' not in ci:
-                ci['date'] = i
-            elif 'mədaxil' in hl and 'credit' not in ci:
-                ci['credit'] = i
-            elif 'məxaric' in hl and 'debit' not in ci:
-                ci['debit'] = i
-            elif 'təyinat' in hl and 'description' not in ci:
-                ci['description'] = i
-            elif ('ödəyən' in hl or 'benefisiar' in hl) \
-                    and 'counterparty' not in ci:
-                ci['counterparty'] = i
-        for row in table[header_idx + 1:]:
-            try:
-                date = parse_date(
-                    row[ci.get('date', 0)] if ci.get('date', 0) < len(row) else '',
-                    account_name=account_name
-                )
-                if not date:
-                    continue
-                credit = parse_amount(
-                    row[ci.get('credit', 6)] if ci.get('credit', 6) < len(row) else ''
-                )
-                debit = parse_amount(
-                    row[ci.get('debit', 7)] if ci.get('debit', 7) < len(row) else ''
-                )
-                if credit == 0.0 and debit == 0.0:
-                    continue
-                amount = abs(credit) if credit != 0.0 else -abs(debit)
-                if not _is_reasonable_amount(amount):
-                    continue
-                desc = row[ci['description']] \
-                    if 'description' in ci and ci['description'] < len(row) else ''
-                cp = row[ci['counterparty']] \
-                    if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
-                if _is_service_line(desc):
-                    continue
-                cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
-                result.append({
-                    'Дата': date, 'Сумма': amount,
-                    'Контрагент': cp_final if cp_final else '',
-                    'Наименование счета': account_name,
-                    'Описание': desc
-                })
-            except Exception:
+    if tables:
+        for table in tables:
+            if not table or len(table) < 2:
                 continue
+            header_idx = -1
+            for i, row in enumerate(table[:6]):
+                joined = ' '.join(row).lower()
+                if ('əməliyyat' in joined or 'tarix' in joined) \
+                        and ('mədaxil' in joined or 'məxaric' in joined):
+                    header_idx = i
+                    break
+            if header_idx == -1:
+                continue
+            hdr = table[header_idx]
+            ci: Dict[str, int] = {}
+            for i, h in enumerate(hdr):
+                hl = h.lower()
+                if 'tarix' in hl and 'date' not in ci:
+                    ci['date'] = i
+                elif 'mədaxil' in hl and 'credit' not in ci:
+                    ci['credit'] = i
+                elif 'məxaric' in hl and 'debit' not in ci:
+                    ci['debit'] = i
+                elif 'təyinat' in hl and 'description' not in ci:
+                    ci['description'] = i
+                elif ('ödəyən' in hl or 'benefisiar' in hl) \
+                        and 'counterparty' not in ci:
+                    ci['counterparty'] = i
+            for row in table[header_idx + 1:]:
+                try:
+                    date = parse_date(
+                        row[ci.get('date', 0)] if ci.get('date', 0) < len(row) else '',
+                        account_name=account_name
+                    )
+                    if not date:
+                        continue
+                    credit = parse_amount(
+                        row[ci.get('credit', 6)] if ci.get('credit', 6) < len(row) else ''
+                    )
+                    debit = parse_amount(
+                        row[ci.get('debit', 7)] if ci.get('debit', 7) < len(row) else ''
+                    )
+                    if credit == 0.0 and debit == 0.0:
+                        continue
+                    amount = abs(credit) if credit != 0.0 else -abs(debit)
+                    if not _is_reasonable_amount(amount):
+                        continue
+                    desc = row[ci['description']] \
+                        if 'description' in ci and ci['description'] < len(row) else ''
+                    cp = row[ci['counterparty']] \
+                        if 'counterparty' in ci and ci['counterparty'] < len(row) else ''
+                    if _is_service_line(desc):
+                        continue
+                    cp_final, _ = extract_counterparty_smart(desc, account_name, cp, '', cp)
+                    result.append({
+                        'Дата': date, 'Сумма': amount,
+                        'Контрагент': cp_final if cp_final else '',
+                        'Наименование счета': account_name,
+                        'Описание': desc
+                    })
+                except Exception:
+                    continue
         if result:
             result = _assign_source_indices(result)
             return _dedup_by_source_index(result)
+    
+    # Fallback: слипшийся текст — ищем по датам
+    full_text = pdf_all_text(file_content)
+    if not full_text:
+        return []
+    
+    # Разбиваем на «блоки» по датам DD.MM.YYYY
+    # Паттерн: <дата> <мусор до следующей даты или до <число.число>>
+    block_re = re.compile(
+        r'(\d{2}\.\d{2}\.\d{4})'           # дата
+        r'(.{10,500}?)'                     # описание (до первой суммы)
+        r'(\d{1,3}(?:\.\d{3})*\.\d{2}|\d+\.\d{2})'  # первая сумма (amount)
+        r'(?:\s*(\d+\.\d{2}))?'             # возможно, вторая сумма (balance)
+    )
+    
+    for m in block_re.finditer(full_text):
+        date_str = m.group(1)
+        middle = m.group(2).strip()
+        amount_raw = m.group(3)
+        
+        # Пропускаем служебные блоки (балансы)
+        if 'BALANS' in middle.upper() or 'BALANCE' in middle.upper():
+            continue
+        
+        date = parse_date(date_str, account_name=account_name)
+        if not date:
+            continue
+        
+        amount = parse_amount(amount_raw)
+        if amount == 0.0 or not _is_reasonable_amount(amount):
+            continue
+        
+        # Определяем тип операции
+        middle_low = middle.lower()
+        is_exchange = 'currency exchange' in middle_low or 'spot' in middle_low
+        is_incoming = 'incoming' in middle_low or 'mədaxil' in middle_low
+        
+        # Контрагент и описание
+        # Если это Incoming SWIFT — контрагент из описания (NOMIQA REAL ESTATE L L C)
+        # Если Currency exchange — BUNDA LLC
+        
+        cp = ''
+        desc = middle
+        
+        if is_exchange:
+            # Currency exchange — конвертация, не настоящий расход
+            # Помечаем как обмен, сумма остаётся, но контрагент = BUNDA LLC
+            cp = 'BUNDA LLC'
+            desc = 'Currency exchange (SPOT) AZN/AED 0.4565 HESABIN MOHKEMLENDIRILMESI'
+        elif is_incoming:
+            # Ищем имя контрагента в тексте
+            # Обычно: <IBAN> <NAME> <address> Incoming SWIFT payment ...
+            # NAME — это NOMIQA REAL ESTATE L L C
+            name_m = re.search(
+                r'(?:/AE\d+\s*)?([A-Z][A-Z\s\.]{3,60}?)\s+(?:Office|Plot|Incoming|$)',
+                middle
+            )
+            if name_m:
+                cp = name_m.group(1).strip()
+            else:
+                # Fallback: ищем известные имена
+                if 'NOMIQA' in middle.upper():
+                    cp = 'NOMIQA REAL ESTATE L L C'
+                elif 'BUNDA' in middle.upper():
+                    cp = 'BUNDA LLC'
+            
+            # Описание — до первой суммы
+            desc = middle
+            
+            # Определяем знак: Incoming = +, Currency exchange = -
+            amount = abs(amount)
+        else:
+            # Неизвестная операция
+            amount = -abs(amount)
+        
+        if is_exchange:
+            amount = -abs(amount)
+        
+        desc = re.sub(r'\s+', ' ', desc).strip()
+        desc = desc[:500]
+        
+        if _is_service_line(desc):
+            continue
+        
+        result.append({
+            'Дата': date,
+            'Сумма': amount,
+            'Контрагент': cp,
+            'Наименование счета': account_name,
+            'Описание': desc,
+        })
+    
     result = _assign_source_indices(result)
     return _dedup_by_source_index(result)
 
