@@ -5142,9 +5142,15 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 # ==================== WIO PDF ====================
 
 def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    WIO Business PDF. Использует координатную сетку для точного извлечения.
+    Игнорирует служебные блоки и восстанавливает транзакции, даже если
+    текст в PDF разорван на разные строки.
+    """
     words = _pdf_words_with_coords(file_content)
     if not words:
         return []
+    
     pages: Dict[int, List[Dict]] = {}
     for w in words:
         pages.setdefault(w['page'], []).append(w)
@@ -5164,24 +5170,30 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     rows = []
     date_re = re.compile(r'^(\d{2}/\d{2}/\d{4})$')
     amount_re = re.compile(r'^-?\d[\d,]*(?:\.\d{1,2})?$')
-    skip_markers = ['summary', 'account', 'statement', 'page', 'wio bank', 'etihad', 'interest', 'date', 'ref.', 'description', 'amount', 'balance', 'الرصيد', 'الوصف', 'المبلغ', 'التاريخ']
+    
+    skip_markers = [
+        'summary', 'account', 'statement', 'page', 'wio bank', 'etihad', 
+        'interest', 'date', 'ref.', 'description', 'amount', 'balance', 
+        'الرصيد', 'الوصف', 'المبلغ', 'التاريخ', 'iban', 'holder', 'currency'
+    ]
     
     for pnum in sorted(pages.keys()):
         for line in _lines(pages[pnum]):
             line_words = sorted(line, key=lambda w: w['x0'])
-            # Фильтруем служебные
+            if not line_words:
+                continue
+                
             full_text = ' '.join(w['text'] for w in line_words).strip().lower()
             if any(m in full_text for m in skip_markers):
                 continue
                 
-            # Ищем дату (в начале)
-            date_match = date_re.match(line_words[0]['text']) if line_words else None
+            # Ищем дату (в начале строки)
+            date_match = date_re.match(line_words[0]['text'])
             if not date_match:
                 continue
             date_str = line_words[0]['text']
             
-            # Ищем сумму (вторая с конца) и баланс (последняя)
-            # Отбрасываем Ref. Number (начинается с P или цифр)
+            # Ищем сумму и баланс (они находятся в самом конце строки справа)
             nums = []
             for w in reversed(line_words):
                 txt = w['text'].replace(',', '')
@@ -5202,21 +5214,22 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
             if amount == 0 or not _is_reasonable_amount(amount):
                 continue
                 
-            # Всё, что слева от суммы (и не дата, и не Ref) — это описание
+            # Всё, что находится между датой и суммой — это описание
             desc_words = []
             for w in line_words:
                 if w['x0'] >= amount_word['x0']:
                     continue
-                if w == line_words[0]: # дата
+                if w == line_words[0]:  # пропускаем дату
                     continue
-                if w['x0'] < 120: # Ref. Number (примерно)
+                if w['x0'] < 120:       # пропускаем Ref. Number (левый столбец)
                     continue
                 desc_words.append(w)
                 
             desc = ' '.join(w['text'] for w in desc_words).strip()
-            desc = re.sub(r'\s+\d+(?:\.\d+)+.*$', '', desc).strip()
+            # Убираем служебные коды WIO (1.2.2 BnQ и т.д.)
+            desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|BnO|Bno|DnQ|DNQ|DNO|BNQ)\s*$', '', desc).strip()
             
-            # Контрагент = первые 3 слова
+            # Контрагент — первые слова из описания
             cp = ' '.join(desc.split()[:3])
             
             rows.append({
@@ -5227,7 +5240,7 @@ def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
                 'Описание': desc,
             })
             
-    return _assign_source_indices(rows)
+    return _dedup_by_source_index(_assign_source_indices(rows))
 
 # ==================== BLUOR PDF ====================
 
