@@ -8486,6 +8486,175 @@ def parse_saida_wise_xlsx(file_content: bytes, account_name: str) -> List[Dict]:
             continue
     result = _assign_source_indices(result)
     return _dedup_by_source_index(result)
+# ==================== ДОПОЛНИТЕЛЬНЫЕ PDF-ПАРСЕРЫ ПО РЕАЛЬНЫМ ВЫПИСКАМ ====================
+
+def _pdf_make_row(date, amount, desc, account_name, counterparty=''):
+    desc = re.sub(r'\s+', ' ', str(desc or '')).strip(' |\t')
+    cp, _ = extract_counterparty_smart(desc, account_name, counterparty or '', '', counterparty or '')
+    return {'Дата': date, 'Сумма': float(amount), 'Контрагент': cp or counterparty or '',
+            'Наименование счета': account_name, 'Описание': desc}
+
+
+def parse_bluor_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    text = pdf_all_text(file_content)
+    rows=[]
+    # BluOr Russian-language statement: operation ID on previous line, date + description + amount below.
+    lines=[re.sub(r'\s+',' ',x).strip() for x in text.splitlines()]
+    for i,line in enumerate(lines):
+        m=re.match(r'^(\d{2}\.\d{2}\.\d{4})\s+(.+?)\s+(-?\d[\d ]*[.,]\d{2})\s*$',line)
+        if not m: continue
+        date=parse_date(m.group(1), account_name=account_name)
+        amt=parse_amount(m.group(3)); desc=m.group(2).strip()
+        if not date or amt==0 or not _is_reasonable_amount(amt): continue
+        # Include the bank operation type / reference printed immediately before the date.
+        prev=lines[i-1] if i else ''
+        if re.search(r'\d{8,}',prev): desc=(prev+' '+desc).strip()
+        rows.append(_pdf_make_row(date,amt,desc,account_name))
+    return _dedup_by_source_index(_assign_source_indices(rows))
+
+
+def parse_paysera_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    text=_clean_pdf_artifacts(pdf_all_text(file_content))
+    lines=[re.sub(r'\s+',' ',x).strip() for x in text.splitlines()]
+    rows=[]
+    op_re=re.compile(r'^(Перевод|Комиссионная плата|Transfer|Commission fee)\s+(\d{7,})\s+(.*)$',re.I)
+    for i,line in enumerate(lines):
+        m=op_re.match(line)
+        if not m: continue
+        kind,ref,head=m.groups()
+        date_line=lines[i+1] if i+1<len(lines) else ''
+        dm=re.search(r'(\d{4}-\d{2}-\d{2})',date_line)
+        if not dm:
+            # Some exports put date/time on the next but one line.
+            for cand in lines[i+1:i+4]:
+                dm=re.search(r'(\d{4}-\d{2}-\d{2})',cand)
+                if dm: date_line=cand; break
+        if not dm: continue
+        date=parse_date(dm.group(1),account_name=account_name)
+        am=re.search(r'(?<![A-Za-z0-9])([+-]?(?:\d{1,3}(?:[ \u00a0]\d{3})*|\d+)[.,]\d{2})\s*(?:EUR|USD|CZK|GBP|PLN)?\s*$',head,re.I)
+        if not am: continue
+        amount=parse_amount(am.group(1))
+        if kind.lower().startswith(('комиссион','commission')): amount=-abs(amount)
+        if not date or amount==0 or not _is_reasonable_amount(amount): continue
+        # Strip IBAN and client codes from counterparty, retain operation's visible name.
+        cp=re.sub(r'\b[A-Z]{2}\d{2}[A-Z0-9]{10,}\b',' ',head)
+        cp=re.sub(r'\(\d{6,}\)',' ',cp)
+        cp=re.sub(r'\s+',' ',cp).strip(' ,.;:-')
+        cp=re.sub(r'\s+[+-]?\s*\d[\d\s\u00a0]*[.,]\d{2}\s*(?:EUR|USD|CZK|GBP|PLN)$','',cp,flags=re.I).strip()
+        # Capture payment purpose line if present, without swallowing the next operation.
+        purpose=''
+        for cand in lines[i+1:min(i+5,len(lines))]:
+            if cand.lower().startswith(('назначение платежа:','purpose of payment:')):
+                purpose=cand.split(':',1)[1].strip(); break
+        desc=purpose or cp or head
+        counterparty='Paysera LT' if kind.lower().startswith(('комиссион','commission')) else cp
+        rows.append(_pdf_make_row(date,amount,desc,account_name,counterparty))
+    return _dedup_by_source_index(_assign_source_indices(rows))
+
+
+def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    text=pdf_all_text(file_content); lines=[re.sub(r'\s+',' ',x).strip() for x in text.splitlines()]
+    rows=[]
+    date_re=re.compile(r'^(\d{2}\s+[A-Za-z]{3}\s+\d{4})\s+\d{2}\s+[A-Za-z]{3}\s+\d{4}\s+(\S+)\s+(.*)$')
+    num_re=re.compile(r'(?<![A-Za-z])([+-]?\s*\d[\d, ]*(?:\.\d{1,2})?)(?![A-Za-z])')
+    i=0
+    while i<len(lines):
+        m=date_re.match(lines[i])
+        if not m: i+=1; continue
+        date=parse_date(m.group(1),account_name=account_name); ref=m.group(2); descpart=m.group(3)
+        block=[descpart]; j=i+1
+        while j<len(lines) and not date_re.match(lines[j]) and not re.match(r'^Page\s+\d+',lines[j],re.I):
+            if lines[j] and not re.search(r'Account Statement|system generated statement',lines[j],re.I): block.append(lines[j])
+            j+=1
+        joined=' '.join(block)
+        # On Mashreq, the transaction amount and running balance are on the first row;
+        # later lines may contain numeric references, so do not scan the whole block.
+        nums=list(num_re.finditer(descpart))
+        if date and len(nums)>=2:
+            raw=nums[-2].group(1)
+            amount=parse_amount(raw)
+            if amount and _is_reasonable_amount(amount):
+                desc=re.sub(r'\s+',' ',descpart[:nums[-2].start()]).strip()
+                if len(block)>1: desc += ' ' + ' '.join(block[1:])
+                rows.append(_pdf_make_row(date,amount,desc,account_name,ref))
+        i=max(j,i+1)
+    return _dedup_by_source_index(_assign_source_indices(rows))
+
+
+def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    text=pdf_all_text(file_content); lines=[re.sub(r'\s+',' ',x).strip() for x in text.splitlines()]
+    rows=[]
+    date_re=re.compile(r'^(\d{2}/\d{2}/\d{4})\s+(\S+)\s+(.*)$')
+    num_re=re.compile(r'(?<![A-Za-z])(-?\s*\d[\d, ]*(?:\.\d{1,2})?)(?![A-Za-z])')
+    for i,line in enumerate(lines):
+        m=date_re.match(line)
+        if not m: continue
+        date=parse_date(m.group(1),account_name=account_name)
+        if not date: continue
+        first=m.group(3)
+        # The transaction amount and running balance are at the end of the first line.
+        pair=re.search(r'(?<![A-Za-z])(-?\d[\d,]*(?:\.\d{1,2})?)\s+([\d,]+\.\d{1,2})\s*$',first)
+        if not pair: continue
+        amount=parse_amount(pair.group(1))
+        if not amount or not _is_reasonable_amount(amount): continue
+        desc=first[:pair.start()].strip()
+        rows.append(_pdf_make_row(date,amount,desc,account_name,m.group(2)))
+    return _dedup_by_source_index(_assign_source_indices(rows))
+
+
+def parse_csas_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    # Supports ČSOB Czech statements with dd.mm. dates, transaction amount and balance columns.
+    text=pdf_all_text(file_content); lines=[re.sub(r'\s+',' ',x).strip() for x in text.splitlines()]
+    ym=re.search(r'Období:\s*(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})\s*-\s*(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})',text)
+    year=int(ym.group(3)) if ym else datetime.now().year
+    rows=[]
+    start_re=re.compile(r'^(\d{2})\.(\d{2})\.\s+(.+?)\s+(-?(?:\d{1,3}(?: \d{3})+|\d+),[0-9]{2})\s+((?:\d{1,3}(?: \d{3})+|\d+),[0-9]{2})$')
+    for i,line in enumerate(lines):
+        m=start_re.match(line)
+        if not m: continue
+        date=parse_date(f'{m.group(1)}.{m.group(2)}.{year}',account_name=account_name)
+        amount=parse_amount(m.group(4)); desc=m.group(3).strip()
+        if not date or not amount or not _is_reasonable_amount(amount): continue
+        extra=[]
+        for nl in lines[i+1:i+4]:
+            if re.match(r'^\d{2}\.\d{2}\.\s+',nl): break
+            if nl and not re.search(r'Částka:|Místo:|Strana:|VÝPIS Z ÚČTU',nl,re.I): extra.append(nl)
+        if extra: desc+=' '+' '.join(extra)
+        rows.append(_pdf_make_row(date,amount,desc,account_name))
+    return _dedup_by_source_index(_assign_source_indices(rows))
+
+
+def parse_unicredit_pdf(file_content: bytes, account_name: str) -> List[Dict]:
+    text=pdf_all_text(file_content); lines=[re.sub(r'\s+',' ',x).strip() for x in text.splitlines()]
+    header=next((i for i,l in enumerate(lines) if 'transakce' in l.lower() and ('příjmy' in l.lower() or 'prijmy' in l.lower())), -1)
+    if header<0: return []
+    rows=[]; date_re=re.compile(r'^(\d{2}\.\d{2}\.\d{4})\s+(?:(\d{2}\.\d{2}\.\d{4})\s*)?(.*)$')
+    amount_re=re.compile(r'(-?\s*\d[\d. ]*,\d{2}|-?\s*\d[\d ]+\.\d{2})\s*$')
+    i=header+1
+    while i<len(lines):
+        line=lines[i]
+        m=date_re.match(line)
+        if not m: i+=1; continue
+        if re.search(r'konečný zůstatek|počáteční zůstatek|datum výpisu|období výpisu', line, re.I): i+=1; continue
+        date=parse_date(m.group(1),account_name=account_name)
+        rest=(m.group(3) or '').strip()
+        am=amount_re.search(rest)
+        if not date or not am: i+=1; continue
+        amount=parse_amount(am.group(1)); desc=rest[:am.start()].strip()
+        if not amount or not _is_reasonable_amount(amount): i+=1; continue
+        parts=[desc] if desc else []; j=i+1
+        while j<len(lines) and not date_re.match(lines[j]):
+            nl=lines[j]
+            if re.search(r'konečný zůstatek|konecny zustatek',nl,re.I): break
+            # details often include recipient/payer/purpose and are useful; exclude legal footer.
+            if nl and not re.search(r'UniCredit Bank Czech|Obchodní rejstřík|www\.unicreditbank|M_MODUL_',nl,re.I): parts.append(nl)
+            j+=1
+        desc_full=re.sub(r'\s+',' ',' '.join(parts)).strip()
+        rows.append(_pdf_make_row(date,amount,desc_full,account_name))
+        i=max(j,i+1)
+    return _dedup_by_source_index(_assign_source_indices(rows))
+
+
 # ==================== МАРШРУТИЗАЦИЯ ПАРСЕРОВ ====================
 
 def get_parser_by_ext(account_name: str, ext: str):
@@ -8509,6 +8678,8 @@ def get_parser_by_ext(account_name: str, ext: str):
     if ext == '.pdf':
         if is_kapital_saida:
             return parse_kapital_saida_pdf, 'kapital_saida_pdf'
+        if 'csob' in low or 'čsob' in low or 'mczb' in low:
+            return parse_csas_pdf, 'csas_pdf'
         if is_revolut:
             return parse_revolut_pdf, 'revolut_pdf'
         if is_wise:
