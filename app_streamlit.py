@@ -10317,17 +10317,17 @@ def main():
     if 'ai_chat_history' not in st.session_state:
         st.session_state['ai_chat_history'] = []
 
+    # === ЕДИНЫЙ БЛОК SIDEBAR ===
     with st.sidebar:
         st.markdown("### ⚙️ Настройки")
 
-        # === ВЫБОР ПЕРИОДА ===
+        # 1. Выбор периода
         st.markdown("**📅 Период операций**")
         st.caption(
             "Оставьте поля пустыми, чтобы обрабатывать все операции. "
             "Период применяется к дате операции (Дата)."
         )
 
-        # Быстрый выбор
         period_mode = st.radio(
             "Быстрый выбор",
             options=[
@@ -10349,13 +10349,9 @@ def main():
         if period_mode == "Текущий месяц":
             period_from = today.replace(day=1)
             if today.month == 12:
-                period_to = today.replace(
-                    year=today.year + 1, month=1, day=1
-                ) - timedelta(days=1)
+                period_to = today.replace(year=today.year + 1, month=1, day=1) - timedelta(days=1)
             else:
-                period_to = today.replace(
-                    month=today.month + 1, day=1
-                ) - timedelta(days=1)
+                period_to = today.replace(month=today.month + 1, day=1) - timedelta(days=1)
         elif period_mode == "Прошлый месяц":
             first_this = today.replace(day=1)
             period_to = first_this - timedelta(days=1)
@@ -10380,9 +10376,7 @@ def main():
                     format="DD.MM.YYYY",
                 )
             if period_from and period_to and period_from > period_to:
-                st.warning(
-                    "«С» позже «По» — поменял местами."
-                )
+                st.warning("«С» позже «По» — поменял местами.")
                 period_from, period_to = period_to, period_from
 
         # Показываем текущий период
@@ -10396,16 +10390,25 @@ def main():
 
         st.markdown("---")
 
-        # === DEEPSEEK AI ===
+        # 2. DeepSeek AI
         st.markdown("**DeepSeek AI**")
-        ...
+        client = _get_hf_client()
+        if client is not None:
+            st.success("✅ Подключён")
+        else:
+            st.warning("⚠️ Не подключён")
+            st.caption("Проверьте DeepSeek-токен во вкладке «AI-ассистент».")
+
         st.markdown("---")
+
+        # 3. Тесты и подсказки
         if st.button("🧪 Проверить разбор дат", key="self_test_dates_btn"):
             ok = _self_test_dates()
             if ok:
                 st.success("Все тесты дат пройдены ✅")
             else:
                 st.error("Есть ошибки в разборе дат ❌")
+
         st.markdown("---")
         st.caption(
             "Приложение размещено в облаке: загруженные выписки обрабатываются "
