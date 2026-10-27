@@ -8799,23 +8799,188 @@ def parse_mashreq_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 
 def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
-    text=pdf_all_text(file_content); lines=[re.sub(r'\s+',' ',x).strip() for x in text.splitlines()]
-    rows=[]
-    date_re=re.compile(r'^(\d{2}/\d{2}/\d{4})\s+(\S+)\s+(.*)$')
-    num_re=re.compile(r'(?<![A-Za-z])(-?\s*\d[\d, ]*(?:\.\d{1,2})?)(?![A-Za-z])')
-    for i,line in enumerate(lines):
-        m=date_re.match(line)
-        if not m: continue
-        date=parse_date(m.group(1),account_name=account_name)
-        if not date: continue
-        first=m.group(3)
-        # The transaction amount and running balance are at the end of the first line.
-        pair=re.search(r'(?<![A-Za-z])(-?\d[\d,]*(?:\.\d{1,2})?)\s+([\d,]+\.\d{1,2})\s*$',first)
-        if not pair: continue
-        amount=parse_amount(pair.group(1))
-        if not amount or not _is_reasonable_amount(amount): continue
-        desc=first[:pair.start()].strip()
-        rows.append(_pdf_make_row(date,amount,desc,account_name,m.group(2)))
+    """
+    WIO Business PDF.
+
+    Основной путь — координатный парсер по якорям дат (DD/MM/YYYY).
+    Устойчив к тому, что pdfplumber может отдать одну операцию
+    в одной, двух или трёх визуальных строках, а также к тому,
+    что ref-код, описание и суммы могут «съезжать» по x/top.
+
+    Fallback — построчный текстовый разбор, если координаты по каким-то
+    причинам не дали ни одной операции (например, extract_words вернул
+    пустоту на всех страницах).
+    """
+    rows: List[Dict] = []
+
+    date_token_re = re.compile(r'^\d{2}/\d{2}/\d{4}$')
+    date_line_re = re.compile(r'^(\d{2}/\d{2}/\d{4})\s+(.*)$')
+    num_token_re = re.compile(r'^-?\d[\d,]*(?:\.\d{1,2})?$')
+    amount_pair_re = re.compile(
+        r'(-?\d[\d,]*(?:\.\d{1,2})?)\s+(\d[\d,]*(?:\.\d{1,2})?)\s*$'
+    )
+    # Хвост-мусор из координат: "1.234 BnQ", "2.0 BNQ" и т.п.
+    junk_tail_re = re.compile(
+        r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|BnO|Bno|DnQ|DNQ|DNO)\s*$',
+        re.IGNORECASE
+    )
+
+    skip_markers = [
+        'summary', 'account statement', 'account holder',
+        'page ', 'wio bank', 'interest rate',
+        'date ref. number description',
+        'closing balance', 'opening balance',
+    ]
+
+    # ============================================================
+    # ПУТЬ 1: координатный парсер (основной)
+    # ============================================================
+    try:
+        with pdfplumber.open(BytesIO(file_content)) as pdf:
+            for page in pdf.pages:
+                try:
+                    words = page.extract_words(
+                        keep_blank_chars=False, use_text_flow=False
+                    )
+                except TypeError:
+                    words = page.extract_words()
+                except Exception:
+                    words = []
+                if not words:
+                    continue
+
+                # Сортируем сверху-вниз, слева-направо
+                ws = sorted(
+                    words,
+                    key=lambda w: (round(float(w.get('top', 0.0)), 1),
+                                   float(w.get('x0', 0.0)))
+                )
+
+                # Якоря — слова, точно совпадающие с DD/MM/YYYY
+                anchor_idx = [
+                    i for i, w in enumerate(ws)
+                    if date_token_re.match(str(w.get('text', '')).strip())
+                ]
+                if not anchor_idx:
+                    continue
+
+                for k, ai in enumerate(anchor_idx):
+                    start = ai
+                    end = anchor_idx[k + 1] \
+                        if k + 1 < len(anchor_idx) else len(ws)
+                    block = ws[start:end]
+
+                    date_str = str(block[0].get('text', '')).strip()
+                    date = parse_date(date_str, account_name=account_name)
+                    if not date:
+                        continue
+
+                    # Собираем токены после даты.
+                    # Вторая дата (value date) может быть в колонке справа — пропускаем.
+                    rest: List[str] = []
+                    for w in block[1:]:
+                        t = str(w.get('text', '')).strip()
+                        if not t:
+                            continue
+                        if date_token_re.match(t):
+                            continue
+                        rest.append(t)
+                    if len(rest) < 3:
+                        continue
+
+                    # Ref — первый токен, если он не число
+                    if not num_token_re.match(rest[0]):
+                        rest = rest[1:]
+                    if len(rest) < 3:
+                        continue
+
+                    # Суммы: два последних числовых токена блока
+                    amounts_idx = [
+                        i for i, t in enumerate(rest)
+                        if num_token_re.match(t)
+                    ]
+                    if len(amounts_idx) < 2:
+                        continue
+                    first_of_pair = amounts_idx[-2]
+                    amount_str = rest[amounts_idx[-2]]
+                    amount = parse_amount(amount_str)
+                    if amount == 0 or not _is_reasonable_amount(amount):
+                        continue
+
+                    desc = ' '.join(rest[:first_of_pair]).strip()
+                    desc = junk_tail_re.sub('', desc).strip()
+                    if not desc:
+                        continue
+
+                    low = desc.lower()
+                    if any(m in low for m in skip_markers):
+                        continue
+
+                    cp = ' '.join(desc.split()[:3])
+                    if low.startswith('from '):
+                        cp = desc[5:].strip()
+                    elif low.startswith('to '):
+                        cp = desc[3:].strip()
+
+                    rows.append({
+                        'Дата': date,
+                        'Сумма': amount,
+                        'Контрагент': cp,
+                        'Наименование счета': account_name,
+                        'Описание': desc,
+                    })
+    except Exception as e:
+        print(f"[parse_wio_pdf] coord path error: {e}")
+
+    # ============================================================
+    # ПУТЬ 2: текстовый fallback (если координаты дали 0)
+    # ============================================================
+    if not rows:
+        try:
+            text = pdf_all_text(file_content)
+            lines = [
+                re.sub(r'\s+', ' ', x).strip()
+                for x in (text or '').splitlines() if x.strip()
+            ]
+            for line in lines:
+                low = line.lower()
+                if any(m in low for m in skip_markers):
+                    continue
+                m = date_line_re.match(line)
+                if not m:
+                    continue
+                date = parse_date(m.group(1), account_name=account_name)
+                if not date:
+                    continue
+                rest = m.group(2)
+                am = amount_pair_re.search(rest)
+                if not am:
+                    continue
+                amount = parse_amount(am.group(1).replace(',', ''))
+                if amount == 0 or not _is_reasonable_amount(amount):
+                    continue
+                desc_zone = rest[:am.start()].strip()
+                ref_match = re.match(r'^(P\d+|[A-Z0-9]{8,})\s+', desc_zone)
+                if ref_match:
+                    desc_zone = desc_zone[ref_match.end():].strip()
+                desc = junk_tail_re.sub('', desc_zone).strip()
+                if not desc:
+                    continue
+                cp = ' '.join(desc.split()[:3])
+                if desc.lower().startswith('from '):
+                    cp = desc[5:].strip()
+                elif desc.lower().startswith('to '):
+                    cp = desc[3:].strip()
+                rows.append({
+                    'Дата': date,
+                    'Сумма': amount,
+                    'Контрагент': cp,
+                    'Наименование счета': account_name,
+                    'Описание': desc,
+                })
+        except Exception as e:
+            print(f"[parse_wio_pdf] text fallback error: {e}")
+
     return _dedup_by_source_index(_assign_source_indices(rows))
 
 
