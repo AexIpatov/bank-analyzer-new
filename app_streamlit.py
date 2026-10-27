@@ -5143,109 +5143,83 @@ def parse_mkb_pdf(file_content: bytes, account_name: str) -> List[Dict]:
 
 def parse_wio_pdf(file_content: bytes, account_name: str) -> List[Dict]:
     """
-    WIO Business PDF. Использует координатную сетку (Bounding Boxes).
-    Это единственный способ прочитать PDF, где строки физически 
-    разорваны на разных страницах (стр 9, 12).
+    WIO Business PDF. 
+    Учитывает "сломанную" верстку на страницах 9 и 12, где 
+    суммы идут без дат. Привязывает "голые" суммы к предыдущим 
+    транзакциям.
     """
-    result = []
+    text = pdf_all_text(file_content)
+    lines = [re.sub(r'\s+', ' ', x).strip() for x in text.splitlines() if x.strip()]
+    rows = []
     
-    # Открываем PDF и проходим по каждой странице
-    try:
-        with pdfplumber.open(BytesIO(file_content)) as pdf:
-            for page in pdf.pages:
-                # Извлекаем все слова с их координатами
-                words = page.extract_words(
-                    keep_blank_chars=False,
-                    use_text_flow=False,
-                    extra_attrs=['size']
-                )
-                if not words:
-                    continue
-                
-                # 1. Группируем слова по горизонтальным линиям (строкам)
-                # WIO таблица: Дата (x0~30), Ref (x0~100), Описание (x0~170), Сумма (x0~550), Баланс (x0~620)
-                lines = {}
-                for w in words:
-                    top = round(w['top'] / 2.5) * 2.5  # группируем с точностью до 2.5pt
-                    if top not in lines:
-                        lines[top] = []
-                    lines[top].append(w)
-                
-                # Сортируем строки сверху вниз
-                sorted_tops = sorted(lines.keys())
-                
-                for top in sorted_tops:
-                    line_words = sorted(lines[top], key=lambda w: w['x0'])
-                    
-                    # Извлекаем ячейки по координатам X
-                    date_words = [w['text'] for w in line_words if w['x0'] < 80]
-                    desc_words = [w['text'] for w in line_words if 80 <= w['x0'] < 450]
-                    amount_words = [w['text'] for w in line_words if 450 <= w['x0'] < 580]
-                    balance_words = [w['text'] for w in line_words if w['x0'] >= 580]
-                    
-                    date_str = ' '.join(date_words).strip()
-                    desc = ' '.join(desc_words).strip()
-                    amount_str = ' '.join(amount_words).strip()
-                    balance_str = ' '.join(balance_words).strip()
-                    
-                    # Если нашли валидную дату и сумму — создаем транзакцию
-                    if re.match(r'^\d{2}/\d{2}/\d{4}$', date_str):
-                        date = parse_date(date_str, account_name)
-                        amount = parse_amount(amount_str.replace(',', ''))
-                        
-                        if date and amount != 0 and _is_reasonable_amount(amount):
-                            # Чистим описание от Ref. Number (обычно P1234567)
-                            desc = re.sub(r'^P\d+\s+', '', desc)
-                            # Убираем служебные коды WIO (1.2.2 BnQ и т.д.)
-                            desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|BnO|Bno|DnQ|DNQ|DNO|BNQ)\s*$', '', desc).strip()
-                            
-                            # Контрагент
-                            cp = ' '.join(desc.split()[:3])
-                            if desc.lower().startswith('from '):
-                                cp = desc[5:].strip()
-                            elif desc.lower().startswith('to '):
-                                cp = desc[3:].strip()
-                                
-                            result.append({
-                                'Дата': date,
-                                'Сумма': amount,
-                                'Контрагент': cp,
-                                'Наименование счета': account_name,
-                                'Описание': desc,
-                            })
-    except Exception as e:
-        # Если pdfplumber упадет, используем старый текстовый парсер
-        pass
+    # Регулярка для строк с датой
+    date_line_re = re.compile(r'^(\d{2}/\d{2}/\d{4})\s+(.*)$')
+    # Регулярка для поиска суммы и баланса в конце строки
+    amount_pair_re = re.compile(r'(-?\d[\d,]*(?:\.\d{1,2})?)\s+(\d[\d,]*(?:\.\d{1,2})?)\s*$')
+    
+    skip_markers = [
+        'summary', 'account statement', 'account holder', 
+        'page ', 'wio bank', 'interest rate', 'date ref. number description',
+        'closing balance', 'opening balance'
+    ]
 
-    # Если координатный метод не дал результата (например, это не WIO PDF),
-    # запускаем старый текстовый парсер как fallback
-    if not result:
-        text = pdf_all_text(file_content)
-        lines = [re.sub(r'\s+', ' ', x).strip() for x in text.splitlines() if x.strip()]
-        line_pattern = re.compile(
-            r'^(\d{2}/\d{2}/\d{4})\s+'
-            r'(\S+)\s+'
-            r'(.*?)\s+'
-            r'(-?\d[\d,]*(?:\.\d{1,2})?)\s+'
-            r'(\d[\d,]*(?:\.\d{1,2})?)$'
-        )
-        for line in lines:
-            m = line_pattern.match(line)
-            if m:
-                date = parse_date(m.group(1), account_name)
-                amount = parse_amount(m.group(4).replace(',', ''))
-                desc = m.group(3).strip()
-                if date and amount != 0:
-                    desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|Bno|DnQ|DNQ)\s*$', '', desc).strip()
-                    result.append({
+    for line in lines:
+        low = line.lower()
+        if any(m in low for m in skip_markers):
+            continue
+            
+        m = date_line_re.match(line)
+        if m:
+            # Это полноценная транзакция (с датой)
+            date_str = m.group(1)
+            rest = m.group(2)
+            
+            am = amount_pair_re.search(rest)
+            if am:
+                amount_str = am.group(1)
+                desc_zone = rest[:am.start()].strip()
+                
+                # Убираем Ref. Number из описания
+                ref_match = re.match(r'^(P\d+|[A-Z0-9]{8,})\s+', desc_zone)
+                if ref_match:
+                    desc_zone = desc_zone[ref_match.end():].strip()
+                    
+                desc = re.sub(r'\s+\d+(?:\.\d+)+\s*(?:BnQ|BNQ|BnO|Bno|DnQ|DNQ|DNO|BNQ)\s*$', '', desc_zone).strip()
+                
+                amount = parse_amount(amount_str.replace(',', ''))
+                date = parse_date(date_str, account_name)
+                
+                if date and amount != 0 and _is_reasonable_amount(amount):
+                    cp = ' '.join(desc.split()[:3])
+                    if desc.lower().startswith('from '):
+                        cp = desc[5:].strip()
+                    elif desc.lower().startswith('to '):
+                        cp = desc[3:].strip()
+                        
+                    rows.append({
                         'Дата': date,
                         'Сумма': amount,
-                        'Контрагент': ' '.join(desc.split()[:3]),
+                        'Контрагент': cp,
                         'Наименование счета': account_name,
                         'Описание': desc,
+                        '_source_index': len(rows)
                     })
+        else:
+            # Это "голая" строка без даты (страницы 9 и 12)
+            # Если в ней есть число, привязываем его к предыдущей транзакции
+            am = amount_pair_re.search(line)
+            if am and rows:
+                amount_str = am.group(1)
+                amount = parse_amount(amount_str.replace(',', ''))
+                
+                # Если это похоже на транзакцию (не просто число-остаток)
+                if amount != 0 and _is_reasonable_amount(amount):
+                    # Если предыдущая транзакция была на ту же дату, 
+                    # мы просто суммируем (так как это разорванная строка)
+                    rows[-1]['Сумма'] += amount
 
-    return _dedup_by_source_index(_assign_source_indices(result))
+    # Убираем служебные поля и дубликаты
+    return _dedup_by_source_index(_assign_source_indices(rows))
 
 # ==================== BLUOR PDF ====================
 
