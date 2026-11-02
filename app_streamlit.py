@@ -595,12 +595,21 @@ _ACCOUNT_ALIASES: List[Tuple[str, str]] = [
     ("korunastrojkaeurcsob",  "Koruna_Strojka_EUR_CSOB"),
     ("korunastrojkaczk",      "Koruna_Strojka_CZK_CSOB"),
     ("korunastrojka",         "Koruna_Strojka_CZK_CSOB"),
-    ("rrstrovkaczkcsob",      "RR_Strojka_CZK_CSOB"),
+    # ВАЖНО: правильное написание "strojka" (j), а не "strovka" (v)
+    ("rrstrojkaeurcsob",      "RR_Strojka_EUR_CSOB"),
+    ("rrstrojkaeur",          "RR_Strojka_EUR_CSOB"),
     ("rrstrovkaeurcsob",      "RR_Strojka_EUR_CSOB"),
-    ("rrstrovkaczk",          "RR_Strojka_CZK_CSOB"),
     ("rrstrovkaeur",          "RR_Strojka_EUR_CSOB"),
+    ("rrstrojkaeur",          "RR_Strojka_EUR_CSOB"),
+    ("rrstrojka",             "RR_Strojka_CZK_CSOB"),
     ("rrstrovka",             "RR_Strojka_CZK_CSOB"),
     ("rrrevostr",             "RR_Strojka_CZK_CSOB"),
+
+    # ===== BSP Brunnieku (Paysera) =====
+    ("bspbrunniekueur",       "BSP_Brunnieku"),
+    ("bspbrunnieku",          "BSP_Brunnieku"),
+    ("bspbrunniek",           "BSP_Brunnieku"),
+    ("brunnieku",             "BSP_Brunnieku"),
 
     # ===== UniCredit =====
     ("garpizunicreditbankczk", "Garpiz UniCredit Bank CZK"),
@@ -2778,6 +2787,16 @@ def _extract_csob_name(desc: str) -> str:
     if 'acc. maintenance' in low or 'account maintenance' in low:
         return 'ČSOB'
     if 'charge' in low and len(desc) < 40:
+        return 'ČSOB'
+    # Карточные операции ČSOB: "Místo: VISA BUSINESS PREMIUM CL Částka: ..."
+    if 'místo:' in low or 'misto:' in low:
+        m = re.search(r'm[íi]sto:\s*(.+?)(?:\s+částka:|\s+cástka:|$)',
+                      desc, re.IGNORECASE)
+        if m:
+            place = m.group(1).strip()
+            place = re.sub(r'\s+', ' ', place).strip(' .,;:-')
+            if place and len(place) >= 2:
+                return place
         return 'ČSOB'
     if 'outgoing payment' in low:
         return 'Outgoing payment'
@@ -6884,6 +6903,165 @@ def parse_paysera_property(file_content, account_name):
 def parse_paysera_rerum(file_content, account_name):
     return parse_paysera_generic(file_content, account_name)
 
+def parse_bsp_brunnieku(file_content: bytes, account_name: str) -> List[Dict]:
+    """
+    BSP Brunnieku (Paysera LT, счёт EVP...).
+    XLSX-выписка по форме Worksheet с заголовком:
+        Тип | Номер выписки | Номер перевода | Дата и время |
+        Получатель / Плательщик | EVP / IBAN | Код | Сумма и валюта |
+        Валюты | Назначение платежа | Код платежа | Кредит / Дебет | Баланс
+    Первая строка с «Период: ...» и шапка Paysera LT — служебные.
+    Берём только строки, где Тип ∈ {Перевод, Commission fee, ...}
+    и есть Кредит/Дебет (К/Д).
+    """
+    result: List[Dict] = []
+
+    df = read_xlsx(file_content, sheet_name='Worksheet')
+    if df is None or df.empty:
+        df = read_xlsx(file_content)
+    if df is None or df.empty:
+        return []
+
+    # Ищем строку-заголовок по ключевым словам
+    header_row = -1
+    for idx, row in df.iterrows():
+        if idx > 20:
+            break
+        vals = [str(v).strip() if pd.notna(v) else '' for v in row.values]
+        joined = ' '.join(vals)
+        if 'Тип' in joined and 'Дата и время' in joined and 'Кредит / Дебет' in joined:
+            header_row = idx
+            break
+        # Английский вариант
+        if 'Type' in joined and 'Date' in joined and 'Credit / Debit' in joined:
+            header_row = idx
+            break
+    if header_row == -1:
+        return []
+
+    hdr = [str(v).strip() if pd.notna(v) else ''
+           for v in df.iloc[header_row].values]
+
+    def find_col(patterns):
+        for i, h in enumerate(hdr):
+            hl = h.lower()
+            for p in patterns:
+                if p in hl:
+                    return i
+        return -1
+
+    type_i  = find_col(['тип', 'type'])
+    date_i  = find_col(['дата и время', 'date and time', 'date'])
+    cp_i    = find_col(['получатель', 'плательщик', 'recipient', 'payer',
+                        'counterparty'])
+    amount_i = find_col(['сумма и валюта', 'amount and currency', 'amount'])
+    desc_i  = find_col(['назначение', 'purpose'])
+    cd_i    = find_col(['кредит / дебет', 'credit / debit', 'кредит', 'kredit'])
+
+    if date_i == -1:
+        date_i = 3
+    if amount_i == -1:
+        amount_i = 7
+    if cp_i == -1:
+        cp_i = 4
+    if desc_i == -1:
+        desc_i = 9
+    if cd_i == -1:
+        cd_i = 11
+
+    service_markers = [
+        'остаток в начале', 'остаток в конце',
+        'дебетовый оборот', 'кредитовый оборот',
+        'opening balance', 'closing balance',
+        'debit turnover', 'credit turnover',
+        'баланс на начало', 'баланс на конец',
+    ]
+
+    src_idx = 0
+    for idx in range(header_row + 1, len(df)):
+        row = df.iloc[idx]
+
+        def _get(ci):
+            if 0 <= ci < len(row):
+                v = row.iloc[ci]
+                if pd.isna(v):
+                    return ''
+                return str(v).strip()
+            return ''
+
+        joined_low = ' '.join(
+            [str(v).strip() if pd.notna(v) else '' for v in row.values]
+        ).lower()
+        if not joined_low.strip():
+            continue
+        # Служебные строки-итоги
+        if any(m in joined_low for m in service_markers):
+            # но проверяем, что это НЕ настоящая операция:
+            # если есть К/Д и сумма — оставляем
+            cd = _get(cd_i).upper()
+            if cd not in ('К', 'Д', 'K', 'D', 'C', 'DEBIT', 'CREDIT'):
+                continue
+
+        dstr = _get(date_i)
+        if not dstr:
+            continue
+        # Нормализуем дату: "2026-10-30 11:17:38" → "2026-10-30"
+        m = re.match(r'(\d{4}-\d{2}-\d{2})', dstr)
+        if m:
+            dstr = m.group(1)
+        date = parse_date(dstr, account_name=account_name)
+        if not date:
+            continue
+
+        astr = _get(amount_i)
+        amount = parse_amount(astr)
+        if amount == 0.0 or not _is_reasonable_amount(amount):
+            continue
+
+        cd = _get(cd_i).upper()
+        if cd in ('Д', 'D', 'DEBIT', 'DB'):
+            amount = -abs(amount)
+        elif cd in ('К', 'K', 'C', 'CREDIT', 'KREDIT'):
+            amount = abs(amount)
+        # если К/Д не указан — знак берём из строки суммы
+        elif astr.strip().startswith('-'):
+            amount = -abs(amount)
+
+        cp = _get(cp_i)
+        desc = _get(desc_i)
+
+        # Чистим служебные артефакты Paysera
+        cp = re.sub(r'\(EVP\d+\)', '', cp)
+        cp = re.sub(r'\bLT\d{2}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b', '', cp)
+        cp = re.sub(r'\s+', ' ', cp).strip(' .,;:-')
+        if cp.lower() in ('-', 'nan', 'none', ''):
+            cp = ''
+
+        desc = re.sub(r"^['\-]\s*", '', desc).strip()  # убрать "'-"
+        if desc and desc.strip() in ('-', "'-", ''):
+            desc = ''
+
+        if _is_service_line(desc) and not cp:
+            continue
+
+        # Если контрагент не извлечён из колонки — пробуем экстракторы
+        cp_final, _ = extract_counterparty_smart(
+            desc, account_name, cp, '', cp
+        )
+        if not cp_final:
+            cp_final = 'Paysera LT'
+
+        result.append({
+            'Дата': date,
+            'Сумма': amount,
+            'Контрагент': cp_final,
+            'Наименование счета': account_name,
+            'Описание': desc if desc else cp,
+            '_source_index': src_idx,
+        })
+        src_idx += 1
+
+    return _dedup_by_source_index(result)
 
 # ==================== BLUOR CSV ====================
 
@@ -8914,6 +9092,9 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_saida_wise_xlsx, 'saida_wise_xlsx'
         if is_n26:
             return parse_saida_n26_csv, 'saida_n26_csv'
+        if 'bsp brunnieku' in low or 'bsp_brunnieku' in low \
+                or 'bspbrunnieku' in low:
+            return parse_bsp_brunnieku, 'bsp_brunnieku_xlsx'
         if is_paysera:
             if 'baltic' in low:
                 return parse_paysera_baltic_xlsx, 'paysera_baltic_xlsx'
@@ -9015,6 +9196,9 @@ def get_parser_by_ext(account_name: str, ext: str):
             return parse_saida_wise_xlsx, 'saida_wise_xlsx'
         if is_n26:
             return parse_saida_n26_csv, 'saida_n26_csv'
+        if 'bsp brunnieku' in low or 'bsp_brunnieku' in low \
+                or 'bspbrunnieku' in low:
+            return parse_bsp_brunnieku, 'bsp_brunnieku_xlsx'
         if is_paysera:
             if 'baltic' in low:
                 return parse_paysera_baltic_xlsx, 'paysera_baltic_xlsx'
